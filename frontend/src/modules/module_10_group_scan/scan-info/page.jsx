@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { useUnsavedChanges } from "@/components/UnsavedChangesContext";
@@ -30,6 +30,16 @@ import LiveLogConsole from "./_components/LiveLogConsole";
 import { downloadTable, groupExportTable } from "../utils/exportTable";
 import ModulePageHeader from "../components/ModulePageHeader";
 import { parseGroupLinkRows, splitTextRows } from "../utils/groupLinks";
+import { getSessionUserId } from "@/services/sessionIdentity.mjs";
+import { loadInputDraft, saveInputDraft } from "./inputDraft.mjs";
+import {
+  applyScanProgress,
+  capacityCell,
+  keywordKey,
+  markScanStarted,
+  mergeCapacityStats,
+  restoreAfterStartFailed,
+} from "../utils/keywordStats";
 
 const KEYWORD_STATS_SEED = {};
 
@@ -48,13 +58,6 @@ function normalizeAccount(raw) {
   };
 }
 
-/** So khớp từ khóa không phân biệt hoa/thường (vi). */
-function keywordKey(text) {
-  return String(text || "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLocaleLowerCase("vi");
-}
 
 function parseKeywords(text) {
   const out = [];
@@ -122,64 +125,38 @@ function mapGroupRow(g) {
   };
 }
 
-const fmtNum = (n) => Number(n || 0).toLocaleString("vi-VN");
-
-/** Ô "Số nhóm quét được" của 1 từ khóa từ kết quả Kiểm tra (đang cuộn hoặc đã lưu DB). */
-function capacityCell(row) {
-  const started = row?.count !== null && row?.count !== undefined;
-  if (!started) return { count: "…", detail: "", status: row?.status || "idle" };
-  const total = Number(row.total) || 0;
-  const ok = Number(row.count) || 0;
-  const fresh = Number(row.fresh) || 0;
-  const filtered = Math.max(0, total - ok); // riêng tư / ít thành viên / không rõ số thành viên
-  const inDb = Math.max(0, ok - fresh); // qua bộ lọc nhưng đã quét trước đó
-  return {
-    count: `${fmtNum(ok)} nhóm`,
-    detail: [
-      `Facebook tìm thấy ${fmtNum(total)} nhóm`,
-      filtered ? `loại ${fmtNum(filtered)} nhóm riêng tư hoặc ít thành viên` : null,
-      inDb
-        ? `${fmtNum(inDb)} nhóm đã có trong Danh sách nhóm quét, còn ${fmtNum(fresh)} nhóm chưa quét`
-        : "tất cả đều là nhóm chưa quét",
-      row.reason || null,
-      row.checked_at ? `kiểm tra lúc ${row.checked_at}` : null,
-    ]
-      .filter(Boolean)
-      .join(" · "),
-    status: row.status || "done",
-    cached: Boolean(row.cached),
-  };
-}
 
 
 export default function GroupScanInfoPage() {
   const [accounts, setAccounts] = useState([]);
   const [accountsLoading, setAccountsLoading] = useState(false);
-  const [selectedUids, setSelectedUids] = useState([]);
+  // Nháp cấu hình: chuyển màn khác rồi quay lại vẫn giữ nguyên những gì đã nhập.
+  const [draft] = useState(() => loadInputDraft(getSessionUserId()) || {});
+  const [selectedUids, setSelectedUids] = useState(() => draft.selectedUids || []);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const { setUnsavedChanges } = useUnsavedChanges();
   const [hasSavedShared, setHasSavedShared] = useState(false);
 
-  const [method, setMethod] = useState("keyword");
-  const [keywordInput, setKeywordInput] = useState("");
-  const [keywords, setKeywords] = useState([]);
-  const [quotas, setQuotas] = useState({});
+  const [method, setMethod] = useState(draft.method || "keyword");
+  const [keywordInput, setKeywordInput] = useState(draft.keywordInput || "");
+  const [keywords, setKeywords] = useState(() => draft.keywords || []);
+  const [quotas, setQuotas] = useState(() => draft.quotas || {});
 
   // Tab Nhập Link
-  const [linkText, setLinkText] = useState("");
+  const [linkText, setLinkText] = useState(draft.linkText || "");
   const [parsedLinks, setParsedLinks] = useState([]);
-  const [linkQuotas, setLinkQuotas] = useState({});
+  const [linkQuotas, setLinkQuotas] = useState(() => draft.linkQuotas || {});
 
   // Tab Tải tệp
-  const [fileData, setFileData] = useState(null);
-  const [fileQuotas, setFileQuotas] = useState({});
-  const [fileFilter, setFileFilter] = useState("all"); // all | valid | duplicate
+  const [fileData, setFileData] = useState(() => draft.fileData ?? null);
+  const [fileQuotas, setFileQuotas] = useState(() => draft.fileQuotas || {});
+  const [fileFilter, setFileFilter] = useState(draft.fileFilter || "all"); // all | valid | duplicate
 
-  const [delayMin, setDelayMin] = useState(5);
-  const [delayMax, setDelayMax] = useState(10);
-  const [minMembers, setMinMembers] = useState(1000);
-  const [minMembersEnabled, setMinMembersEnabled] = useState(true);
+  const [delayMin, setDelayMin] = useState(draft.delayMin ?? 5);
+  const [delayMax, setDelayMax] = useState(draft.delayMax ?? 10);
+  const [minMembers, setMinMembers] = useState(draft.minMembers ?? 1000);
+  const [minMembersEnabled, setMinMembersEnabled] = useState(draft.minMembersEnabled ?? true);
 
   const [runState, setRunState] = useState("idle"); // idle | running | paused
   const [checkJobId, setCheckJobId] = useState("");
@@ -193,7 +170,16 @@ export default function GroupScanInfoPage() {
   const [filterMembers, setFilterMembers] = useState("all");
   const [filterKeyword, setFilterKeyword] = useState("all");
   const [results, setResults] = useState([]);
-  const [keywordStats, setKeywordStats] = useState(() => ({ ...KEYWORD_STATS_SEED }));
+  const [keywordStats, setKeywordStats] = useState(() => draft.keywordStats || { ...KEYWORD_STATS_SEED });
+  const keywordsRef = useRef(keywords);
+  keywordsRef.current = keywords;
+
+  // Engine trả kết quả Kiểm tra theo từ khóa đã chuẩn hoá (chữ thường: "phenikaa") — gán lại cho đúng
+  // từ khóa người dùng gõ ("Phenikaa", "PHENIKAA"…) để bảng hiện được trạng thái & số nhóm.
+  const mergeServerStats = useCallback(
+    (current, entries, extraWords = []) => mergeCapacityStats(current, entries, [...keywordsRef.current, ...extraWords]),
+    [],
+  );
   const [selectedRows, setSelectedRows] = useState(() => new Set());
   const [logs, setLogs] = useState([
     {
@@ -202,6 +188,30 @@ export default function GroupScanInfoPage() {
       text: "Module 10 sẵn sàng. Kiểm tra → điền bảng từ khóa. Bắt đầu thực thi → mở Chrome quét.",
       tone: "info",
     },
+  ]);
+
+  // Lưu nháp mỗi khi người dùng đổi cấu hình (chỉ thay đổi khi họ tự sửa / xoá).
+  useEffect(() => {
+    saveInputDraft(getSessionUserId(), {
+      selectedUids,
+      method,
+      keywordInput,
+      keywords,
+      quotas,
+      keywordStats,
+      linkText,
+      linkQuotas,
+      fileData,
+      fileQuotas,
+      fileFilter,
+      delayMin,
+      delayMax,
+      minMembers,
+      minMembersEnabled,
+    });
+  }, [
+    selectedUids, method, keywordInput, keywords, quotas, keywordStats, linkText, linkQuotas,
+    fileData, fileQuotas, fileFilter, delayMin, delayMax, minMembers, minMembersEnabled,
   ]);
 
   // Cảnh báo chưa lưu kết quả quét khi dùng phương thức Nhập link hoặc Tải tệp
@@ -509,16 +519,16 @@ export default function GroupScanInfoPage() {
       });
       const cached = res?.cached || {};
       const pending = Array.isArray(res?.keywords) ? res.keywords : [];
-      setKeywordStats((current) => {
-        const next = { ...current };
-        Object.entries(cached).forEach(([word, row]) => {
-          next[word] = capacityCell(row);
-        });
-        pending.forEach((word) => {
-          next[word] = { count: "…", detail: "", status: "idle" };
-        });
-        return next;
-      });
+      setKeywordStats((current) =>
+        mergeServerStats(
+          current,
+          [
+            ...Object.entries(cached).map(([word, row]) => [word, capacityCell(row)]),
+            ...pending.map((word) => [word, { count: "…", detail: "", status: "idle" }]),
+          ],
+          wordList,
+        ),
+      );
       const cachedCount = Object.keys(cached).length;
       if (cachedCount) {
         pushLog(`Lấy kết quả đã lưu của ${cachedCount} từ khóa (không cần quét lại).`, "success");
@@ -552,7 +562,24 @@ export default function GroupScanInfoPage() {
     let cancelled = false;
     getActiveKeywordCapacity()
       .then((res) => {
-        if (!cancelled && res?.job_id) setCapacityJobId(res.job_id);
+        if (cancelled) return;
+        if (res?.job_id) {
+          setCapacityJobId(res.job_id);
+          return;
+        }
+        // Không còn phiên Kiểm tra nào chạy (đã xong lúc người dùng ở màn khác): dòng nháp còn
+        // "Đang quét" thì chuyển sang chờ — bấm Kiểm tra sẽ lấy ngay kết quả đã lưu, không quét lại.
+        setKeywordStats((current) => {
+          let changed = false;
+          const next = { ...current };
+          Object.entries(current).forEach(([word, row]) => {
+            if (row?.status === "running" || row?.count === "…") {
+              changed = true;
+              next[word] = { count: "—", status: "idle", detail: "Bấm Kiểm tra để xem kết quả mới nhất." };
+            }
+          });
+          return changed ? next : current;
+        });
       })
       .catch(() => {});
     return () => {
@@ -579,13 +606,9 @@ export default function GroupScanInfoPage() {
           setLogs((current) => [...current, ...fresh].slice(-150));
         }
         const stats = job.keyword_stats || {};
-        setKeywordStats((current) => {
-          const next = { ...current };
-          Object.entries(stats).forEach(([word, row]) => {
-            next[word] = capacityCell(row);
-          });
-          return next;
-        });
+        setKeywordStats((current) =>
+          mergeServerStats(current, Object.entries(stats).map(([word, row]) => [word, capacityCell(row)])),
+        );
         if (["done", "aborted", "error"].includes(job.status)) {
           stopped = true;
           setCapacityJobId("");
@@ -698,21 +721,7 @@ export default function GroupScanInfoPage() {
           ? status.keyword_stats
           : null;
         if (remoteStats) {
-          setKeywordStats((current) => {
-            const next = { ...current };
-            Object.entries(remoteStats).forEach(([word, row]) => {
-              let st = "idle";
-              if (row?.status === "running") st = "running";
-              else if (row?.status === "done") st = "done";
-              else if (row?.status === "stopped" || row?.status === "error") st = row.status;
-              else if (status.status === "paused" && row?.status === "idle") st = "paused";
-              next[word] = {
-                count: String(row?.count ?? (st === "running" ? "…" : "—")),
-                status: st,
-              };
-            });
-            return next;
-          });
+          setKeywordStats((current) => applyScanProgress(current, remoteStats, status.status));
         }
 
         if (status.status === "paused") {
@@ -834,13 +843,7 @@ export default function GroupScanInfoPage() {
         console.warn("[Group Scan] auto create categories on startRun:", err);
       }
 
-      setKeywordStats((current) => {
-        const next = { ...current };
-        wordList.forEach((word, idx) => {
-          next[word] = { count: "…", status: idx === 0 ? "running" : "idle" };
-        });
-        return next;
-      });
+      setKeywordStats((current) => markScanStarted(current, wordList, quotas));
       pushLog(
         `Bắt đầu thực thi: ${selectedUids.length} nick, ${wordList.length} từ khóa…`,
         "info",
@@ -892,13 +895,7 @@ export default function GroupScanInfoPage() {
     } catch (error) {
       toast.error(error.message || "Không bắt đầu được phiên quét.");
       pushLog(error.message || "Bắt đầu thực thi thất bại.", "error");
-      setKeywordStats((current) => {
-        const next = { ...current };
-        wordList.forEach((word) => {
-          next[word] = { count: current[word]?.count || "—", status: "ready" };
-        });
-        return next;
-      });
+      setKeywordStats((current) => restoreAfterStartFailed(current, wordList));
       setRunState("idle");
     }
   };

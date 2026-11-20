@@ -301,6 +301,12 @@ export default function AccountMethodCard({
                           {stat.detail && (
                             <span className="block text-[10px] font-normal text-[#94A3B8]">{stat.detail}</span>
                           )}
+                          {stat.scanned != null && (
+                            <span className="mt-0.5 block text-[11px] font-semibold text-[#2563EB]">
+                              Đã quét: {stat.scanned}
+                              {stat.scanLimit ? `/${stat.scanLimit}` : ""} nhóm
+                            </span>
+                          )}
                         </td>
                         <td className="px-3 py-2.5">
                           <KeywordStatusBadge status={stat.status} />
