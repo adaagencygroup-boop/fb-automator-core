@@ -87,6 +87,8 @@ const NEVER_CACHE = [
   /\/api\/group-scan\/keyword-capacity\//, // module 10 — Kiểm tra từ khóa (tiến độ trực tiếp)
   /\/seeding\/campaigns\/[^/?]+(\?|$)/, // getSeedingCampaignDetail (module 08)
   /\/scan\/sessions\/[^/?]+(\?|$)/,     // getScanSessionDetail (module 10)
+  /\/api\/seeding\/post-fetch\//,       // module 08 — lấy bài từ page: tiến độ + danh sách bài đổi liên tục khi đang lấy
+  /\/api\/seeding\/campaigns\/(active|[^/?]+\/(batch-progress|detail))(\?|$)/, // module 08 — lô đang chạy / tiến độ (poll)
   /\/api\/v1\/auth\//,                  // đăng nhập, refresh, /me — danh tính không được cache
   /\/api\/v1\/admin\//,
 ];

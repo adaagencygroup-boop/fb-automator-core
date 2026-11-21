@@ -87,12 +87,43 @@ export const seedingApi = {
   },
 
   createSeedingCampaign: async (payload) => {
-    return await api.post("/api/seeding/campaigns/create", payload);
+    // Nhiều bài (vd chọn hàng nghìn bài từ page) → tạo tác vụ lâu hơn timeout mặc định 60s
+    return await api.post("/api/seeding/campaigns/create", payload, { timeout: 15 * 60 * 1000 });
   },
 
-  startSeedingCampaign: async (campaignId) => {
-    return await api.post(`/api/seeding/campaigns/${campaignId}/start`);
+  // startAt: "YYYY-MM-DDTHH:MM" (giờ máy, VN) để hẹn giờ; bỏ trống = chạy ngay
+  startSeedingCampaign: async (campaignId, startAt) => {
+    return await api.post(
+      `/api/seeding/campaigns/${campaignId}/start`,
+      null,
+      startAt ? { params: { start_at: startAt } } : undefined,
+    );
   },
+
+  pauseSeedingCampaign: async (campaignId) => api.post(`/api/seeding/campaigns/${campaignId}/pause`),
+
+  resumeSeedingCampaign: async (campaignId) => api.post(`/api/seeding/campaigns/${campaignId}/resume`),
+
+  // Tiến độ cả lô: { running, paused, scheduled_at, totals, post_count, posts[], retryable }
+  getBatchProgress: async (campaignId) => api.get(`/api/seeding/campaigns/${campaignId}/batch-progress`),
+
+  // Tạo lô mới từ các lượt lỗi → { id, campaign_ids, total_tasks, message }
+  retryFailedTasks: async (campaignId) =>
+    api.post(`/api/seeding/campaigns/${campaignId}/retry-failed`, null, { timeout: 5 * 60 * 1000 }),
+
+  // Xem trước kế hoạch (cùng payload với tạo chiến dịch, không ghi DB)
+  previewSeedingPlan: async (payload) =>
+    api.post("/api/seeding/campaigns/preview", payload, { timeout: 2 * 60 * 1000 }),
+
+  listTemplates: async (campaignType = "POST") => {
+    const res = await api.get("/api/seeding/templates", { params: { campaign_type: campaignType } });
+    return res?.items || [];
+  },
+
+  saveTemplate: async (name, config, campaignType = "POST") =>
+    api.post("/api/seeding/templates", { name, config, campaign_type: campaignType }),
+
+  deleteTemplate: async (templateId) => api.delete(`/api/seeding/templates/${templateId}`),
 
   stopSeedingCampaign: async (campaignId) => {
     return await api.post(`/api/seeding/campaigns/${campaignId}/stop`);
@@ -138,6 +169,23 @@ export const seedingApi = {
       return { total_campaigns: 0, total_interactions: 0, total_success: 0, total_failed: 0 };
     }
   },
+};
+
+// ── Lấy bài viết từ page / trang cá nhân (job chạy nền, không giới hạn số bài) ──
+export const postFetchApi = {
+  startJob: (sourceUrl, accountUid) =>
+    api.post("/api/seeding/post-fetch/jobs", { source_url: sourceUrl, account_uid: accountUid }),
+  // Lượt đang chạy; không có thì lượt gần nhất → { job | null }
+  getActiveJob: () => api.get("/api/seeding/post-fetch/jobs/active"),
+  getJob: (jobId) => api.get(`/api/seeding/post-fetch/jobs/${jobId}`),
+  stopJob: (jobId) => api.post(`/api/seeding/post-fetch/jobs/${jobId}/stop`),
+  // { source_key, q, type: all|photo|video|text, page, page_size } → { items, total, counts }
+  listPosts: (params) => api.get("/api/seeding/post-fetch/posts", { params }),
+  // Id N bài đầu (chưa có trong danh sách seeding) khớp bộ lọc → { ids }
+  firstPostIds: (params) => api.get("/api/seeding/post-fetch/posts/ids", { params }),
+  // { source_key, mode: ids|all|first, ids, exclude_ids, first_n, q, type } → { added, skipped, message }
+  addToTargets: (payload) =>
+    api.post("/api/seeding/post-fetch/posts/add-to-targets", payload, { timeout: 10 * 60 * 1000 }),
 };
 
 export async function startSeeding(data) {
