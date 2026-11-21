@@ -8,6 +8,9 @@ from modules.module_08_interaction_seeding.models.seeding_models import (
     SeedingCampaignTarget,
     SeedingComment,
     SeedingTask,
+    SeedingPostFetchJob,
+    SeedingFetchedPost,
+    SeedingTemplate,
 )
 
 __all__ = [
@@ -16,4 +19,7 @@ __all__ = [
     "SeedingCampaignTarget",
     "SeedingComment",
     "SeedingTask",
+    "SeedingPostFetchJob",
+    "SeedingFetchedPost",
+    "SeedingTemplate",
 ]
