@@ -465,7 +465,7 @@ def _body(job_id: str) -> None:
                     log("⚠️ Không còn nick nào mở được Chrome cho luồng này.", "warn")
                     return
                 session = open_account_session([nick], 0, owner=owner, scope="group-scan", log=log,
-                                               lock_timeout=8, should_stop=stop)
+                                               lock_timeout=8, should_stop=stop, window_slot=n - 1)
             nick = session["uid"]
             with queue_lock:
                 state["opened"] += 1
@@ -473,7 +473,7 @@ def _body(job_id: str) -> None:
                 _set(job_id, uid=", ".join(state["uids"]))
             first = True
             while not stop():
-                nxt = word_queue.take(taken)
+                nxt = word_queue.take(taken, should_stop=stop)
                 if nxt is None:
                     return
                 taken += 1
@@ -491,7 +491,7 @@ def _body(job_id: str) -> None:
                 logger.exception("capacity worker %s crashed", job_id)
                 log(f"❌ Luồng kiểm tra lỗi: {exc}", "error")
         finally:
-            word_queue.release(taken)  # dừng sớm → phần chưa làm chuyển cho Chrome khác
+            word_queue.leave(taken)  # dừng sớm → phần chưa làm chuyển cho Chrome khác
             try:
                 close_account_session(session, quit_browser=True)
             except Exception as exc:

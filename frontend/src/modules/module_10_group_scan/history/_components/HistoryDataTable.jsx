@@ -9,6 +9,7 @@ import {
   ChevronDown,
   Loader2,
   Layers,
+  Play,
   Search,
   Users,
 } from "lucide-react";
@@ -224,6 +225,14 @@ export function renderStatusPill(status) {
       </span>
     );
   }
+  if (s === "RESUMED") {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200 whitespace-nowrap">
+        <span className="size-1.5 rounded-full bg-blue-500" />
+        <span>Đã chạy tiếp</span>
+      </span>
+    );
+  }
   if (s === "ABORTED" || s === "INTERRUPTED") {
     // ABORTED: người dùng bấm dừng. INTERRUPTED: Engine khởi động lại giữa lúc quét.
     return (
@@ -273,6 +282,8 @@ export default function HistoryDataTable({
   paginatedList = [],
   totalFilteredCount = 0,
   onViewDetail,
+  onResume,
+  resumingId = null,
   currentPage = 1,
   pageSize = 5,
   totalPages = 1,
@@ -387,7 +398,22 @@ export default function HistoryDataTable({
                     </td>
 
                     {/* 7. THAO TÁC */}
-                    <td className="pl-3 pr-6 py-4 text-center align-middle">
+                    <td className="pl-3 pr-6 py-4 text-center align-middle whitespace-nowrap">
+                      {item.resumable && onResume && (
+                        <button
+                          type="button"
+                          onClick={() => onResume(item)}
+                          disabled={Boolean(resumingId)}
+                          title={`Chạy tiếp ${item.remainingItems} mục còn thiếu của phiên này`}
+                          className="mr-1 p-1.5 text-amber-600 hover:text-amber-800 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer inline-flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {resumingId === item.id ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <Play className="size-4 stroke-[1.75]" />
+                          )}
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => onViewDetail?.(item)}

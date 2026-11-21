@@ -206,6 +206,11 @@ def init_models() -> None:
         db.execute("ALTER TABLE scanned_group_sessions ADD COLUMN IF NOT EXISTS logs TEXT;")
     except Exception as exc:
         print(f"[Module 10 DB] add logs column error: {exc}")
+    # Tiến độ phiên quét (JSON) để "Chạy tiếp" phiên bị gián đoạn — chỉ quét phần còn thiếu
+    try:
+        db.execute("ALTER TABLE scanned_group_sessions ADD COLUMN IF NOT EXISTS resume_state TEXT;")
+    except Exception as exc:
+        print(f"[Module 10 DB] add resume_state column error: {exc}")
 
     _normalize_existing_keywords()
     _sync_keywords_to_categories()
@@ -688,6 +693,124 @@ def update_scan_session(
         return False
 
 
+# Trạng thái phiên được phép "Chạy tiếp" (phiên chưa quét hết vì Engine tắt / Chrome bị đóng / Dừng khẩn cấp).
+RESUMABLE_STATUSES = {"INTERRUPTED", "ABORTED"}
+
+
+def save_resume_state(session_id: str, state: dict[str, Any]) -> bool:
+    """Ghi tiến độ phiên (yêu cầu gốc + từng mục đã quét bao nhiêu / xong chưa)."""
+    if not session_id:
+        return False
+    try:
+        db.execute(
+            "UPDATE scanned_group_sessions SET resume_state = ? WHERE session_id = ?",
+            (json.dumps(state, ensure_ascii=False, default=str), session_id),
+        )
+        return True
+    except Exception as exc:
+        print(f"[Module 10 DB] save_resume_state error: {exc}")
+        return False
+
+
+def resume_remaining(state: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Các mục chưa quét xong của phiên — mỗi mục kèm hạn mức còn thiếu.
+
+    group_info:    [{"keyword", "limit"}] (link nhóm chưa mở thì limit 1)
+    group_members: [{...nhóm, "limit": số thành viên còn thiếu}]
+    """
+    if not isinstance(state, dict):
+        return []
+    req = state.get("request") or {}
+    progress = state.get("progress") or {}
+    out: list[dict[str, Any]] = []
+    if state.get("kind") == "group_members":
+        per_group = int(req.get("members_limit") or 50)
+        for idx, grp in enumerate(req.get("groups") or []):
+            row = progress.get(str(idx)) or {}
+            if row.get("done"):
+                continue
+            left = max(1, per_group - int(row.get("count") or 0))
+            out.append({**grp, "limit": left})
+        return out
+    for item in req.get("keywords") or []:
+        row = progress.get(item.get("keyword")) or {}
+        if row.get("done"):
+            continue
+        left = max(1, int(item.get("limit") or 30) - int(row.get("count") or 0))
+        out.append({"keyword": item.get("keyword"), "limit": left})
+    return out
+
+
+def get_resume_info(owner: Optional[str], session_id: str) -> Optional[dict[str, Any]]:
+    """{status, scan_type, state, remaining} của phiên thuộc owner, hoặc None."""
+    owner = (owner or "").strip()
+    if not owner or not session_id:
+        return None
+    mark_interrupted_sessions(owner)
+    row = db.fetch_one(
+        "SELECT session_id, scan_type, status, resume_state FROM scanned_group_sessions "
+        "WHERE owner_username = ? AND session_id = ?",
+        (owner, session_id),
+    )
+    if not row:
+        return None
+    try:
+        state = json.loads(row.get("resume_state") or "null")
+    except Exception:
+        state = None
+    return {
+        "session_id": row["session_id"],
+        "scan_type": row.get("scan_type") or "GROUP_INFO",
+        "status": str(row.get("status") or "").upper(),
+        "state": state,
+        "remaining": resume_remaining(state),
+    }
+
+
+def latest_resumable_session(owner: Optional[str], scan_type: str) -> Optional[dict[str, Any]]:
+    """Phiên gần nhất cùng loại còn phần chưa quét (để trang Quét hiện nút Chạy tiếp)."""
+    owner = (owner or "").strip()
+    if not owner:
+        return None
+    mark_interrupted_sessions(owner)
+    # Chỉ xét PHIÊN GẦN NHẤT cùng loại: đã chạy phiên khác sau phiên dừng dở thì phiên cũ không còn nhắc ở
+    # trang Quét nữa (dễ hiểu nhầm là chạy tiếp phiên vừa rồi) — vẫn Chạy tiếp được ở trang Lịch sử.
+    rows = db.fetch_all(
+        "SELECT session_id, title, status, resume_state, started_at FROM scanned_group_sessions "
+        "WHERE owner_username = ? AND scan_type = ? ORDER BY started_at DESC LIMIT 1",
+        (owner, str(scan_type).upper()),
+    )
+    for row in rows:
+        if str(row.get("status") or "").upper() not in RESUMABLE_STATUSES or not row.get("resume_state"):
+            return None
+        try:
+            state = json.loads(row.get("resume_state") or "null")
+        except Exception:
+            continue
+        remaining = resume_remaining(state)
+        if remaining:
+            members = state.get("kind") == "group_members"
+            return {
+                "session_id": row["session_id"],
+                "title": row.get("title") or "",
+                "status": str(row.get("status") or "").upper(),
+                "startTime": _fmt_dt(row.get("started_at")),
+                "remaining": len(remaining),
+                # Từng mục còn thiếu bao nhiêu — để người dùng biết bấm Chạy tiếp sẽ quét gì
+                "items": [
+                    {
+                        "label": str((it.get("name") or it.get("group_name") or it.get("group_id") or "")
+                                     if members else it.get("keyword") or ""),
+                        "left": int(it.get("limit") or 0),
+                        "unit": "thành viên" if members else (
+                            "link" if "/groups/" in str(it.get("keyword") or "") else "nhóm"),
+                    }
+                    for it in remaining[:6]
+                ],
+            }
+    return None
+
+
 def add_session_log(session_id: str, level: str, message: str) -> None:
     """Không lưu log chi tiết vào database để tối ưu hiệu năng và dung lượng."""
     return
@@ -701,6 +824,7 @@ _STATUS_TEXT = {
     "ERROR": ("ERROR", "Phiên quét gặp lỗi"),
     "ABORTED": ("WARNING", "Phiên quét đã bị dừng"),
     "INTERRUPTED": ("WARNING", "Phiên quét bị gián đoạn do Engine khởi động lại — các mục đã quét trước đó vẫn được lưu"),
+    "RESUMED": ("INFO", "Phiên bị gián đoạn — phần còn lại đã được chạy tiếp ở phiên mới"),
 }
 
 
@@ -871,7 +995,7 @@ def list_scan_sessions(
         f"""
         SELECT id, session_id, owner_username, scan_type, title, target,
                target_type, source_uid, account_name, total_found, target_count,
-               status, config, logs, started_at, finished_at, created_at
+               status, config, logs, resume_state, started_at, finished_at, created_at
         FROM scanned_group_sessions
         WHERE {where_clause}
         ORDER BY created_at DESC
@@ -935,9 +1059,18 @@ def list_scan_sessions(
         if not logs_list:
             logs_list = _legacy_session_logs(sstatus, start_str, "" if end_str == "—" else end_str, total_cnt, unit)
 
+        remaining_items = 0
+        if sstatus in RESUMABLE_STATUSES and r.get("resume_state"):
+            try:
+                remaining_items = len(resume_remaining(json.loads(r["resume_state"])))
+            except Exception:
+                remaining_items = 0
+
         out.append({
             "id": sid,
             "type": stype,
+            "resumable": remaining_items > 0,
+            "remainingItems": remaining_items,
             "title": r.get("title") or "Quét thông tin nhóm",
             "target": r.get("target") or "—",
             "targetType": r.get("target_type") or "keywords",

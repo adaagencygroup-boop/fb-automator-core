@@ -19,6 +19,7 @@ from urllib.parse import quote, urlparse, urlunparse
 
 from modules.module_10_group_scan.scan_common import (
     FairQueue,
+    ResumeTracker,
     close_account_session,
     is_browser_dead_error,
     open_account_session,
@@ -29,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 # Nhãn luồng hiện trên log ([Thread-01], [Thread-02]…) — mỗi Chrome quét song song là một luồng.
 _thread_label = threading.local()
+# Tiến độ từng phiên (để "Chạy tiếp" khi bị gián đoạn) — job_id → ResumeTracker
+_trackers: dict[str, ResumeTracker] = {}
 
 DEFAULT_MAX_GROUPS = 30
 HARD_MAX_GROUPS = 200
@@ -133,6 +136,17 @@ def _job_owner(job_id: str) -> Any:
         return (_jobs.get(job_id) or {}).get("owner", object())
 
 
+def get_active_check_job(owner: Optional[str]) -> Optional[str]:
+    """Phiên Bắt đầu thực thi đang chạy / tạm dừng gần nhất của owner (để trang Quét gắn lại vào)."""
+    with _jobs_lock:
+        active = [
+            (job.get("started_at") or 0, jid)
+            for jid, job in _jobs.items()
+            if job.get("owner") == owner and job.get("status") in {"running", "paused"}
+        ]
+    return max(active)[1] if active else None
+
+
 def get_check_status(
     job_id: Optional[str] = None,
     uid: Optional[str] = None,
@@ -220,6 +234,12 @@ def _update_keyword_stat(job_id: str, keyword: str, **fields) -> None:
         stats[keyword] = row
         if fields.get("status") == "running":
             job["keyword"] = keyword
+    tracker = _trackers.get(job_id)
+    if tracker is not None and ("count" in fields or fields.get("status") == "done"):
+        try:
+            tracker.update(keyword, count=fields.get("count"), done=True if fields.get("status") == "done" else None)
+        except Exception as exc:
+            logger.debug("resume tracker update failed: %s", exc)
 
 
 def _latest_job_for_uid(uid: str, owner: Optional[str] = None) -> Optional[dict[str, Any]]:
@@ -242,6 +262,17 @@ def _release_pending(key: str, job_id: Optional[str] = None) -> None:
         if job_id is not None and info.get("job_id") and info.get("job_id") != job_id:
             return
         _pending.pop(key, None)
+
+
+def _pause_resumes(job_id: str) -> int:
+    with _jobs_lock:
+        return int((_jobs.get(job_id) or {}).get("pause_resumes") or 0)
+
+
+def _keyword_count(job_id: str, keyword: str) -> int:
+    with _jobs_lock:
+        row = ((_jobs.get(job_id) or {}).get("keyword_stats") or {}).get(keyword) or {}
+        return int(row.get("count") or 0)
 
 
 def _get_control(job_id: str) -> str:
@@ -281,7 +312,12 @@ def _handle_pause_if_requested(job_id: str, context_label: str = "") -> bool:
             return True
         time.sleep(0.5)
 
-    _set_job(job_id, status="running", control="run")
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is not None:
+            job["status"] = "running"
+            job["control"] = "run"
+            job["pause_resumes"] = int(job.get("pause_resumes") or 0) + 1
     _append_log(job_id, f"▶️ Tiếp tục quét{lbl}…", "info")
     return False
 
@@ -483,12 +519,22 @@ def start_keyword_check(
             target=words_str,
             target_type="keywords",
             source_uid=uid,
-            account_name=f"Nick {uid}",
+            account_name=f"{len(valid_uids)} nick" if len(valid_uids) > 1 else f"Nick {uid}",
             target_count=sum(item["limit"] for item in items),
             config=cfg_str,
         )
     except Exception as exc:
         logger.debug(f"create_scan_session error: {exc}")
+    try:
+        tracker = ResumeTracker(
+            job_id, "group_info",
+            {"uids": valid_uids, "keywords": items, "delay_min": dmin, "delay_max": dmax, "min_members": min_members},
+            [item["keyword"] for item in items],
+        )
+        _trackers[job_id] = tracker
+        tracker.flush()
+    except Exception as exc:
+        logger.debug(f"resume tracker init error: {exc}")
 
     thread = threading.Thread(
         target=_run_check,
@@ -564,6 +610,12 @@ def _run_check(
             _append_log(job_id, f"❌ Lỗi Kiểm tra: {exc}", "error")
             _set_job(job_id, status="error", error=str(exc))
     finally:
+        tracker = _trackers.pop(job_id, None)
+        if tracker is not None:
+            try:
+                tracker.flush()
+            except Exception as exc:
+                logger.debug("resume tracker flush failed: %s", exc)
         _release_pending(key, job_id=job_id)
         with _jobs_lock:
             job = _jobs.get(job_id)
@@ -1145,6 +1197,7 @@ def _scrape_groups_from_results(
     # Nhóm đã thấy trên trang lần này (kể cả nhóm đã lấy ở nick trước). Sau khi đổi nick phải cuộn lại qua
     # các nhóm cũ — những lượt đó vẫn là Facebook đang tải thêm, không được tính là "hết kết quả".
     page_seen: set[str] = set()
+    reloaded = False  # đã tải lại trang kết quả 1 lần khi Facebook ngừng tải sớm
 
     def _aborted() -> bool:
         return _get_control(job_id) == "abort"
@@ -1300,6 +1353,22 @@ def _scrape_groups_from_results(
         if flags.get("end") and idle >= 2:
             _append_log(job_id, f"ℹ️ «{keyword}»: Facebook báo đã hết kết quả tìm kiếm.", "info")
             break
+        if idle >= NO_GROWTH_ROUNDS and not reloaded and len(found) < limit and not _is_direct_group_link(keyword):
+            # Facebook đôi khi ngừng tải sớm (hay gặp ở từ khóa thứ 2 trên cùng Chrome) dù còn nhiều nhóm:
+            # tải lại hẳn trang kết quả rồi cuộn tiếp — nhóm đã xem được bỏ qua nhanh.
+            reloaded = True
+            _append_log(job_id, f"🔁 «{keyword}»: Facebook ngừng tải khi mới giữ {len(found)}/{limit} — "
+                                "tải lại trang kết quả để cuộn tiếp…", "info")
+            try:
+                driver.get(f"https://www.facebook.com/search/groups/?q={quote(keyword)}")
+            except Exception as exc:
+                if is_browser_dead_error(exc):
+                    raise
+            human_sleep(3.0, 4.5)
+            page_seen = set()
+            idle = 0
+            loading_waits = 0
+            continue
         if idle >= NO_GROWTH_ROUNDS:
             _append_log(job_id, f"ℹ️ «{keyword}»: Facebook không hiện thêm nhóm nào nữa.", "info")
             break
@@ -1553,19 +1622,24 @@ def _check_keywords_on_account(
         "info",
     )
 
-    def scan_item(driver, nick: str, idx: int, item: dict[str, Any], reset_home: bool) -> bool:
-        """Quét 1 từ khóa / 1 link. Trả False khi Chrome đã chết (luồng phải dừng)."""
+    def scan_item(driver, nick: str, idx: int, item: dict[str, Any], reset_home: bool, done_before: int = 0) -> bool:
+        """Quét 1 từ khóa / 1 link. Trả False khi Chrome đã chết (luồng phải dừng).
+        done_before: số nhóm của từ khóa này đã quét được trước khi Chrome bị tắt (quét tiếp phần còn thiếu)."""
         keyword = item["keyword"]
-        limit = _clamp_limit(item.get("limit"))
+        total_limit = _clamp_limit(item.get("limit"))
         is_link = _is_direct_group_link(keyword)
-        _update_keyword_stat(job_id, keyword, status="running", count=0, limit=1 if is_link else limit, uid=nick)
-        _append_log(
-            job_id,
-            f"▶️ [{idx + 1}/{len(items)}] Nick {nick} mở link nhóm {keyword}"
-            if is_link
-            else f"▶️ [{idx + 1}/{len(items)}] Nick {nick} quét «{keyword}» — dừng khi đủ {limit} nhóm mới (bỏ trùng DB).",
-            "info",
-        )
+        done_before = 0 if is_link else max(0, min(done_before, total_limit))
+        limit = max(1, total_limit - done_before)
+        _update_keyword_stat(job_id, keyword, status="running", count=done_before,
+                             limit=1 if is_link else total_limit, uid=nick)
+        if is_link:
+            _append_log(job_id, f"▶️ [{idx + 1}/{len(items)}] Nick {nick} mở link nhóm {keyword}", "info")
+        elif done_before:
+            _append_log(job_id, f"▶️ [{idx + 1}/{len(items)}] Nick {nick} quét tiếp «{keyword}» "
+                                f"từ {done_before}/{total_limit} nhóm.", "info")
+        else:
+            _append_log(job_id, f"▶️ [{idx + 1}/{len(items)}] Nick {nick} quét «{keyword}» — dừng khi đủ "
+                                f"{total_limit} nhóm mới (bỏ trùng DB).", "info")
         collected: list[dict[str, Any]] = []
         try:
             if is_link:
@@ -1588,7 +1662,8 @@ def _check_keywords_on_account(
                         public_only=public_only, private_only=private_only, min_members=min_members,
                         owner=owner, source_uid=nick, known_group_ids=known_ids,
                         delay_min=delay_min, delay_max=delay_max,
-                        display_limit=limit,
+                        stat_offset=done_before,
+                        display_limit=total_limit,
                     )
             for g in collected:
                 gid = normalize_group_id(g.get("href") or "")
@@ -1597,12 +1672,21 @@ def _check_keywords_on_account(
             collected = collected[:limit]
             _add_job_groups(job_id, collected)  # bỏ trùng theo href — nhóm đã thêm lúc quét không bị đếm 2 lần
             stopped = stop_requested()
+            got = done_before + len(collected)
             _update_keyword_stat(
-                job_id, keyword, count=len(collected), status="stopped" if stopped else "done",
-                limit=1 if is_link else limit,
+                job_id, keyword, count=got, status="stopped" if stopped else "done",
+                limit=1 if is_link else total_limit,
             )
             if not stopped and not is_link:  # link: _scrape_group_direct đã ghi kết quả
-                _append_log(job_id, f"🏁 Xong «{keyword}»: {len(collected)}/{limit} nhóm.", "success")
+                _append_log(job_id, f"🏁 Xong «{keyword}»: {got}/{total_limit} nhóm.", "success")
+                if got < total_limit:
+                    _append_log(
+                        job_id,
+                        f"⚠️ «{keyword}» chỉ lấy được {got}/{total_limit} nhóm mới: Facebook không hiện thêm nhóm chưa quét "
+                        "(các nhóm còn lại đã có trong Danh sách nhóm quét hoặc không đạt bộ lọc). "
+                        "Nếu bảng Kiểm tra báo còn nhiều nhóm chưa quét, bấm Bắt đầu thực thi lại cho từ khóa này.",
+                        "warn",
+                    )
             return True
         except Exception as exc:
             if is_browser_dead_error(exc):
@@ -1634,10 +1718,11 @@ def _check_keywords_on_account(
                 _append_log(job_id, f"🌐 Nick {nick}: đang mở Chrome…", "info")
                 session = open_account_session(
                     [nick], 0, owner=owner, scope="group-scan", log=log,
-                    lock_timeout=8, should_stop=stop_requested,
+                    lock_timeout=8, should_stop=stop_requested, window_slot=n - 1,
                 )
             nick = session["uid"]
             driver = session["driver"]
+            resumes_at_open = _pause_resumes(job_id)
             with queue_lock:
                 state["opened"] += 1
             try:
@@ -1655,7 +1740,7 @@ def _check_keywords_on_account(
                     return
                 if _handle_pause_if_requested(job_id, context_label=f"nick {nick}"):
                     return
-                nxt = item_queue.take(taken)
+                nxt = item_queue.take(taken, should_stop=stop_requested)
                 if nxt is None:
                     return
                 taken += 1
@@ -1668,7 +1753,27 @@ def _check_keywords_on_account(
                     if _wait_interruptible(job_id, wait_sec, pause_label=f"Nghỉ trước «{item['keyword']}»"):
                         item_queue.put_back(nxt)
                         return
-                if not scan_item(driver, nick, idx, item, reset_home=not first):
+                ok = scan_item(driver, nick, idx, item, reset_home=not first)
+                reopened = 0
+                while not ok and not stop_requested() and _pause_resumes(job_id) > resumes_at_open and reopened < 2:
+                    # Chrome bị tắt LÚC ĐANG TẠM DỪNG rồi người dùng bấm Tiếp tục → mở lại Chrome của nick này
+                    # và quét tiếp đúng từ khóa dở (tắt Chrome lúc đang chạy thì vẫn dừng luồng như cũ).
+                    reopened += 1
+                    _append_log(job_id, f"🔄 Chrome của nick {nick} bị tắt trong lúc tạm dừng — mở lại để quét tiếp "
+                                        f"«{item['keyword']}»…", "info")
+                    close_account_session(session)
+                    session = open_account_session(
+                        [nick], 0, owner=owner, scope="group-scan", log=log,
+                        lock_timeout=8, should_stop=stop_requested, window_slot=n - 1,
+                    )
+                    if not session:
+                        _append_log(job_id, f"⚠️ Không mở lại được Chrome của nick {nick}.", "warn")
+                        return
+                    driver = session["driver"]
+                    resumes_at_open = _pause_resumes(job_id)
+                    ok = scan_item(driver, nick, idx, item, reset_home=True,
+                                   done_before=_keyword_count(job_id, item["keyword"]))
+                if not ok:
                     return
                 first = False
         except Exception as exc:
@@ -1678,7 +1783,7 @@ def _check_keywords_on_account(
                 logger.exception("[%s] group scan worker failed", job_id)
                 _append_log(job_id, f"❌ Luồng quét lỗi: {exc}", "error")
         finally:
-            item_queue.release(taken)  # dừng sớm → phần chưa làm chuyển cho Chrome khác
+            item_queue.leave(taken)  # dừng sớm → phần chưa làm chuyển cho Chrome khác
             if session:
                 _append_log(job_id, f"🔒 Đóng Chrome của nick {session.get('uid')}.", "info")
             close_account_session(session)
@@ -1713,9 +1818,14 @@ def _check_keywords_on_account(
         _append_log(job_id, f"❌ {msg}.", "error")
         _set_job(job_id, status="error", error=msg)
         return
-    if leftover:
-        _append_log(job_id, f"⚠️ {len(leftover)} từ khóa chưa quét vì Chrome đã bị đóng.", "warn")
-        _set_job(job_id, status="aborted", error="Chrome đã bị đóng")
+    with _jobs_lock:
+        stats = dict((_jobs.get(job_id) or {}).get("keyword_stats") or {})
+    unfinished = [it["keyword"] for it in items if (stats.get(it["keyword"]) or {}).get("status") != "done"]
+    if leftover or unfinished:
+        n_left = len(unfinished) or len(leftover)
+        _append_log(job_id, f"⚠️ Còn {n_left} {noun} chưa quét xong (Chrome bị đóng hoặc gặp lỗi) — "
+                            "bấm Chạy tiếp để quét nốt phần còn thiếu.", "warn")
+        _set_job(job_id, status="aborted", error=f"Còn {n_left} {noun} chưa quét xong")
         return
     _set_job(job_id, status="done")
     _append_log(job_id, f"🏁 Hoàn tất {len(items)} {noun} — tổng {total} nhóm.", "success")

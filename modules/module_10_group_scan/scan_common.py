@@ -250,6 +250,7 @@ def open_account_session(
     exclude: Iterable[str] = (),
     lock_timeout: float = 10.0,
     should_stop: Optional[Callable[[], bool]] = None,
+    window_slot: Optional[int] = None,
     load_credentials: Optional[Callable[[str, Optional[str]], Optional[dict[str, Any]]]] = None,
 ) -> Optional[dict[str, Any]]:
     """Thử lần lượt các nick trong pool từ `start_index`, mỗi nick tối đa một lần.
@@ -302,12 +303,24 @@ def open_account_session(
                 proxy=creds.get("proxy"),
                 scope=scope,
                 verify_egress=False,
+                **({"window_slot": window_slot} if window_slot is not None else {}),
             )
+            if should_stop and should_stop():
+                # Bấm Dừng khẩn cấp lúc Chrome đang mở → đóng ngay, không đăng nhập nữa.
+                log(f"[{uid}] Đã nhận lệnh dừng — đóng Chrome, không đăng nhập.", "warn")
+                _quit(driver)
+                _release(lock)
+                return None
             if not _login(driver, uid, creds, log):
                 log(f"[{uid}] Không đăng nhập được Facebook — chuyển nick kế tiếp.", "error")
                 _quit(driver)
                 _release(lock)
                 continue
+            if should_stop and should_stop():
+                log(f"[{uid}] Đã nhận lệnh dừng — đóng Chrome.", "warn")
+                _quit(driver)
+                _release(lock)
+                return None
             log(f"[{uid}] Đăng nhập thành công.", "success")
             return {"driver": driver, "lock": lock, "uid": uid, "next_index": idx + 1}
         except Exception as exc:
@@ -498,43 +511,105 @@ class FairQueue:
 
     Mỗi luồng được `len(items) // workers` việc; phần dư (`len % workers`) để luồng nào xong phần của mình
     trước thì làm tiếp. Ví dụ 2 nick: 4 nhóm → 2/2; 5 nhóm → 2/2 rồi nhóm thứ 5 cho nick xong trước.
-    Luồng dừng sớm (nick không mở được, Chrome bị đóng) trả lại phần chưa làm để luồng khác làm thay.
+
+    Luồng dừng sớm (nick không mở được Chrome, Chrome bị đóng) gọi `leave()` để trả phần chưa làm; luồng đã
+    xong phần mình nhưng còn việc của luồng khác thì CHỜ (không đóng Chrome) — nếu luồng kia bỏ cuộc thì
+    nhận làm thay, nếu luồng kia làm xong thì kết thúc. Nhờ vậy không việc nào bị bỏ sót.
     """
 
     def __init__(self, items: Iterable[Any], workers: int):
         self._items = deque(items)
-        workers = max(1, int(workers))
-        self._base = len(self._items) // workers
-        self._extra = len(self._items) % workers
-        self._lock = threading.Lock()
+        self._workers = max(1, int(workers))
+        self._base = len(self._items) // self._workers
+        self._extra = len(self._items) % self._workers
+        self._active = self._workers
+        self._cond = threading.Condition()
 
     def has_work(self, taken: int = 0) -> bool:
-        with self._lock:
-            return bool(self._items) and (taken < self._base or self._extra > 0)
+        """Còn việc chưa làm (của mình hoặc có thể được trả lại cho mình)."""
+        with self._cond:
+            return bool(self._items)
 
-    def take(self, taken: int) -> Any:
-        """Lấy việc tiếp theo cho luồng đã làm `taken` việc; None khi luồng này hết phần."""
-        with self._lock:
-            if not self._items:
-                return None
-            if taken >= self._base:
-                if self._extra <= 0:
+    def take(self, taken: int, *, should_stop: Optional[Callable[[], bool]] = None,
+             wait: bool = True, poll: float = 0.5) -> Any:
+        """Lấy việc tiếp theo cho luồng đã làm `taken` việc. None khi hết việc (hoặc bị dừng)."""
+        with self._cond:
+            while True:
+                if not self._items:
                     return None
-                self._extra -= 1
-            return self._items.popleft()
+                if taken < self._base:
+                    return self._items.popleft()
+                if self._extra > 0:
+                    self._extra -= 1
+                    return self._items.popleft()
+                if self._active <= 1:
+                    # Chỉ còn mình mình: mọi việc còn lại là của mình.
+                    return self._items.popleft()
+                if not wait or (should_stop and should_stop()):
+                    return None
+                self._cond.wait(poll)
 
     def put_back(self, item: Any) -> None:
         """Trả lại việc vừa lấy mà chưa làm (bị dừng giữa lúc nghỉ) — thành phần dư cho luồng khác."""
-        with self._lock:
+        with self._cond:
             self._items.appendleft(item)
             self._extra += 1
+            self._cond.notify_all()
 
-    def release(self, taken: int) -> None:
-        """Luồng kết thúc: phần chưa làm (nếu dừng sớm) chuyển thành phần dư cho luồng còn chạy."""
-        with self._lock:
+    def leave(self, taken: int) -> None:
+        """Luồng kết thúc: phần chưa làm (nếu dừng sớm) chuyển cho luồng còn chạy."""
+        with self._cond:
             if taken < self._base:
                 self._extra += self._base - taken
+            self._active = max(0, self._active - 1)
+            self._cond.notify_all()
 
     def remaining(self) -> list[Any]:
-        with self._lock:
+        with self._cond:
             return list(self._items)
+
+
+class ResumeTracker:
+    """Ghi tiến độ phiên quét vào DB để "Chạy tiếp" khi phiên bị gián đoạn.
+
+    state = {"kind", "request": yêu cầu gốc, "progress": {khóa mục: {"count", "done"}}}.
+    Ghi ngay khi một mục xong; khi chỉ đổi số đếm thì ghi tối đa mỗi `min_interval` giây
+    (Engine tắt đột ngột chỉ mất tiến độ vài giây cuối — phần đó được quét lại, nhóm trùng tự bỏ).
+    """
+
+    def __init__(self, session_id: str, kind: str, request: dict[str, Any], keys: Iterable[str],
+                 *, save: Optional[Callable[[str, dict[str, Any]], Any]] = None, min_interval: float = 3.0):
+        self.session_id = session_id
+        self.state: dict[str, Any] = {
+            "kind": kind,
+            "request": request,
+            "progress": {str(k): {"count": 0, "done": False} for k in keys},
+        }
+        self._save_fn = save
+        self._min_interval = min_interval
+        self._last_save = 0.0
+        self._lock = threading.Lock()
+
+    def _save(self) -> None:
+        save = self._save_fn
+        if save is None:
+            from modules.module_10_group_scan.models import save_resume_state as save
+        with self._lock:
+            snapshot = {**self.state, "progress": {k: dict(v) for k, v in self.state["progress"].items()}}
+            self._last_save = time.time()
+        save(self.session_id, snapshot)
+
+    def update(self, key: str, *, count: Optional[int] = None, done: Optional[bool] = None) -> None:
+        key = str(key)
+        with self._lock:
+            row = self.state["progress"].setdefault(key, {"count": 0, "done": False})
+            if count is not None:
+                row["count"] = max(int(row.get("count") or 0), int(count))
+            if done is not None:
+                row["done"] = bool(done)
+            due = done is not None or time.time() - self._last_save >= self._min_interval
+        if due:
+            self._save()
+
+    def flush(self) -> None:
+        self._save()

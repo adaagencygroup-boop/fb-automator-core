@@ -1,12 +1,14 @@
 "use client";
 
 import React, { useState, useMemo, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
 import { toast } from "@/lib/toast";
 import {
   getScanHistory,
   deleteScanHistory,
   deleteScanHistoryBulk,
+  resumeScanSession,
 } from "../service";
 import HistoryFilterToolbar from "./_components/HistoryFilterToolbar";
 import HistoryDataTable from "./_components/HistoryDataTable";
@@ -109,7 +111,7 @@ export default function GroupScanHistoryPage() {
         } else if (filterStatus === "FAILED") {
           if (s !== "FAILED" && s !== "ERROR") return false;
         } else if (filterStatus === "STOPPED") {
-          if (s !== "ABORTED" && s !== "INTERRUPTED") return false;
+          if (s !== "ABORTED" && s !== "INTERRUPTED" && s !== "RESUMED") return false;
         } else if (s !== filterStatus) {
           return false;
         }
@@ -153,10 +155,25 @@ export default function GroupScanHistoryPage() {
     return filteredList.slice(start, start + pageSize);
   }, [filteredList, currentPage, pageSize]);
 
-  const handleRerun = (session) => {
-    toast.info(
-      `Phiên quét: ${session.title} (${session.target}). Hãy mở tab Quét thông tin nhóm để tiếp tục!`
-    );
+  const router = useRouter();
+  const [resumingId, setResumingId] = useState(null);
+
+  // Chạy tiếp phiên bị gián đoạn: chỉ quét phần còn thiếu, rồi mở trang Quét tương ứng để theo dõi.
+  const handleResume = async (session) => {
+    if (!session?.id || resumingId) return;
+    setResumingId(session.id);
+    try {
+      const res = await resumeScanSession(session.id);
+      const unit = res?.scan_type === "GROUP_MEMBERS" ? "nhóm" : "từ khóa / link";
+      toast.success(`Đang chạy tiếp ${res?.remaining || session.remainingItems} ${unit} còn thiếu.`);
+      setSelectedSession(null);
+      router.push(res?.scan_type === "GROUP_MEMBERS" ? "/scan/members" : "/scan/info");
+    } catch (err) {
+      toast.error(err?.message || "Không chạy tiếp được phiên này.");
+      fetchHistory();
+    } finally {
+      setResumingId(null);
+    }
   };
 
   // Export to Excel
@@ -183,6 +200,8 @@ export default function GroupScanHistoryPage() {
             ? "Đã dừng"
             : status === "INTERRUPTED"
             ? "Bị gián đoạn"
+            : status === "RESUMED"
+            ? "Đã chạy tiếp"
             : "Lỗi";
 
         return {
@@ -250,6 +269,8 @@ export default function GroupScanHistoryPage() {
           setSelectedSession(item);
           setDetailModalTab("overview");
         }}
+        onResume={handleResume}
+        resumingId={resumingId}
         currentPage={currentPage}
         pageSize={pageSize}
         totalPages={totalPages}
@@ -267,7 +288,8 @@ export default function GroupScanHistoryPage() {
         session={selectedSession}
         detailModalTab={detailModalTab}
         onTabChange={setDetailModalTab}
-        onRerun={handleRerun}
+        onResume={handleResume}
+        resumingId={resumingId}
         mounted={mounted}
       />
     </div>

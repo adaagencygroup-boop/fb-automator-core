@@ -16,6 +16,7 @@ import {
   controlScanJob,
   createScanCategory,
   getActiveKeywordCapacity,
+  getActiveGroupScan,
   getCheckStatus,
   getKeywordCapacityStatus,
   getScanAccounts,
@@ -29,12 +30,14 @@ import ScanResultSection from "./_components/ScanResultSection";
 import LiveLogConsole from "./_components/LiveLogConsole";
 import { downloadTable, groupExportTable } from "../utils/exportTable";
 import ModulePageHeader from "../components/ModulePageHeader";
+import ResumeSessionBanner from "../components/ResumeSessionBanner";
 import { parseGroupLinkRows, splitTextRows } from "../utils/groupLinks";
 import { getSessionUserId } from "@/services/sessionIdentity.mjs";
 import { loadInputDraft, saveInputDraft } from "./inputDraft.mjs";
 import {
   applyScanProgress,
   capacityCell,
+  isKeywordChecked,
   keywordKey,
   markScanStarted,
   mergeCapacityStats,
@@ -557,6 +560,21 @@ export default function GroupScanInfoPage() {
     }
   };
 
+  // Mở lại trang (chuyển màn / F5 / bấm Chạy tiếp ở Lịch sử) lúc Engine đang quét → gắn lại vào phiên đó.
+  useEffect(() => {
+    let cancelled = false;
+    getActiveGroupScan()
+      .then((res) => {
+        if (cancelled || !res?.job_id) return;
+        setCheckJobId(res.job_id);
+        setRunState("running");
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Tải lại trang giữa lúc đang Kiểm tra → gắn lại vào phiên đó.
   useEffect(() => {
     let cancelled = false;
@@ -805,6 +823,16 @@ export default function GroupScanInfoPage() {
       toast.warning("Thêm ít nhất một từ khóa, bấm Kiểm tra rồi Bắt đầu thực thi.");
       return;
     }
+    if (method === "keyword") {
+      const notChecked = wordList.filter((word) => !isKeywordChecked(keywordStats[word]));
+      if (notChecked.length) {
+        toast.warning(
+          `Bấm Kiểm tra trước để biết mỗi từ khóa quét được bao nhiêu nhóm — còn ${notChecked.length} từ khóa chưa kiểm tra: `
+          + notChecked.slice(0, 3).map((w) => `«${w}»`).join(", ") + (notChecked.length > 3 ? "…" : "") + ".",
+        );
+        return;
+      }
+    }
     if (method === "link") {
       const validLinks = (parsedLinks || []).filter((l) => l.status === "valid");
       if (!validLinks.length) {
@@ -823,12 +851,16 @@ export default function GroupScanInfoPage() {
     setResults([]);
     setSelectedRows(new Set());
     setHasSavedShared(false);
+    setFilterKeyword("all"); // phiên mới: hiện đủ kết quả, không giữ bộ lọc từ khóa của lần trước
     try {
       localStorage.removeItem("fb_scan_info_active_results");
     } catch {}
 
     const uid = selectedUids[0];
     const body = buildScanBody(wordList);
+    // Bỏ mã phiên cũ (đã xong / đã dừng) TRƯỚC khi chuyển sang "đang chạy": nếu không, vòng theo dõi sẽ
+    // đọc phiên cũ, thấy "đã dừng" rồi tắt trạng thái chạy — phiên mới quét ngầm mà màn hình đứng yên.
+    setCheckJobId("");
     setRunState("running");
     setPausing(false);
     setAborting(false);
@@ -944,6 +976,13 @@ export default function GroupScanInfoPage() {
     }
   };
 
+  // Theo từ khóa: phải Kiểm tra xong mọi từ khóa (biết quét được tối đa bao nhiêu nhóm) mới cho Bắt đầu thực thi.
+  const uncheckedKeywords = useMemo(
+    () => (method === "keyword" ? keywords.filter((word) => !isKeywordChecked(keywordStats[word])) : []),
+    [method, keywords, keywordStats],
+  );
+  const needCheckFirst = runState === "idle" && uncheckedKeywords.length > 0;
+
   const handlePrimaryAction = async () => {
     if (runState === "paused" && checkJobId) {
       await resumeRun();
@@ -970,6 +1009,14 @@ export default function GroupScanInfoPage() {
       ...list.map((kw) => ({ value: kw, label: kw })),
     ];
   }, [results, keywords]);
+
+  // Bộ lọc trỏ tới từ khóa không còn trong danh sách (đã đổi bộ từ khóa) → về "Tất cả",
+  // nếu không bảng lọc ẩn hết kết quả mới và báo 0 nhóm.
+  useEffect(() => {
+    if (filterKeyword !== "all" && !keywordOptions.some((opt) => opt.value === filterKeyword)) {
+      setFilterKeyword("all");
+    }
+  }, [filterKeyword, keywordOptions]);
 
   const filteredResults = useMemo(() => {
     const q = resultQuery.trim().toLowerCase();
@@ -1037,6 +1084,18 @@ export default function GroupScanInfoPage() {
       `}</style>
       <div className="-m-6 min-h-full space-y-5 bg-[#F4F7FC] p-6">
         <ModulePageHeader navId="scan.info" />
+        <ResumeSessionBanner
+          scanType="GROUP_INFO"
+          hidden={running}
+          onResumed={(res) => {
+            if (!res?.job_id) return;
+            setResults([]);
+            setSelectedRows(new Set());
+            setCheckJobId(res.job_id);
+            setRunState("running");
+            pushLog(`Chạy tiếp phiên bị gián đoạn: quét nốt ${res.remaining} từ khóa / link còn thiếu…`, "info");
+          }}
+        />
         <div className="grid items-stretch gap-5 xl:grid-cols-2">
           {/* Card 1: Chọn tài khoản & Thiết lập phiên quét */}
           <AccountMethodCard
@@ -1117,8 +1176,14 @@ export default function GroupScanInfoPage() {
           <button
             type="button"
             onClick={handlePrimaryAction}
-            disabled={runState === "running" || pausing || aborting || resuming || checkingKeywords}
-            title={checkingKeywords ? "Đang kiểm tra từ khóa — chờ xong hoặc dừng kiểm tra trước" : undefined}
+            disabled={runState === "running" || pausing || aborting || resuming || checkingKeywords || needCheckFirst}
+            title={
+              checkingKeywords
+                ? "Đang kiểm tra từ khóa — chờ xong hoặc dừng kiểm tra trước"
+                : needCheckFirst
+                ? "Bấm Kiểm tra trước để biết mỗi từ khóa quét được bao nhiêu nhóm"
+                : undefined
+            }
             className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#2563EB] text-sm font-bold tracking-wide text-white hover:bg-blue-600 disabled:opacity-60"
           >
             {runState === "running" || resuming ? (
@@ -1134,6 +1199,13 @@ export default function GroupScanInfoPage() {
               ? "TIẾP TỤC QUÉT"
               : "BẮT ĐẦU THỰC THI"}
           </button>
+          {needCheckFirst && !checkingKeywords && (
+            <p className="text-center text-xs text-amber-700">
+              Bấm <b>Kiểm tra</b> trước để biết mỗi từ khóa quét được bao nhiêu nhóm — còn {uncheckedKeywords.length} từ khóa
+              chưa kiểm tra: {uncheckedKeywords.slice(0, 3).map((w) => `«${w}»`).join(", ")}
+              {uncheckedKeywords.length > 3 ? "…" : ""}.
+            </p>
+          )}
           {/* Tạm dừng / Dừng khẩn cấp chỉ hiện khi đã bấm Bắt đầu thực thi (đang chạy hoặc tạm dừng). */}
           {(running || pausing || aborting || resuming) && (
           <div className="grid gap-3 sm:grid-cols-2">

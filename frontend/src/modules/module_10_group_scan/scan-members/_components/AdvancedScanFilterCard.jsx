@@ -7,8 +7,6 @@ export default function AdvancedScanFilterCard({
   setMinDelay,
   maxDelay,
   setMaxDelay,
-  switchAccThreshold,
-  setSwitchAccThreshold,
   membersLimit,
   setMembersLimit,
   skipAdmin,
@@ -111,38 +109,6 @@ export default function AdvancedScanFilterCard({
             * {delayError}
           </p>
         )}
-      </div>
-
-      {/* Stepper 1: Switch Account Threshold */}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs font-medium text-[#334155]">
-          Đổi tài khoản mới khi quét được:
-        </span>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
-            <button
-              type="button"
-              onClick={() => setSwitchAccThreshold((v) => Math.max(1, v - 5))}
-              className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
-            >
-              -
-            </button>
-            <input
-              type="number"
-              value={switchAccThreshold}
-              onChange={(e) => setSwitchAccThreshold(Math.max(1, Number(e.target.value) || 1))}
-              className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-            />
-            <button
-              type="button"
-              onClick={() => setSwitchAccThreshold((v) => v + 5)}
-              className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
-            >
-              +
-            </button>
-          </div>
-          <span className="text-xs text-[#64748B]">nhóm / tài khoản</span>
-        </div>
       </div>
 
       {/* Stepper 2: Members Limit per Group */}

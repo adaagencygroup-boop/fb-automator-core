@@ -2,7 +2,7 @@
 
 import React, { useEffect } from "react";
 import { createPortal } from "react-dom";
-import { Layers, X, Copy, ExternalLink } from "lucide-react";
+import { Layers, X, Copy, ExternalLink, Play, Loader2 } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { renderTypeBadge, renderStatusBadge } from "./HistoryDataTable";
 
@@ -12,6 +12,8 @@ export default function SessionDetailModal({
   session,
   detailModalTab,
   onTabChange,
+  onResume,
+  resumingId = null,
   mounted = true,
 }) {
   // ESC key listener to close modal
@@ -63,14 +65,28 @@ export default function SessionDetailModal({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="size-8 rounded-lg border border-slate-200 flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
-            title="Đóng cửa sổ"
-          >
-            <X className="size-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            {session.resumable && onResume && (
+              <button
+                type="button"
+                onClick={() => onResume(session)}
+                disabled={Boolean(resumingId)}
+                title="Quét nốt phần còn thiếu của phiên này (cùng nick & cấu hình)"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+              >
+                {resumingId === session.id ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
+                Chạy tiếp ({session.remainingItems} còn thiếu)
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="size-8 rounded-lg border border-slate-200 flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+              title="Đóng cửa sổ"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
         </div>
 
         {/* Modal Nav Tabs */}

@@ -25,6 +25,15 @@ import LiveMemberResultSection from "./_components/LiveMemberResultSection";
 import LiveLogConsole from "./_components/LiveLogConsole";
 import { downloadTable, memberExportTable, safeFileName } from "../utils/exportTable";
 import ModulePageHeader from "../components/ModulePageHeader";
+import ResumeSessionBanner from "../components/ResumeSessionBanner";
+import { getSessionUserId } from "@/services/sessionIdentity.mjs";
+import { loadInputDraft, saveInputDraft } from "../scan-info/inputDraft.mjs";
+
+// Nháp riêng của trang Quét thành viên (cùng kho nháp với Quét thông tin nhóm, khác khóa).
+const draftKey = () => {
+  const uid = getSessionUserId();
+  return uid ? `${uid}:scan-members` : "";
+};
 
 function normalizeAccount(raw) {
   const status = String(raw.status || "").toLowerCase();
@@ -42,11 +51,14 @@ function normalizeAccount(raw) {
 }
 
 export default function GroupScanMembersPage() {
+  // Nháp cấu hình: chuyển màn khác rồi quay lại vẫn giữ nick, nhóm đã chọn và cấu hình quét.
+  const [draft] = useState(() => loadInputDraft(draftKey()) || {});
+
   // --- Account Selection State ---
   const [accountsModalOpen, setAccountsModalOpen] = useState(false);
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [moduleAccounts, setModuleAccounts] = useState([]);
-  const [selectedUids, setSelectedUids] = useState([]);
+  const [selectedUids, setSelectedUids] = useState(() => draft.selectedUids || []);
 
   // Load accounts from Module 2 API
   // fresh=true (nút Làm mới): bỏ cache để thấy ngay trạng thái Live / đăng nhập mới nhất.
@@ -92,12 +104,12 @@ export default function GroupScanMembersPage() {
   }, [moduleAccounts, selectedUids]);
 
   // --- Group Selection State ---
-  const [selectedGroups, setSelectedGroups] = useState([]);
+  const [selectedGroups, setSelectedGroups] = useState(() => draft.selectedGroups || []);
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
 
   // Load available groups & categories from Database
   const [categories, setCategories] = useState([]);
-  const [selectedCategory, setSelectedCategory] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState(draft.selectedCategory || "");
   const [members, setMembers] = useState([]);
 
   const loadCategoriesAndGroups = useCallback(async () => {
@@ -146,14 +158,20 @@ export default function GroupScanMembersPage() {
   }, [selectedCategory, loadDatabaseMembers]);
 
   // --- Section 2: Config Steppers & Checkboxes ---
-  const [minDelay, setMinDelay] = useState(5);
-  const [maxDelay, setMaxDelay] = useState(10);
-  const [switchAccThreshold, setSwitchAccThreshold] = useState(5);
-  const [membersLimit, setMembersLimit] = useState(50);
+  const [minDelay, setMinDelay] = useState(draft.minDelay ?? 5);
+  const [maxDelay, setMaxDelay] = useState(draft.maxDelay ?? 10);
+  const [membersLimit, setMembersLimit] = useState(draft.membersLimit ?? 50);
 
-  const [skipAdmin, setSkipAdmin] = useState(true);
-  const [autoDedupe, setAutoDedupe] = useState(true);
-  const [newMembersOnly, setNewMembersOnly] = useState(false);
+  const [skipAdmin, setSkipAdmin] = useState(draft.skipAdmin ?? true);
+  const [autoDedupe, setAutoDedupe] = useState(draft.autoDedupe ?? true);
+  const [newMembersOnly, setNewMembersOnly] = useState(draft.newMembersOnly ?? false);
+
+  useEffect(() => {
+    saveInputDraft(draftKey(), {
+      selectedUids, selectedGroups, selectedCategory, minDelay, maxDelay, membersLimit,
+      skipAdmin, autoDedupe, newMembersOnly,
+    });
+  }, [selectedUids, selectedGroups, selectedCategory, minDelay, maxDelay, membersLimit, skipAdmin, autoDedupe, newMembersOnly]);
 
   // --- Section 4: Master-Detail Category & Members ---
   const [categorySearch, setCategorySearch] = useState("");
@@ -224,7 +242,13 @@ export default function GroupScanMembersPage() {
             toast.success(`Đã hoàn thành phiên quét! Thu thập được ${job.total_members_scanned || 0} thành viên.`);
             if (selectedCategory) loadDatabaseMembers(selectedCategory);
           } else if (job.status === "aborted") {
-            toast.info("Phiên quét đã dừng lại.");
+            // Còn nhóm chưa quét xong → nút Chạy tiếp hiện ở đầu trang để quét nốt phần còn thiếu.
+            toast.warning(
+              job.error && /chưa quét xong/i.test(job.error)
+                ? `${job.error} — bấm Chạy tiếp ở đầu trang để quét nốt.`
+                : "Phiên quét đã dừng lại.",
+            );
+            if (selectedCategory) loadDatabaseMembers(selectedCategory);
           } else if (job.status === "error") {
             toast.error(job.error || "Phiên quét gặp sự cố!");
           }
@@ -323,7 +347,7 @@ export default function GroupScanMembersPage() {
             time: new Date().toLocaleTimeString("vi-VN", { hour12: false }),
             thread: "Thread-01",
             color: "text-slate-300",
-            message: `Cấu hình: Delay ${minDelay}-${maxDelay}s, Đổi nick sau ${switchAccThreshold} nhóm, Giới hạn ${membersLimit} TV/nhóm.`,
+            message: `Cấu hình: Delay ${minDelay}-${maxDelay}s, ${selectedUids.length} nick quét song song, Giới hạn ${membersLimit} TV/nhóm.`,
           },
         ]);
 
@@ -332,7 +356,6 @@ export default function GroupScanMembersPage() {
           groups: selectedGroups,
           delay_min: minDelay,
           delay_max: maxDelay,
-          switch_acc_threshold: switchAccThreshold,
           members_limit: membersLimit,
           skip_admin: skipAdmin,
           auto_dedupe: autoDedupe,
@@ -468,6 +491,15 @@ export default function GroupScanMembersPage() {
       `}</style>
       <div className="-m-6 min-h-full space-y-5 bg-[#F4F7FC] p-6">
         <ModulePageHeader navId="scan.members" />
+        <ResumeSessionBanner
+          scanType="GROUP_MEMBERS"
+          hidden={isExecuting}
+          onResumed={(res) => {
+            if (!res?.job_id) return;
+            setActiveJobId(res.job_id);
+            setIsExecuting(true);
+          }}
+        />
         {/* SECTION 1 & SECTION 2: 2 Column Configuration Grids */}
         <div className="grid items-stretch gap-5 xl:grid-cols-2">
           {/* Card 1: Chọn tài khoản & Nhóm quét */}
@@ -486,8 +518,6 @@ export default function GroupScanMembersPage() {
             setMinDelay={setMinDelay}
             maxDelay={maxDelay}
             setMaxDelay={setMaxDelay}
-            switchAccThreshold={switchAccThreshold}
-            setSwitchAccThreshold={setSwitchAccThreshold}
             membersLimit={membersLimit}
             setMembersLimit={setMembersLimit}
             skipAdmin={skipAdmin}

@@ -107,3 +107,13 @@ export function capacityCell(row) {
     cached: Boolean(row.cached),
   };
 }
+
+/**
+ * Từ khóa đã Kiểm tra xong (biết quét được tối đa bao nhiêu nhóm) — điều kiện để bấm Bắt đầu thực thi.
+ * Kiểm tra đang chạy / bị dừng giữa chừng / lỗi → chưa tính là xong.
+ * Sau khi đã quét, `checkStatus` giữ trạng thái Kiểm tra trước đó (status lúc này là của phiên quét).
+ */
+export function isKeywordChecked(cell) {
+  if (!cell || typeof cell.count !== "string" || !/nhóm$/.test(cell.count)) return false;
+  return (cell.checkStatus || cell.status) === "done";
+}

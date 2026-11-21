@@ -15,6 +15,7 @@ from modules.module_04_page_creator.routes import get_owner_username
 from modules.module_10_group_scan.keyword_check import (
     _is_direct_group_link,
     clear_pending_for_uid,
+    get_active_check_job,
     get_check_status,
     set_job_control,
     start_keyword_check,
@@ -32,6 +33,7 @@ from modules.module_10_group_scan.member_check import (
     start_member_scan,
 )
 from modules.module_10_group_scan.models import (
+    RESUMABLE_STATUSES,
     create_scan_category,
     delete_scan_category,
     delete_scan_session,
@@ -41,6 +43,8 @@ from modules.module_10_group_scan.models import (
     delete_scanned_group_member,
     delete_scanned_group_members_bulk,
     get_group_members_summary,
+    get_resume_info,
+    latest_resumable_session,
     list_all_scanned_groups,
     list_scan_categories,
     list_scan_sessions,
@@ -48,6 +52,7 @@ from modules.module_10_group_scan.models import (
     move_groups_to_category,
     save_groups_to_category,
     update_scan_category,
+    update_scan_session,
 )
 
 router = APIRouter(prefix="/api/group-scan", tags=["Module 10: Group scan"])
@@ -692,3 +697,73 @@ def delete_scanned_members_bulk_endpoint(body: BulkDeleteMembersRequest):
         raise HTTPException(401, "Chưa đăng nhập")
     deleted_count = delete_scanned_group_members_bulk(owner, body.ids)
     return {"ok": True, "deleted_count": deleted_count}
+
+
+# =========================================================================
+# CHẠY TIẾP PHIÊN BỊ GIÁN ĐOẠN (Engine tắt / Chrome bị đóng / Dừng khẩn cấp)
+# =========================================================================
+
+
+@router.get("/check-active", dependencies=[Depends(scoped_owner)])
+def check_active():
+    """Phiên Bắt đầu thực thi (Quét thông tin nhóm) đang chạy — trang Quét gắn lại khi mở lại."""
+    owner = owner_context.get() or get_owner_username()
+    return {"job_id": get_active_check_job(owner)}
+
+
+@router.get("/sessions/resumable", dependencies=[Depends(scoped_owner)])
+def get_resumable_session(scan_type: str = "GROUP_INFO"):
+    """Phiên gần nhất cùng loại còn phần chưa quét (hiện nút Chạy tiếp ở trang Quét)."""
+    owner = owner_context.get() or get_owner_username()
+    if not owner:
+        raise HTTPException(401, "Chưa đăng nhập")
+    return {"ok": True, "session": latest_resumable_session(owner, scan_type)}
+
+
+@router.post("/sessions/{session_id}/resume", dependencies=[Depends(scoped_owner)])
+def resume_session(session_id: str, db: Session = Depends(get_db)):
+    """Chạy tiếp phiên bị gián đoạn: chỉ quét phần còn thiếu, cùng cấu hình & danh sách nick của phiên cũ."""
+    owner = owner_context.get() or get_owner_username()
+    if not owner:
+        raise HTTPException(401, "Chưa đăng nhập")
+    info = get_resume_info(owner, session_id)
+    if not info:
+        raise HTTPException(404, "Không tìm thấy phiên quét")
+    if info["status"] not in RESUMABLE_STATUSES:
+        raise HTTPException(409, "Chỉ chạy tiếp được phiên bị gián đoạn hoặc đã dừng.")
+    if not info["state"]:
+        raise HTTPException(409, "Phiên này được tạo từ bản cũ, không lưu tiến độ nên không chạy tiếp được.")
+    remaining = info["remaining"]
+    if not remaining:
+        raise HTTPException(409, "Phiên này đã quét đủ — không còn gì để chạy tiếp.")
+    req = info["state"].get("request") or {}
+
+    if info["scan_type"] == "GROUP_MEMBERS":
+        result = post_start_member_scan(StartMemberScanRequest(
+            uids=req.get("uids") or [],
+            groups=remaining,
+            delay_min=float(req.get("delay_min") or 5),
+            delay_max=float(req.get("delay_max") or 10),
+            members_limit=int(req.get("members_limit") or 50),
+            skip_admin=bool(req.get("skip_admin", True)),
+            auto_dedupe=bool(req.get("auto_dedupe", True)),
+            new_members_only=bool(req.get("new_members_only", False)),
+        ))
+    else:
+        result = check_keyword(CheckKeywordRequest(
+            uids=req.get("uids") or [],
+            keywords=[KeywordQuota(keyword=it["keyword"], limit=min(200, int(it["limit"]))) for it in remaining],
+            delay_min=float(req.get("delay_min") or 0),
+            delay_max=float(req.get("delay_max") or 0),
+            min_members=req.get("min_members"),
+            force=True,
+        ), db)
+
+    update_scan_session(session_id, status="RESUMED")
+    return {
+        "ok": True,
+        "scan_type": info["scan_type"],
+        "resumed_from": session_id,
+        "job_id": result.get("job_id"),
+        "remaining": len(remaining),
+    }

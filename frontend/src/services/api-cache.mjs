@@ -85,6 +85,9 @@ const NEVER_CACHE = [
   /\/api\/group-scan\/check-status/,    // module 10
   /\/api\/group-scan\/members\/active/, // module 10 — phiên quét đang chạy
   /\/api\/group-scan\/keyword-capacity\//, // module 10 — Kiểm tra từ khóa (tiến độ trực tiếp)
+  /\/api\/group-scan\/check-active/,    // module 10 — phiên quét đang chạy
+  /\/api\/group-scan\/sessions\//,      // module 10 — Chạy tiếp phiên bị gián đoạn
+  /\/api\/group-scan\/history/,         // module 10 — lịch sử (trạng thái Chạy tiếp thay đổi liên tục)
   /\/seeding\/campaigns\/[^/?]+(\?|$)/, // getSeedingCampaignDetail (module 08)
   /\/scan\/sessions\/[^/?]+(\?|$)/,     // getScanSessionDetail (module 10)
   /\/api\/v1\/auth\//,                  // đăng nhập, refresh, /me — danh tính không được cache

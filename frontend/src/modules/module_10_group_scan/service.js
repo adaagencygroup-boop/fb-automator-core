@@ -246,3 +246,19 @@ export async function deleteScannedMembersBulk(ids = []) {
     return null;
   }
 }
+
+/** Phiên Bắt đầu thực thi (Quét thông tin nhóm) đang chạy — để trang Quét gắn lại khi mở lại. */
+export async function getActiveGroupScan() {
+  return api.get("/api/group-scan/check-active");
+}
+
+/** Phiên gần nhất cùng loại (GROUP_INFO | GROUP_MEMBERS) bị gián đoạn và còn phần chưa quét. */
+export async function getResumableSession(scanType) {
+  const res = await api.get("/api/group-scan/sessions/resumable", { params: { scan_type: scanType } });
+  return res?.session || null;
+}
+
+/** Chạy tiếp phiên bị gián đoạn: chỉ quét phần còn thiếu, cùng cấu hình & nick của phiên cũ. */
+export async function resumeScanSession(sessionId) {
+  return api.post(`/api/group-scan/sessions/${encodeURIComponent(sessionId)}/resume`, {});
+}

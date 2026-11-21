@@ -16,12 +16,15 @@ import uuid
 from typing import Any, Optional
 
 from modules.module_10_group_scan.scan_common import (
+    FairQueue,
+    ResumeTracker,
     NEW_MEMBER_DAYS,
     TERMINAL_STATUSES,
     close_account_session,
     fb_time_age_days,
     format_join_date,
     interruptible_sleep,
+    is_browser_dead_error,
     open_account_session,
     prune_jobs,
     resolve_group_identity,
@@ -32,6 +35,10 @@ logger = logging.getLogger(__name__)
 
 _member_jobs: dict[str, dict[str, Any]] = {}
 _member_jobs_lock = threading.Lock()
+# Nhãn luồng trên log ([Thread-01], [Thread-02]…) — mỗi Chrome quét song song là một luồng.
+_member_thread_label = threading.local()
+# Tiến độ từng phiên (để "Chạy tiếp" khi bị gián đoạn) — job_id → ResumeTracker
+_member_trackers: dict[str, ResumeTracker] = {}
 
 SCRAPE_MEMBERS_JS = """
 return (() => {
@@ -459,7 +466,8 @@ def _scrape_members_via_selenium(driver) -> list[dict[str, Any]]:
     return list(by_uid.values())
 
 
-def _append_member_log(job_id: str, message: str, level: str = "info", thread: str = "Thread-01") -> None:
+def _append_member_log(job_id: str, message: str, level: str = "info", thread: Optional[str] = None) -> None:
+    thread = thread or getattr(_member_thread_label, "name", "Thread-01")
     color_map = {
         "info": "text-slate-300",
         "success": "text-emerald-400",
@@ -567,7 +575,8 @@ def start_member_scan(
     auto_dedupe: bool = True,
     new_members_only: bool = False,
 ) -> dict[str, Any]:
-    """Khởi chạy phiên quét thành viên nhóm (xoay vòng pool tài khoản)."""
+    """Khởi chạy phiên quét thành viên nhóm: mỗi nick 1 Chrome song song, nhóm chia đều cho các nick.
+    `switch_acc_threshold` không còn dùng — giữ để client cũ gửi lên không lỗi."""
     uids = [str(u).strip() for u in (uids or []) if str(u).strip()]
     uids = list(dict.fromkeys(uids))
     if not uids:
@@ -622,7 +631,6 @@ def start_member_scan(
             "accounts_count": len(uids),
             "groups_count": len(groups),
             "delay": f"{dmin:.0f} - {dmax:.0f}s",
-            "switch_after_groups": switch_threshold,
             "members_limit": limit,
             "skip_admin": skip_admin,
             "auto_dedupe": auto_dedupe,
@@ -643,6 +651,20 @@ def start_member_scan(
         )
     except Exception as exc:
         logger.warning(f"Failed to record member scan session: {exc}")
+    try:
+        tracker = ResumeTracker(
+            job_id, "group_members",
+            {
+                "uids": list(uids), "groups": list(groups), "delay_min": dmin, "delay_max": dmax,
+                "members_limit": limit, "skip_admin": skip_admin, "auto_dedupe": auto_dedupe,
+                "new_members_only": new_members_only,
+            },
+            [str(i) for i in range(len(groups))],
+        )
+        _member_trackers[job_id] = tracker
+        tracker.flush()
+    except Exception as exc:
+        logger.debug(f"member resume tracker init error: {exc}")
 
     thread = threading.Thread(
         target=_run_member_scan_worker,
@@ -742,24 +764,20 @@ def _run_member_scan_worker(job_id: str) -> None:
 
 
 def _member_scan_body(job_id: str) -> None:
-    from modules.module_10_group_scan.models import (
-        list_known_member_uids,
-        update_scan_session,
-        upsert_scanned_group_member,
-    )
+    """Quét thành viên song song: mỗi nick 1 Chrome (tối đa MAX_PARALLEL_BROWSERS), nhóm chia đều cho
+    các nick, phần dư cho nick xong phần mình trước. Một nick không bao giờ mở 2 Chrome."""
+    from collections import deque
+
+    from modules.module_02_account_manager.context import owner_scope
+    from modules.module_10_group_scan.keyword_check import BROWSER_STAGGER_SEC, MAX_PARALLEL_BROWSERS
+    from modules.module_10_group_scan.models import list_known_member_uids, update_scan_session
 
     with _member_jobs_lock:
         job = _member_jobs[job_id]
         owner = job["owner"]
         uids = list(job["uids"])
         target_groups = list(job["target_groups"])
-        dmin = job["delay_min"]
-        dmax = job["delay_max"]
-        switch_acc_threshold = job["switch_acc_threshold"]
-        members_limit = job["members_limit"]
-        skip_admin = job["skip_admin"]
         auto_dedupe = job["auto_dedupe"]
-        new_members_only = job["new_members_only"]
 
     def log(message: str, level: str = "info") -> None:
         _append_member_log(job_id, message, level)
@@ -767,20 +785,22 @@ def _member_scan_body(job_id: str) -> None:
     def control() -> str:
         return _get_member_control(job_id)
 
-    def handle_pause() -> bool:
-        """True nếu phải dừng hẳn."""
-        if control() != "pause":
-            return control() == "abort"
-        log("⏸️ Đã tạm dừng. Bấm Tiếp tục để chạy tiếp.", "warn")
-        if wait_while_paused(control):
-            if control() == "pause":
-                log("⚠️ Tạm dừng quá 2 giờ — tự kết thúc phiên.", "warn")
-                _set_member_job(job_id, control="abort")
-            return True
-        log("▶️ Tiếp tục quét…", "info")
-        return False
+    def stop_requested() -> bool:
+        return control() == "abort"
 
-    log(f"Khởi động phiên quét thành viên cho {len(target_groups)} nhóm với {len(uids)} tài khoản.", "success")
+    workers = max(1, min(len(uids), len(target_groups), MAX_PARALLEL_BROWSERS))
+    if workers > 1:
+        mode = f"mở {workers} Chrome song song, mỗi Chrome quét 1 nhóm một lúc"
+    elif len(target_groups) > 1:
+        mode = "1 Chrome quét lần lượt (mỗi nick chỉ mở 1 Chrome)"
+    else:
+        mode = "mở 1 Chrome"
+    spare = len(uids) - workers
+    log(
+        f"🚀 {len(target_groups)} nhóm, {len(uids)} nick → {mode}"
+        + (f"; {spare} nick dự phòng" if spare > 0 else "") + ".",
+        "success",
+    )
 
     cross_seen: set[str] = set()
     if auto_dedupe:
@@ -790,240 +810,162 @@ def _member_scan_body(job_id: str) -> None:
         except Exception as exc:
             log(f"Lỗi khi đọc UID CSDL: {exc}", "warn")
 
-    all_scanned: list[dict[str, Any]] = []
-    session: Optional[dict[str, Any]] = None
-    account_index = 0
-    groups_with_acc = 0
-    final_status = "done"
-    error_text = ""
+    nick_queue = deque(uids)
+    group_queue = FairQueue(enumerate(target_groups), workers)
+    lock = threading.Lock()
+    state: dict[str, Any] = {"opened": 0, "members": [], "groups_done": 0, "fatal": ""}
 
-    def stop_requested() -> bool:
-        return control() == "abort"
+    def take_nick() -> Optional[str]:
+        with lock:
+            return nick_queue.popleft() if nick_queue else None
 
-    def rotate() -> bool:
-        """Mở nick kế tiếp (nick hiện tại vẫn giữ tới khi nick mới vào được). False nếu không còn nick nào."""
-        nonlocal session, account_index, groups_with_acc
-        if session is not None and len(uids) <= 1:
-            groups_with_acc = 0
-            return True
-        exclude = {session["uid"]} if session else set()
-        fresh = open_account_session(
-            uids, account_index, owner=owner, scope="group-members", log=log,
-            exclude=exclude, should_stop=stop_requested,
-        )
-        if fresh:
-            close_account_session(session)
-            session = fresh
-            account_index = fresh["next_index"]
-            groups_with_acc = 0
-            _set_member_job(job_id, current_account=fresh["uid"])
-            return True
-        if session is not None:
-            log("⚠️ Không đổi được sang nick khác — tiếp tục dùng nick hiện tại.", "warn")
-            groups_with_acc = 0
-            return True
-        return False
+    def add_members(items: list[dict[str, Any]]) -> None:
+        with lock:
+            state["members"].extend(items)
+            snapshot = list(state["members"])
+        _set_member_job(job_id, members=snapshot)
 
-    try:
-        for grp_idx, grp in enumerate(target_groups):
-            if handle_pause():
-                break
-
-            group_id, group_name, group_url = resolve_group_identity(grp, owner)
-            if not group_id:
-                log(f"⚠️ Bỏ qua nhóm «{group_name}»: không tìm thấy đường dẫn Facebook hợp lệ. Hãy quét lại thông tin nhóm.", "warn")
-                continue
-            _set_member_job(job_id, current_group=group_name)
-
-            if session is None or groups_with_acc >= switch_acc_threshold:
-                if session is not None:
-                    log(f"🔄 Nick {session['uid']} đã quét {groups_with_acc} nhóm — đổi nick…", "info")
-                if not rotate():
-                    if stop_requested():
-                        break
-                    error_text = "Không có tài khoản nào trong pool mở được Chrome và đăng nhập Facebook."
-                    log(f"❌ {error_text}", "error")
-                    final_status = "error"
-                    break
-
-            driver = session["driver"]
-            groups_with_acc += 1
-            log(f"[{grp_idx + 1}/{len(target_groups)}] Vào nhóm «{group_name}» (ID: {group_id}) bằng nick {session['uid']}…", "info")
-
-            target_url = f"{group_url}/members"
-            try:
-                driver.get(target_url)
-            except Exception as exc:
-                log(f"Lỗi truy cập {target_url}: {exc}", "warn")
-                continue
-            if interruptible_sleep(random.uniform(3.5, 5.0), control):
-                break
-
-            try:
-                sample = driver.execute_script(
-                    "return (document.body ? document.body.innerText : '').slice(0, 500).toLowerCase();"
-                ) or ""
-                if "this page isn't available" in sample or "trang này hiện không khả dụng" in sample:
-                    log(f"⚠️ Facebook báo nhóm «{group_name}» không khả dụng với nick này ({target_url}).", "error")
-                    continue
-            except Exception:
-                pass
-
-            try:
-                clicked_tabs = driver.execute_script(PREPARE_MEMBERS_PAGE_JS) or []
-                if clicked_tabs:
-                    log(f"Đã chuyển tab danh sách thành viên: {', '.join(str(x) for x in clicked_tabs)}", "info")
-                    interruptible_sleep(random.uniform(2.0, 3.0), control)
-            except Exception:
-                pass
-
-            try:
-                diag = _diag_members_page(driver)
-                if diag.get("needJoin"):
-                    log(f"⚠️ Nick có thể chưa là thành viên nhóm «{group_name}» nên Facebook ẩn danh sách thành viên.", "warn")
-                if not diag.get("groupsUser") and not diag.get("user"):
-                    alt_url = f"{group_url}/people"
-                    log(f"Không thấy link thành viên trên /members, thử {alt_url} …", "warn")
-                    driver.get(alt_url)
-                    interruptible_sleep(random.uniform(3.0, 4.5), control)
-                    try:
-                        driver.execute_script(PREPARE_MEMBERS_PAGE_JS)
-                    except Exception:
-                        pass
-            except Exception as exc:
-                log(f"Lỗi chẩn đoán DOM: {exc}", "warn")
-
-            group_members: list[dict[str, Any]] = []
-            group_seen: set[str] = set()
-            stats: dict[str, int] = {}
-            buffer: list[dict[str, Any]] = []
-            stuck_rounds = 0
-            stopped = False
-
-            def flush() -> None:
-                if not buffer:
+    def run_worker(n: int) -> None:
+        _member_thread_label.name = f"Thread-{n:02d}"
+        session = None
+        taken = 0
+        try:
+            if n > 1 and interruptible_sleep((n - 1) * BROWSER_STAGGER_SEC, control):
+                return
+            while session is None:
+                if stop_requested():
                     return
-                saved = 0
-                for rec in buffer:
-                    if upsert_scanned_group_member(
-                        owner=owner, group_id=group_id, member=rec,
-                        group_name=group_name, group_url=group_url, session_id=job_id,
-                    ):
-                        saved += 1
-                log(f"💾 [CSDL] Lưu {saved}/{len(buffer)} thành viên mới của «{group_name}».", "success")
-                buffer.clear()
-
-            for _round in range(40):
-                if handle_pause():
-                    stopped = True
-                    break
-                if len(group_members) >= members_limit:
-                    log(f"Đã đạt hạn mức {members_limit} thành viên cho nhóm «{group_name}».", "success")
-                    break
-
-                seen_before = len(group_seen)
-                kept = filter_member_rows(
-                    _scrape_member_rows(driver),
-                    group_seen=group_seen,
-                    cross_seen=cross_seen,
-                    skip_admin=skip_admin,
-                    auto_dedupe=auto_dedupe,
-                    new_members_only=new_members_only,
-                    remaining=members_limit - len(group_members),
-                    stats=stats,
+                if not group_queue.has_work(taken):
+                    return
+                nick = take_nick()
+                if nick is None:
+                    log("⚠️ Không còn nick nào mở được Chrome cho luồng này.", "warn")
+                    return
+                session = open_account_session(
+                    [nick], 0, owner=owner, scope="group-members", log=log, should_stop=stop_requested, window_slot=n - 1,
                 )
-                for item in kept:
-                    rec = {
-                        "group_id": group_id,
-                        "group_name": group_name,
-                        "group_url": group_url,
-                        "uid": item["uid"],
-                        "name": item["name"],
-                        "profile_url": item.get("href") or f"https://www.facebook.com/{item['uid']}",
-                        "avatar_url": item.get("avatarUrl") or "",
-                        "role": item.get("role") or "member",
-                        # "Joined on Monday" → "16/11/2026" (không đọc được thì giữ chữ gốc).
-                        "joined_date": format_join_date(item.get("joinedText")),
-                        "session_id": job_id,
-                    }
-                    group_members.append(rec)
-                    buffer.append(rec)
-
+            with lock:
+                state["opened"] += 1
+            _set_member_job(job_id, current_account=session["uid"])
+            nick = session["uid"]
+            resumes_at_open = _member_pause_resumes(job_id)
+            first = True
+            while True:
+                if _member_handle_pause(job_id):
+                    return
+                nxt = group_queue.take(taken, should_stop=stop_requested)
+                if nxt is None:
+                    return
+                taken += 1
+                grp_idx, grp = nxt
+                if not first:
+                    with _member_jobs_lock:
+                        dmin, dmax = _member_jobs[job_id]["delay_min"], _member_jobs[job_id]["delay_max"]
+                    group_delay = random.uniform(dmin, dmax)
+                    log(f"Nghỉ {group_delay:.1f}s trước khi chuyển nhóm kế tiếp…", "info")
+                    if interruptible_sleep(group_delay, control):
+                        group_queue.put_back(nxt)
+                        return
+                first = False
                 with _member_jobs_lock:
-                    if job_id in _member_jobs:
-                        _member_jobs[job_id]["members"] = all_scanned + group_members
-                if len(buffer) >= 5:
-                    flush()
-
-                if kept:
-                    last = group_members[-1]
-                    log(f"Quét được: {last['name']} (UID: {last['uid']}) | Nhóm: {len(group_members)}/{members_limit}.", "success")
-                if len(group_seen) > seen_before:
-                    stuck_rounds = 0
-                else:
-                    stuck_rounds += 1
-                    if stuck_rounds >= 5:
-                        log(f"Đã cuộn hết danh sách nhóm «{group_name}» (không còn thành viên mới).", "info")
-                        break
-
-                try:
-                    driver.execute_script(SCROLL_MEMBERS_JS)
-                except Exception:
+                    base_limit = int(grp.get("limit") or _member_jobs[job_id]["members_limit"])
+                members: list[dict[str, Any]] = []
+                run_grp, reopened = grp, 0
+                while True:
                     try:
-                        driver.execute_script("window.scrollBy(0, 1100);")
-                    except Exception:
-                        pass
-                if interruptible_sleep(random.uniform(dmin, dmax) * random.uniform(0.4, 0.6), control):
-                    stopped = True
-                    break
+                        _scan_group_members(job_id, session, grp_idx, run_grp, len(target_groups), cross_seen, lock,
+                                            sink=members, count_offset=len(members))
+                        break
+                    except Exception as exc:
+                        if not (is_browser_dead_error(exc) and not stop_requested()
+                                and _member_pause_resumes(job_id) > resumes_at_open and reopened < 2):
+                            add_members(members)  # thành viên đã quét được trước khi Chrome tắt vẫn giữ
+                            raise
+                        # Chrome bị tắt LÚC ĐANG TẠM DỪNG rồi bấm Tiếp tục → mở lại Chrome của nick này và quét
+                        # tiếp đúng nhóm dở (tắt Chrome lúc đang chạy thì vẫn dừng luồng như cũ).
+                        reopened += 1
+                        log(f"🔄 Chrome của nick {nick} bị tắt trong lúc tạm dừng — mở lại để quét tiếp nhóm dở "
+                            f"({len(members)}/{base_limit} thành viên)…", "info")
+                        close_account_session(session)
+                        session = open_account_session(
+                            [nick], 0, owner=owner, scope="group-members", log=log, should_stop=stop_requested, window_slot=n - 1,
+                        )
+                        if not session:
+                            add_members(members)
+                            log(f"⚠️ Không mở lại được Chrome của nick {nick}.", "warn")
+                            return
+                        resumes_at_open = _member_pause_resumes(job_id)
+                        run_grp = {**grp, "limit": max(1, base_limit - len(members))}
+                add_members(members)
+                tracker = _member_trackers.get(job_id)
+                if tracker is not None:
+                    try:  # nhóm bị Dừng khẩn cấp giữa chừng chưa tính là xong → Chạy tiếp sẽ quét nốt
+                        tracker.update(str(grp_idx), count=len(members), done=not stop_requested())
+                    except Exception as exc:
+                        logger.debug("member resume tracker update failed: %s", exc)
+                with lock:
+                    state["groups_done"] += 1
+                    done = state["groups_done"]
+                _set_member_job(job_id, groups_done=done)
+                if stop_requested():
+                    return
+        except Exception as exc:
+            if is_browser_dead_error(exc):
+                log(f"🛑 Chrome của nick {session.get('uid') if session else '?'} đã bị đóng — luồng này dừng.", "warn")
+            else:
+                logger.exception("member scan worker %s crashed", job_id)
+                log(f"❌ Luồng quét lỗi: {exc}", "error")
+        finally:
+            group_queue.leave(taken)
+            close_account_session(session)
 
-            flush()
-            all_scanned.extend(group_members)
-            _set_member_job(job_id, groups_done=grp_idx + 1, members=list(all_scanned))
-            skipped = []
-            if stats.get("admin"):
-                skipped.append(f"{stats['admin']} admin/mod")
-            if stats.get("dup"):
-                skipped.append(f"{stats['dup']} trùng")
-            if stats.get("old"):
-                skipped.append(f"{stats['old']} tham gia quá {NEW_MEMBER_DAYS} ngày")
-            if stats.get("unknown_join"):
-                skipped.append(f"{stats['unknown_join']} không rõ ngày tham gia")
-            log(
-                f"Hoàn thành nhóm «{group_name}»: {len(group_members)} thành viên"
-                + (f" (bỏ {', '.join(skipped)})" if skipped else "") + ".",
-                "success",
-            )
-            if new_members_only and stats.get("unknown_join") and not group_members:
-                log(
-                    "⚠️ Facebook không hiển thị ngày tham gia ở nhóm này nên bộ lọc «chỉ thành viên mới» bỏ hết. "
-                    "Tắt bộ lọc này nếu muốn lấy toàn bộ thành viên.",
-                    "warn",
-                )
-            if stopped or stop_requested():
-                break
+    def run_worker_scoped(n: int) -> None:
+        with owner_scope(owner):
+            run_worker(n)
 
-            if grp_idx < len(target_groups) - 1:
-                group_delay = random.uniform(dmin, dmax)
-                log(f"Nghỉ {group_delay:.1f}s trước khi chuyển nhóm kế tiếp…", "info")
-                if interruptible_sleep(group_delay, control):
-                    break
-
-        if final_status != "error" and stop_requested():
+    final_status, error_text = "done", ""
+    try:
+        threads = [
+            threading.Thread(target=run_worker_scoped, args=(n,), daemon=True, name=f"member-scan-{job_id}-{n}")
+            for n in range(1, workers + 1)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            if hasattr(t, "join"):
+                t.join()
+        leftover = group_queue.remaining()
+        if stop_requested():
             final_status = "aborted"
+        elif state["opened"] == 0:
+            final_status = "error"
+            error_text = "Không có tài khoản nào trong pool mở được Chrome và đăng nhập Facebook."
+            log(f"❌ {error_text}", "error")
+        elif leftover or state["groups_done"] < len(target_groups):
+            # Nhóm đang quét dở lúc Chrome bị đóng cũng là chưa xong (không chỉ nhóm còn trong hàng đợi).
+            n_left = len(target_groups) - state["groups_done"]
+            final_status = "aborted"
+            error_text = f"Còn {n_left} nhóm chưa quét xong"
+            log(f"⚠️ Còn {n_left} nhóm chưa quét xong (Chrome bị đóng) — bấm Chạy tiếp để quét nốt.", "warn")
     except Exception as exc:
         logger.exception("Member scan worker uncaught exception: %s", exc)
         final_status = "error"
         error_text = str(exc)
         log(f"Lỗi nghiêm trọng trong phiên quét: {exc}", "error")
     finally:
-        close_account_session(session)
+        with lock:
+            all_scanned = list(state["members"])
         log(
             f"Phiên quét thành viên kết thúc ({final_status}). Tổng thu thập: {len(all_scanned)} thành viên.",
             "success" if final_status == "done" else "warn",
         )
-        _set_member_job(job_id, status=final_status, error=error_text, finished_at=time.time(),
-                        members=list(all_scanned))
+        _set_member_job(job_id, status=final_status, error=error_text, finished_at=time.time(), members=all_scanned)
+        tracker = _member_trackers.pop(job_id, None)
+        if tracker is not None:
+            try:
+                tracker.flush()
+            except Exception as exc:
+                logger.debug("member resume tracker flush failed: %s", exc)
         with _member_jobs_lock:
             logs_snapshot = list((_member_jobs.get(job_id) or {}).get("logs") or [])
         try:
@@ -1036,3 +978,237 @@ def _member_scan_body(job_id: str) -> None:
             )
         except Exception as exc:
             logger.debug(f"Update member scan session error: {exc}")
+
+
+def _member_handle_pause(job_id: str) -> bool:
+    """Tạm dừng tại chỗ tới khi Tiếp tục. True nếu phải dừng hẳn (Dừng khẩn cấp / tạm dừng quá 2 giờ)."""
+    control = lambda: _get_member_control(job_id)  # noqa: E731
+    if control() != "pause":
+        return control() == "abort"
+    _append_member_log(job_id, "⏸️ Đã tạm dừng. Bấm Tiếp tục để chạy tiếp.", "warn")
+    if wait_while_paused(control):
+        if control() == "pause":
+            _append_member_log(job_id, "⚠️ Tạm dừng quá 2 giờ — tự kết thúc phiên.", "warn")
+            _set_member_job(job_id, control="abort")
+        return True
+    with _member_jobs_lock:
+        job = _member_jobs.get(job_id)
+        if job is not None:
+            job["pause_resumes"] = int(job.get("pause_resumes") or 0) + 1
+    _append_member_log(job_id, "▶️ Tiếp tục quét…", "info")
+    return False
+
+
+def _member_pause_resumes(job_id: str) -> int:
+    with _member_jobs_lock:
+        return int((_member_jobs.get(job_id) or {}).get("pause_resumes") or 0)
+
+
+def _scan_group_members(
+    job_id: str,
+    session: dict[str, Any],
+    grp_idx: int,
+    grp: dict[str, Any],
+    total_groups: int,
+    cross_seen: set[str],
+    cross_lock: threading.Lock,
+    *,
+    sink: Optional[list[dict[str, Any]]] = None,
+    count_offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Quét thành viên của 1 nhóm bằng Chrome của `session`. Lỗi Chrome chết được ném ra ngoài.
+
+    sink: danh sách nhận thành viên ngay khi quét được — Chrome chết giữa chừng vẫn giữ phần đã có.
+    count_offset: số thành viên nhóm này đã quét trước đó (quét tiếp sau khi mở lại Chrome) — để lưu tiến độ đúng.
+    """
+    from modules.module_10_group_scan.models import upsert_scanned_group_member
+
+    with _member_jobs_lock:
+        job = _member_jobs[job_id]
+        owner = job["owner"]
+        dmin = job["delay_min"]
+        dmax = job["delay_max"]
+        members_limit = int(grp.get("limit") or job["members_limit"])
+        skip_admin = job["skip_admin"]
+        auto_dedupe = job["auto_dedupe"]
+        new_members_only = job["new_members_only"]
+
+    def log(message: str, level: str = "info") -> None:
+        _append_member_log(job_id, message, level)
+
+    def control() -> str:
+        return _get_member_control(job_id)
+
+    group_id, group_name, group_url = resolve_group_identity(grp, owner)
+    if not group_id:
+        log(f"⚠️ Bỏ qua nhóm «{group_name}»: không tìm thấy đường dẫn Facebook hợp lệ. Hãy quét lại thông tin nhóm.", "warn")
+        return []
+    _set_member_job(job_id, current_group=group_name)
+    driver = session["driver"]
+    log(f"[{grp_idx + 1}/{total_groups}] Vào nhóm «{group_name}» (ID: {group_id}) bằng nick {session['uid']}…", "info")
+
+    target_url = f"{group_url}/members"
+    try:
+        driver.get(target_url)
+    except Exception as exc:
+        if is_browser_dead_error(exc):
+            raise
+        log(f"Lỗi truy cập {target_url}: {exc}", "warn")
+        return []
+    if interruptible_sleep(random.uniform(3.5, 5.0), control):
+        return []
+
+    try:
+        sample = driver.execute_script(
+            "return (document.body ? document.body.innerText : '').slice(0, 500).toLowerCase();"
+        ) or ""
+        if "this page isn't available" in sample or "trang này hiện không khả dụng" in sample:
+            log(f"⚠️ Facebook báo nhóm «{group_name}» không khả dụng với nick này ({target_url}).", "error")
+            return []
+    except Exception as exc:
+        if is_browser_dead_error(exc):
+            raise
+
+    try:
+        clicked_tabs = driver.execute_script(PREPARE_MEMBERS_PAGE_JS) or []
+        if clicked_tabs:
+            log(f"Đã chuyển tab danh sách thành viên: {', '.join(str(x) for x in clicked_tabs)}", "info")
+            interruptible_sleep(random.uniform(2.0, 3.0), control)
+    except Exception as exc:
+        if is_browser_dead_error(exc):
+            raise
+
+    try:
+        diag = _diag_members_page(driver)
+        if diag.get("needJoin"):
+            log(f"⚠️ Nick có thể chưa là thành viên nhóm «{group_name}» nên Facebook ẩn danh sách thành viên.", "warn")
+        if not diag.get("groupsUser") and not diag.get("user"):
+            alt_url = f"{group_url}/people"
+            log(f"Không thấy link thành viên trên /members, thử {alt_url} …", "warn")
+            driver.get(alt_url)
+            interruptible_sleep(random.uniform(3.0, 4.5), control)
+            try:
+                driver.execute_script(PREPARE_MEMBERS_PAGE_JS)
+            except Exception:
+                pass
+    except Exception as exc:
+        if is_browser_dead_error(exc):
+            raise
+        log(f"Lỗi chẩn đoán DOM: {exc}", "warn")
+
+    group_members: list[dict[str, Any]] = []  # của lần quét này (đếm theo hạn mức còn thiếu)
+    group_seen: set[str] = set()
+    stats: dict[str, int] = {}
+    buffer: list[dict[str, Any]] = []
+    stuck_rounds = 0
+
+    def flush() -> None:
+        if not buffer:
+            return
+        saved = 0
+        for rec in buffer:
+            if upsert_scanned_group_member(
+                owner=owner, group_id=group_id, member=rec,
+                group_name=group_name, group_url=group_url, session_id=job_id,
+            ):
+                saved += 1
+        log(f"💾 [CSDL] Lưu {saved}/{len(buffer)} thành viên mới của «{group_name}».", "success")
+        buffer.clear()
+        tracker = _member_trackers.get(job_id)
+        if tracker is not None:  # tiến độ dở của nhóm — Chạy tiếp chỉ quét số còn thiếu
+            try:
+                tracker.update(str(grp_idx), count=count_offset + len(group_members))
+            except Exception as exc:
+                logger.debug("member resume tracker update failed: %s", exc)
+
+    try:
+        for _round in range(40):
+            if _member_handle_pause(job_id):
+                break
+            if len(group_members) >= members_limit:
+                log(f"Đã đạt hạn mức {members_limit} thành viên cho nhóm «{group_name}».", "success")
+                break
+
+            seen_before = len(group_seen)
+            with cross_lock:  # nhiều Chrome cùng lọc trùng chéo trên 1 tập UID
+                kept = filter_member_rows(
+                    _scrape_member_rows(driver),
+                    group_seen=group_seen,
+                    cross_seen=cross_seen,
+                    skip_admin=skip_admin,
+                    auto_dedupe=auto_dedupe,
+                    new_members_only=new_members_only,
+                    remaining=members_limit - len(group_members),
+                    stats=stats,
+                )
+            for item in kept:
+                rec = {
+                    "group_id": group_id,
+                    "group_name": group_name,
+                    "group_url": group_url,
+                    "uid": item["uid"],
+                    "name": item["name"],
+                    "profile_url": item.get("href") or f"https://www.facebook.com/{item['uid']}",
+                    "avatar_url": item.get("avatarUrl") or "",
+                    "role": item.get("role") or "member",
+                    # "Joined on Monday" → "16/11/2026" (không đọc được thì giữ chữ gốc).
+                    "joined_date": format_join_date(item.get("joinedText")),
+                    "session_id": job_id,
+                }
+                group_members.append(rec)
+                buffer.append(rec)
+                if sink is not None:
+                    sink.append(rec)
+
+            if len(buffer) >= 5:
+                flush()
+            if kept:
+                last = group_members[-1]
+                log(f"Quét được: {last['name']} (UID: {last['uid']}) | Nhóm: {len(group_members)}/{members_limit}.", "success")
+            if len(group_seen) > seen_before:
+                stuck_rounds = 0
+            else:
+                stuck_rounds += 1
+                if stuck_rounds >= 5:
+                    log(f"Đã cuộn hết danh sách nhóm «{group_name}» (không còn thành viên mới).", "info")
+                    break
+
+            try:
+                driver.execute_script(SCROLL_MEMBERS_JS)
+            except Exception as exc:
+                if is_browser_dead_error(exc):
+                    flush()
+                    raise
+                try:
+                    driver.execute_script("window.scrollBy(0, 1100);")
+                except Exception:
+                    pass
+            if interruptible_sleep(random.uniform(dmin, dmax) * random.uniform(0.4, 0.6), control):
+                break
+
+    except Exception as exc:
+        if is_browser_dead_error(exc):
+            flush()  # thành viên đã đọc được vẫn vào CSDL trước khi báo Chrome chết
+        raise
+    flush()
+    skipped = []
+    if stats.get("admin"):
+        skipped.append(f"{stats['admin']} admin/mod")
+    if stats.get("dup"):
+        skipped.append(f"{stats['dup']} trùng")
+    if stats.get("old"):
+        skipped.append(f"{stats['old']} tham gia quá {NEW_MEMBER_DAYS} ngày")
+    if stats.get("unknown_join"):
+        skipped.append(f"{stats['unknown_join']} không rõ ngày tham gia")
+    log(
+        f"Hoàn thành nhóm «{group_name}»: {len(group_members)} thành viên"
+        + (f" (bỏ {', '.join(skipped)})" if skipped else "") + ".",
+        "success",
+    )
+    if new_members_only and stats.get("unknown_join") and not group_members:
+        log(
+            "⚠️ Facebook không hiển thị ngày tham gia ở nhóm này nên bộ lọc «chỉ thành viên mới» bỏ hết. "
+            "Tắt bộ lọc này nếu muốn lấy toàn bộ thành viên.",
+            "warn",
+        )
+    return group_members
