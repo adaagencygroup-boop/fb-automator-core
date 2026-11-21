@@ -41,6 +41,12 @@ from modules.module_08_interaction_seeding.models.seeding_models import vn_now
 from modules.module_02_account_manager.services import events as m2_events
 from modules.module_02_account_manager.services.browser_service import HWID
 from modules.module_08_interaction_seeding.automation import FacebookSeedingBot
+from modules.module_08_interaction_seeding.automation.post_fetcher import running_job_id as running_post_fetch_job
+from modules.module_08_interaction_seeding.seeding_plan import (
+    pick_action_uids,
+    spin,
+    unique_comment_texts,
+)
 from modules.module_08_interaction_seeding.models import (
     SeedingCampaign,
     SeedingCampaignTarget,
@@ -61,6 +67,44 @@ _batch_campaign_chains: dict[
 # Lô đang được bộ chạy lô (_execute_campaign_runner) chạy thật: campaign đầu lô -> chuỗi chiến dịch.
 # Mỗi lúc mỗi user chỉ được chạy 1 lô seeding (mọi loại trang) vì các lô dùng chung nick / Chrome profile.
 _running_batches: dict[int, list[int]] = {}
+# Lô đang tạm dừng (theo id chiến dịch đầu lô): worker chờ trước tác vụ kế tiếp / trong lúc nghỉ
+_paused_batches: set[int] = set()
+# Số luồng Chrome chạy song song của từng chiến dịch (không có = 2 như trước)
+_campaign_threads: dict[int, int] = {}
+# Lô hẹn giờ: id chiến dịch đầu lô -> thời điểm bắt đầu (giờ VN)
+_batch_start_at: dict[int, datetime] = {}
+DEFAULT_CHROME_THREADS = 2
+MAX_CHROME_THREADS = 5
+
+
+def _batch_id(campaign_id: int) -> int:
+    chain = _batch_campaign_chains.get(campaign_id)
+    return chain[0] if chain else campaign_id
+
+
+def _is_paused(campaign_id: int) -> bool:
+    return _batch_id(campaign_id) in _paused_batches
+
+
+def _stop_requested(campaign_id: int) -> bool:
+    return bool(_active_seeding_campaigns.get(campaign_id, {}).get("stop_requested"))
+
+
+def _wait_if_paused(campaign_id: int) -> None:
+    """Đang tạm dừng thì chờ (tối đa tới khi Tiếp tục hoặc Dừng)."""
+    while _is_paused(campaign_id) and not _stop_requested(campaign_id):
+        time.sleep(1)
+
+
+def _sleep_interruptible(campaign_id: int, seconds: int) -> None:
+    """Nghỉ `seconds` giây; dừng sớm khi có yêu cầu Dừng, không đếm thời gian lúc đang tạm dừng."""
+    remaining = max(0, int(seconds))
+    while remaining > 0 and not _stop_requested(campaign_id):
+        if _is_paused(campaign_id):
+            _wait_if_paused(campaign_id)
+            continue
+        time.sleep(1)
+        remaining -= 1
 
 
 @contextmanager
@@ -462,6 +506,59 @@ def _split_share_accounts(uids: list[str], post_count: int) -> list[list[str]]:
     return groups
 
 
+def _post_assignment(
+    *,
+    idx: int,
+    used_uids: list[str],
+    post_actions: set[str],
+    target_active: set[tuple[str, str]],
+    comment_quota: int,
+    share_groups: list[list[str]],
+    share_load: dict[str, int],
+    reactions_pool: list[str],
+    comment_texts: list[str],
+) -> dict[str, Any]:
+    """Nick làm từng loại tương tác trên bài thứ `idx` + cảm xúc / câu bình luận của từng nick.
+    Dùng chung cho tạo chiến dịch và Xem trước kế hoạch. target_active: {(uid, action)} đã có trên bài.
+    - Cảm xúc: mọi nick (cảm xúc random trong các cảm xúc đã chọn).
+    - Bình luận: comment_quota nick (1 nửa số nick), ưu tiên nick chưa bình luận bài này.
+    - Chia sẻ: theo share_groups (tổng = số nick, chia cho các bài)."""
+    react_uids = set(used_uids) if "REACT" in post_actions else set()
+    comment_uids = (
+        pick_action_uids(used_uids, target_active, "COMMENT", comment_quota) if "COMMENT" in post_actions else set()
+    )
+    share_uids = set(share_groups[idx]) if share_groups else set()
+    if "SHARE" in post_actions and not share_uids and used_uids:
+        # Ít nick hơn số bài: bài không được chia lượt nào vẫn có đúng 1 nick share (nick đang share ít nhất),
+        # không để cả loạt nick cùng share 1 bài.
+        least = min(share_load.values())
+        pick = random.choice([u for u, n in share_load.items() if n == least])
+        share_load[pick] += 1
+        share_uids = {pick}
+    pending_react = [u for u in used_uids if u in react_uids and (u, "REACT") not in target_active]
+    pending_comment = [u for u in used_uids if u in comment_uids and (u, "COMMENT") not in target_active]
+    pool = [r for r in reactions_pool if r] or ["LIKE"]
+    return {
+        "react": react_uids,
+        "comment": comment_uids,
+        "share": share_uids,
+        "reaction_by_uid": {u: random.choice(pool) for u in pending_react},
+        # Bình luận không lặp câu trên cùng 1 bài (nếu đủ biến thể spintax)
+        "comment_by_uid": (
+            dict(zip(pending_comment, unique_comment_texts(comment_texts, len(pending_comment)))) if comment_texts else {}
+        ),
+    }
+
+
+def _spread_delays(spread_hours: float, pending_tasks: int, post_count: int, threads: int) -> tuple[int, int]:
+    """Thời gian nghỉ (min, max) để cả lô rải đều trong `spread_hours` giờ:
+    tổng thời gian ≈ (số lần nghỉ × nghỉ trung bình) / số luồng Chrome song song."""
+    points = max(1, pending_tasks + max(0, post_count - 1))
+    avg = spread_hours * 3600 * max(1, threads) / points
+    avg = max(5.0, min(3600.0, avg))
+    return max(1, int(avg * 0.75)), max(2, min(3600, round(avg * 1.25)))
+
+
 def get_user_draft_comments(db: Session, user_id: int | None = None) -> list[str]:
     """Lấy danh sách các câu bình luận mẫu (campaign_id IS NULL) từ bảng seeding_comments theo user sở hữu."""
     try:
@@ -502,7 +599,13 @@ class CreateCampaignRequest(BaseModel):
         None  # ['LIKE', 'LOVE', 'CARE', 'HAHA', 'WOW', 'SAD', 'ANGRY']
     )
     comments: list[str] | None = None
-    targets: list[TargetInputItem]
+    targets: list[TargetInputItem] = []
+    # True: backend tự lấy các mục tiêu đang chờ của user (giống GET /targets) — không cần gửi cả danh sách (có thể rất dài)
+    use_saved_targets: bool = False
+    # Rải đều cả lô trong N giờ: tự tính lại thời gian nghỉ (ghi đè delay_seconds_min/max)
+    spread_hours: float | None = None
+    # Số luồng Chrome chạy song song (bỏ trống = 2 như trước)
+    chrome_threads: int | None = None
     account_count: int = 50
     threads: int = 1
     uids: list[str] | None = None
@@ -519,18 +622,14 @@ class AddCommentsRequest(BaseModel):
 # ─────────────────────────────────────────────────────────────
 # 1. QUẢN LÝ MỤC TIÊU SEEDING (LƯU TRỰC TIẾP VÀO DATABASE PHÂN THEO NGƯỜI DÙNG)
 # ─────────────────────────────────────────────────────────────
-@router.get("/targets")
-def list_seeding_targets(
-    target_type: str | None = None,
-    include_completed: bool = Query(False),
-    request: Request = None,
-    authorization: str | None = Header(None),
-    db: Session = Depends(get_db),
+def _visible_targets_query(
+    db: Session,
+    target_type: str | None,
+    current_user: dict | None,
+    include_completed: bool = False,
 ):
-    """Lấy danh sách các mục tiêu seeding đã lưu trong bảng seeding_targets lọc theo người dùng sở hữu.
-    Mặc định loại trừ các mục tiêu đã chạy thành công trong lịch sử hoặc đang chạy.
-    """
-    current_user = get_current_user_info(request, authorization)
+    """Mục tiêu seeding user được thấy (admin thấy hết), mặc định bỏ các mục tiêu đã chạy xong.
+    Dùng chung cho GET /targets và tạo chiến dịch với use_saved_targets."""
     query = db.query(SeedingTarget)
     if target_type:
         query = query.filter(SeedingTarget.target_type == target_type.upper())
@@ -561,14 +660,39 @@ def list_seeding_targets(
             )
         )
         query = query.filter(~SeedingTarget.id.in_(completed_stmt))
+    return query
 
-    targets = query.order_by(SeedingTarget.id.asc()).all()
+
+@router.get("/targets")
+def list_seeding_targets(
+    target_type: str | None = None,
+    include_completed: bool = Query(False),
+    page: int | None = Query(None, ge=1),
+    page_size: int | None = Query(None, ge=1, le=500),
+    request: Request = None,
+    authorization: str | None = Header(None),
+    db: Session = Depends(get_db),
+):
+    """Lấy danh sách các mục tiêu seeding đã lưu trong bảng seeding_targets lọc theo người dùng sở hữu.
+    Mặc định loại trừ các mục tiêu đã chạy thành công trong lịch sử hoặc đang chạy.
+    Truyền page + page_size để phân trang (không truyền = trả về toàn bộ như trước).
+    """
+    current_user = get_current_user_info(request, authorization)
+    query = _visible_targets_query(db, target_type, current_user, include_completed)
+    offset = 0
+    if page and page_size:
+        total = query.count()
+        offset = (page - 1) * page_size
+        targets = query.order_by(SeedingTarget.id.asc()).offset(offset).limit(page_size).all()
+    else:
+        targets = query.order_by(SeedingTarget.id.asc()).all()
+        total = len(targets)
     return {
-        "total": len(targets),
+        "total": total,
         "targets": [
             {
                 "id": t.id,
-                "stt": idx + 1,
+                "stt": offset + idx + 1,
                 "url": t.url,
                 "fb_id": t.fb_id,
                 "display_name": t.display_name,
@@ -897,60 +1021,9 @@ def _get_action_label(act: str, camp_type: str = "POST") -> str:
 # ─────────────────────────────────────────────────────────────
 # 2. TẠO CHIẾN DỊCH SEEDING & SINH TÁC VỤ THẬT
 # ─────────────────────────────────────────────────────────────
-@router.post("/campaigns/create")
-def create_seeding_campaign(
-    req: CreateCampaignRequest,
-    request: Request = None,
-    authorization: str | None = Header(None),
-    db: Session = Depends(get_db),
-):
-    """Tạo mới chiến dịch Seeding chuẩn DBML Module 8, liên kết tài khoản thật trong DB và tạo hàng đợi task."""
-    if not req.targets:
-        raise HTTPException(
-            status_code=400, detail="Danh sách mục tiêu không được rỗng"
-        )
-
-    # Xác định người dùng tạo chiến dịch (created_by: users.id)
-    current_user = get_current_user_info(request, authorization)
-    created_by_int = None
-    if current_user and current_user.get("id"):
-        created_by_int = current_user["id"]
-    elif req.created_by is not None:
-        created_by_int = req.created_by
-    elif req.owner_username:
-        try:
-            created_by_int = int(req.owner_username)
-        except ValueError:
-            try:
-                u_row = db.execute(
-                    text("SELECT id FROM users WHERE username = :u LIMIT 1"),
-                    {"u": req.owner_username},
-                ).fetchone()
-                if u_row:
-                    created_by_int = u_row[0]
-            except Exception:
-                created_by_int = None
-
-    # Mỗi lúc chỉ chạy 1 lô seeding (mọi loại trang): các lô dùng chung nick / Chrome profile
-    running = _find_running_campaign(db, created_by_int)
-    if running:
-        raise HTTPException(status_code=409, detail=_running_conflict_detail(running))
-
-    if req.campaign_type.upper() == "POST":
-        chosen_actions = {a.upper().strip() for a in (req.actions or [])}
-        if "REACT" in chosen_actions and not any(
-            r and r.strip() for r in (req.reactions or [])
-        ):
-            raise HTTPException(
-                status_code=400, detail="Vui lòng chọn ít nhất 1 cảm xúc Facebook!"
-            )
-        if "COMMENT" in chosen_actions:
-            comment_src = req.comments or get_user_draft_comments(db, created_by_int)
-            if not any(c and c.strip() for c in comment_src):
-                raise HTTPException(
-                    status_code=400, detail="Vui lòng nhập ít nhất 1 câu bình luận mẫu!"
-                )
-    # 1. Lấy danh sách UID tài khoản Facebook thật từ DB (bắt buộc Live và Đã đăng nhập)
+def _resolve_used_uids(db: Session, req: "CreateCampaignRequest", created_by_int: int | None, current_user: dict | None) -> list[str]:
+    """Nick chạy lô: bắt buộc Live + Đã đăng nhập và thuộc chính user. Có `uids` thì giữ đúng các nick đã chọn,
+    không thì chọn ngẫu nhiên `account_count` nick. Dùng chung cho tạo chiến dịch và Xem trước kế hoạch."""
     # Xác định danh tính người dùng sở hữu (ID dạng chuỗi và username nếu có)
     owner_identifiers = []
     if created_by_int is not None:
@@ -991,7 +1064,85 @@ def create_seeding_campaign(
         )
 
     account_uids = [acc.uid for acc in available_accounts]
-    used_uids = account_uids if (req.uids and len(req.uids) > 0) else account_uids[: req.account_count]
+    return account_uids if (req.uids and len(req.uids) > 0) else account_uids[: req.account_count]
+
+
+@router.post("/campaigns/create")
+def create_seeding_campaign(
+    req: CreateCampaignRequest,
+    request: Request = None,
+    authorization: str | None = Header(None),
+    db: Session = Depends(get_db),
+):
+    """Tạo mới chiến dịch Seeding chuẩn DBML Module 8, liên kết tài khoản thật trong DB và tạo hàng đợi task."""
+    if not req.targets and not req.use_saved_targets:
+        raise HTTPException(
+            status_code=400, detail="Danh sách mục tiêu không được rỗng"
+        )
+
+    # Xác định người dùng tạo chiến dịch (created_by: users.id)
+    current_user = get_current_user_info(request, authorization)
+    created_by_int = None
+    if current_user and current_user.get("id"):
+        created_by_int = current_user["id"]
+    elif req.created_by is not None:
+        created_by_int = req.created_by
+    elif req.owner_username:
+        try:
+            created_by_int = int(req.owner_username)
+        except ValueError:
+            try:
+                u_row = db.execute(
+                    text("SELECT id FROM users WHERE username = :u LIMIT 1"),
+                    {"u": req.owner_username},
+                ).fetchone()
+                if u_row:
+                    created_by_int = u_row[0]
+            except Exception:
+                created_by_int = None
+
+    # Mỗi lúc chỉ chạy 1 lô seeding (mọi loại trang): các lô dùng chung nick / Chrome profile
+    running = _find_running_campaign(db, created_by_int)
+    if running:
+        raise HTTPException(status_code=409, detail=_running_conflict_detail(running))
+    # Lấy bài và seeding dùng chung Chrome của nick: mở Chrome mới sẽ đóng Chrome đang lấy bài
+    fetch_job_id = running_post_fetch_job(created_by_int)
+    if fetch_job_id:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Đang lấy bài viết từ page (lượt #{fetch_job_id}). Dừng lấy bài trước khi chạy seeding.",
+        )
+
+    if req.use_saved_targets:
+        if created_by_int is None:
+            raise HTTPException(status_code=400, detail="Không xác định được người dùng để lấy danh sách mục tiêu.")
+        saved_targets = (
+            _visible_targets_query(db, req.campaign_type, {"id": created_by_int, "role": "user"})
+            .order_by(SeedingTarget.id.asc())
+            .all()
+        )
+        req.targets = [
+            TargetInputItem(url=t.url, fb_id=t.fb_id, display_name=t.display_name) for t in saved_targets
+        ]
+        if not req.targets:
+            raise HTTPException(status_code=400, detail="Danh sách mục tiêu không được rỗng")
+
+    if req.campaign_type.upper() == "POST":
+        chosen_actions = {a.upper().strip() for a in (req.actions or [])}
+        if "REACT" in chosen_actions and not any(
+            r and r.strip() for r in (req.reactions or [])
+        ):
+            raise HTTPException(
+                status_code=400, detail="Vui lòng chọn ít nhất 1 cảm xúc Facebook!"
+            )
+        if "COMMENT" in chosen_actions:
+            comment_src = req.comments or get_user_draft_comments(db, created_by_int)
+            if not any(c and c.strip() for c in comment_src):
+                raise HTTPException(
+                    status_code=400, detail="Vui lòng nhập ít nhất 1 câu bình luận mẫu!"
+                )
+    # 1. Lấy danh sách UID tài khoản Facebook thật từ DB (bắt buộc Live và Đã đăng nhập)
+    used_uids = _resolve_used_uids(db, req, created_by_int, current_user)
     actual_account_count = len(used_uids)
 
     # ─────────────────────────────────────────────────────────────
@@ -1025,6 +1176,12 @@ def create_seeding_campaign(
         if "SHARE" in post_actions
         else []
     )
+    # Kho bình luận (có thể chứa spintax {a|b}); req.comments rỗng thì lấy kho bình luận mẫu của user
+    comment_texts: list[str] = []
+    if "COMMENT" in post_actions:
+        src = req.comments or get_user_draft_comments(db, created_by_int)
+        comment_texts = [t.strip() for t in src if t and t.strip()]
+    pending_tasks_all = 0
     share_load = {u: 0 for u in used_uids}   # số bài mỗi nick đang được giao share
     for group in share_groups:
         for u in group:
@@ -1034,8 +1191,39 @@ def create_seeding_campaign(
     delay_min = max(0, min(req.delay_seconds_min, req.delay_seconds_max))
     delay_max = max(0, req.delay_seconds_min, req.delay_seconds_max)
 
+    # Tải trước mục tiêu đã có và tác vụ đang chờ / đã thành công của chúng: tránh truy vấn trong vòng lặp
+    # (nhiều bài × nhiều nick × nhiều hành động — chọn hàng nghìn bài từ page mà truy vấn từng dòng sẽ treo rất lâu).
+    item_fb_ids = [item.fb_id or extract_fb_id(item.url, camp_type) for item in req.targets]
+    existing_targets_q = db.query(SeedingTarget).filter(
+        SeedingTarget.target_type == camp_type,
+        or_(
+            SeedingTarget.fb_id.in_(set(item_fb_ids)),
+            SeedingTarget.url.in_({item.url for item in req.targets}),
+        ),
+    )
+    if created_by_int is not None:
+        existing_targets_q = existing_targets_q.filter(SeedingTarget.created_by == created_by_int)
+    targets_by_fb_id: dict[str, SeedingTarget] = {}
+    targets_by_url: dict[str, SeedingTarget] = {}
+    for t in existing_targets_q.order_by(SeedingTarget.id.asc()).all():
+        targets_by_fb_id.setdefault(t.fb_id, t)
+        targets_by_url.setdefault(t.url, t)
+    # target_id -> {(uid, action)} đang PENDING / RUNNING / SUCCESS (giống điều kiện partial index uq_seeding_tasks_once)
+    active_by_target: dict[int, set[tuple[str, str]]] = {}
+    known_target_ids = {t.id for t in targets_by_fb_id.values()} | {t.id for t in targets_by_url.values()}
+    if known_target_ids:
+        for t_uid, t_target_id, t_action in (
+            db.query(SeedingTask.account_uid, SeedingTask.target_id, SeedingTask.action)
+            .filter(
+                SeedingTask.target_id.in_(known_target_ids),
+                SeedingTask.status.in_(["PENDING", "RUNNING", "SUCCESS"]),
+            )
+            .all()
+        ):
+            active_by_target.setdefault(t_target_id, set()).add((t_uid, t_action))
+
     for idx, item in enumerate(req.targets):
-        fb_id = item.fb_id or extract_fb_id(item.url, camp_type)
+        fb_id = item_fb_ids[idx]
 
         # Chuẩn hóa display_name chuẩn: Page / Trang cá nhân / Bài viết + fb_id
         if camp_type == "PAGE":
@@ -1048,13 +1236,7 @@ def create_seeding_campaign(
             auto_display_name = f"{fb_id}"
 
         # 1. Tìm hoặc tạo SeedingTarget tuân thủ created_by của người dùng
-        target_q = db.query(SeedingTarget).filter(
-            SeedingTarget.target_type == camp_type,
-            or_(SeedingTarget.fb_id == fb_id, SeedingTarget.url == item.url),
-        )
-        if created_by_int is not None:
-            target_q = target_q.filter(SeedingTarget.created_by == created_by_int)
-        target = target_q.first()
+        target = targets_by_fb_id.get(fb_id) or targets_by_url.get(item.url)
 
         if not target:
             target = SeedingTarget(
@@ -1066,6 +1248,8 @@ def create_seeding_campaign(
             )
             db.add(target)
             db.flush()
+            targets_by_fb_id.setdefault(fb_id, target)
+            targets_by_url.setdefault(item.url, target)
         else:
             target.display_name = auto_display_name
             if not target.fb_id:
@@ -1094,13 +1278,7 @@ def create_seeding_campaign(
         db.add(camp)
         db.flush()
 
-        # 3. Chuẩn bị kho comment để random (chỉ khi chiến dịch POST có chọn COMMENT).
-        # Chưa lưu vào DB: chỉ câu nào được random trúng cho task mới được lưu ở bước 5.
-        comment_texts = []
-        if "COMMENT" in post_actions:
-            # Fallback lấy kho comment mẫu từ database của user nếu req.comments rỗng
-            src = req.comments or get_user_draft_comments(db, created_by_int)
-            comment_texts = [t.strip() for t in src if t and t.strip()]
+        # 3. Câu bình luận chỉ lưu vào DB khi được giao cho task ở bước 5 (kho bình luận đã chuẩn bị trước vòng lặp)
         saved_comment_by_text = {}
 
         # 4. Tạo SeedingCampaignTarget chuẩn DBML
@@ -1130,36 +1308,22 @@ def create_seeding_campaign(
         else:
             actions_list = ["FOLLOW"]
 
-        # Nick được giao bình luận / chia sẻ ở bài này. Bình luận ưu tiên nick chưa bình luận bài này.
-        comment_uids = set()
-        if "COMMENT" in post_actions:
-            done_comment_uids = {
-                u
-                for (u,) in db.query(SeedingTask.account_uid)
-                .filter(
-                    SeedingTask.target_id == target.id,
-                    SeedingTask.action == "COMMENT",
-                    SeedingTask.status.in_(["PENDING", "RUNNING", "SUCCESS"]),
-                )
-                .all()
-            }
-            eligible_uids = [u for u in used_uids if u not in done_comment_uids]
-            if eligible_uids:
-                comment_uids = set(
-                    random.sample(eligible_uids, min(comment_quota, len(eligible_uids)))
-                )
-            else:
-                # Nếu tất cả nick đều đã bình luận từ trước, vẫn đưa vào để đánh dấu thất bại
-                comment_uids = set(used_uids)
-
-        share_uids = set(share_groups[idx]) if share_groups else set()
-        if "SHARE" in post_actions and not share_uids and used_uids:
-            # Ít nick hơn số bài: bài không được chia lượt nào vẫn có đúng 1 nick share (nick đang share ít nhất),
-            # không để cả loạt nick cùng share 1 bài.
-            least = min(share_load.values())
-            pick = random.choice([u for u, n in share_load.items() if n == least])
-            share_load[pick] += 1
-            share_uids = {pick}
+        # Nick làm từng loại ở bài này (ưu tiên nick chưa làm) + cảm xúc theo tỉ lệ + bình luận không lặp câu
+        target_active = active_by_target.setdefault(target.id, set())
+        assignment = _post_assignment(
+            idx=idx,
+            used_uids=used_uids,
+            post_actions=post_actions,
+            target_active=target_active,
+            comment_quota=comment_quota,
+            share_groups=share_groups,
+            share_load=share_load,
+            reactions_pool=reactions_pool,
+            comment_texts=comment_texts,
+        )
+        react_uids = assignment["react"]
+        comment_uids = assignment["comment"]
+        share_uids = assignment["share"]
 
         planned_uids = set()
         uids_with_pending = set()
@@ -1168,6 +1332,8 @@ def create_seeding_campaign(
             for action_name in actions_list:
                 act = action_name.upper().strip()
 
+                if act == "REACT" and camp_type == "POST" and uid not in react_uids:
+                    continue
                 if act == "COMMENT" and uid not in comment_uids:
                     continue
                 if act == "SHARE" and uid not in share_uids:
@@ -1176,16 +1342,7 @@ def create_seeding_campaign(
                 # Kiểm tra PARTIAL INDEX uq_seeding_tasks_once:
                 # Nếu tài khoản đã thực hiện hành động này thành công (hoặc đang chạy) trên mục tiêu này trước đó:
                 # Đánh dấu tác vụ là THẤT BẠI (FAILED) để thông báo rõ ràng trong lịch sử chi tiết.
-                existing_active = (
-                    db.query(SeedingTask)
-                    .filter(
-                        SeedingTask.account_uid == uid,
-                        SeedingTask.target_id == target.id,
-                        SeedingTask.action == act,
-                        SeedingTask.status.in_(["PENDING", "RUNNING", "SUCCESS"]),
-                    )
-                    .first()
-                )
+                existing_active = (uid, act) in target_active
                 if existing_active:
                     act_label = _get_action_label(act, camp_type)
                     type_text = (
@@ -1218,13 +1375,14 @@ def create_seeding_campaign(
                     continue
 
                 uids_with_pending.add(uid)
+                pending_tasks_all += 1
                 assigned_reaction = None
                 if act == "REACT":
-                    assigned_reaction = random.choice(reactions_pool)
+                    assigned_reaction = assignment["reaction_by_uid"].get(uid) or random.choice(reactions_pool)
 
                 assigned_comment_id = None
                 if act == "COMMENT" and comment_texts:
-                    chosen_text = random.choice(comment_texts)
+                    chosen_text = assignment["comment_by_uid"].get(uid) or spin(random.choice(comment_texts))
                     chosen_comment = saved_comment_by_text.get(chosen_text)
                     if chosen_comment is None:
                         chosen_comment = SeedingComment(
@@ -1250,6 +1408,7 @@ def create_seeding_campaign(
                     status="PENDING",
                 )
                 db.add(task)
+                target_active.add((uid, act))   # bài lặp lại trong cùng yêu cầu → coi như đã có tác vụ
                 planned_uids.add(uid)
                 total_tasks_all += 1
 
@@ -1263,6 +1422,18 @@ def create_seeding_campaign(
 
         created_campaigns.append(camp)
 
+    threads = (
+        max(1, min(MAX_CHROME_THREADS, int(req.chrome_threads)))
+        if req.chrome_threads
+        else DEFAULT_CHROME_THREADS
+    )
+    if req.spread_hours and req.spread_hours > 0:
+        # Rải đều: tự tính thời gian nghỉ cho cả lô (ghi đè cấu hình nghỉ)
+        delay_min, delay_max = _spread_delays(req.spread_hours, pending_tasks_all, len(created_campaigns), threads)
+        for c in created_campaigns:
+            c.delay_seconds_min = delay_min
+            c.delay_seconds_max = delay_max
+
     db.commit()
 
     first_camp = created_campaigns[0]
@@ -1271,6 +1442,7 @@ def create_seeding_campaign(
     # Lưu liên kết chuỗi chiến dịch trong bộ nhớ để điều phối tuần tự
     for cid in camp_ids:
         _batch_campaign_chains[cid] = camp_ids
+        _campaign_threads[cid] = threads
 
     return {
         "id": first_camp.id,
@@ -1280,7 +1452,11 @@ def create_seeding_campaign(
         "total_targets": len(created_campaigns),
         "total_accounts": actual_account_count,
         "total_tasks": total_tasks_all,
+        "pending_tasks": pending_tasks_all,
         "campaign_ids": camp_ids,
+        "chrome_threads": threads,
+        "delay_seconds_min": first_camp.delay_seconds_min,
+        "delay_seconds_max": first_camp.delay_seconds_max,
         "message": f"Tạo thành công {len(created_campaigns)} chiến dịch cho {len(created_campaigns)} {type_label} riêng biệt. Mỗi {type_label} gồm {actual_account_count} tài khoản.",
     }
 
@@ -1454,6 +1630,8 @@ def _process_account_tasks(
     driver = None
     account_counted = False   # đã cộng lượt thành công / thất bại của nick này vào chiến dịch chưa
     try:
+        # Tạm dừng: nick đang xếp hàng chưa mở Chrome cho tới khi Tiếp tục
+        _wait_if_paused(campaign_id)
         if _active_seeding_campaigns.get(campaign_id, {}).get("stop_requested"):
             with _scoped_db() as s:
                 for tid in task_ids:
@@ -1559,6 +1737,8 @@ def _process_account_tasks(
         # 2. Thi hành các task của tài khoản này
         account_has_failure = False
         for idx, tid in enumerate(sorted_task_ids):
+            # Tạm dừng: chờ trước tác vụ kế tiếp (tác vụ đang làm dở vẫn làm xong)
+            _wait_if_paused(campaign_id)
             if _active_seeding_campaigns.get(campaign_id, {}).get("stop_requested"):
                 broadcast(
                     "warning",
@@ -1669,7 +1849,7 @@ def _process_account_tasks(
                     f"[{uid}] Nghỉ an toàn {delay_s}s trước "
                     + ("thao tác tiếp theo trên bài viết này..." if same_post else "tác vụ tiếp theo..."),
                 )
-                time.sleep(delay_s)
+                _sleep_interruptible(campaign_id, delay_s)
             else:
                 # Đã hoàn thành toàn bộ tác vụ của nick, nghỉ 1.5s rồi đóng trình duyệt an toàn
                 time.sleep(1.5)
@@ -1839,8 +2019,8 @@ def _run_single_campaign(campaign_id: int):
         _active_seeding_campaigns.pop(campaign_id, None)
         return
 
-    # Số luồng chạy đồng thời
-    max_workers = 2
+    # Số luồng Chrome chạy đồng thời (người dùng chọn khi tạo lô, mặc định 2)
+    max_workers = _campaign_threads.get(campaign_id, DEFAULT_CHROME_THREADS)
     broadcast(
         "info",
         f"⚙️ Điều phối tự động với {max_workers} luồng Chrome song song trên {len(tasks_by_uid)} tài khoản.",
@@ -1953,7 +2133,29 @@ def _rest_before_next_post(chain: list[int], next_cid: int) -> bool:
         # Trạng thái STOPPED trong DB (do API dừng ghi) thì đọc thưa hơn để đỡ tốn kết nối DB
         if sec % 5 == 0 and _campaign_status(next_cid) == "STOPPED":
             return False
+        # Tạm dừng: không đếm thời gian nghỉ cho tới khi Tiếp tục
+        while _is_paused(next_cid):
+            if any(_active_seeding_campaigns.get(c, {}).get("stop_requested", False) for c in chain):
+                return False
+            time.sleep(1)
         time.sleep(1)
+    return True
+
+
+def _wait_until_start(chain: list[int], start_at: datetime, owner: str | None) -> bool:
+    """Lô hẹn giờ: chờ tới start_at (giờ VN). Trả về False nếu bị dừng trong lúc chờ."""
+    if vn_now() >= start_at:
+        return True
+    broadcast("info", f"⏰ Lô seeding đã hẹn giờ, sẽ chạy lúc {start_at.strftime('%H:%M %d/%m/%Y')}.", owner=owner)
+    sec = 0
+    while vn_now() < start_at:
+        if any(_active_seeding_campaigns.get(c, {}).get("stop_requested", False) for c in chain):
+            return False
+        if sec % 5 == 0 and _campaign_status(chain[0]) == "STOPPED":
+            return False
+        time.sleep(1)
+        sec += 1
+    broadcast("info", "⏰ Tới giờ hẹn — bắt đầu chạy lô seeding.", owner=owner)
     return True
 
 
@@ -1985,12 +2187,31 @@ def _running_conflict_detail(camp: SeedingCampaign) -> str:
 def _execute_campaign_runner(initial_campaign_id: int):
     """Hàm chạy nền điều phối tuần tự các chiến dịch trong cùng một batch."""
     chain = _batch_campaign_chains.get(initial_campaign_id, [initial_campaign_id])
+    batch = _batch_id(initial_campaign_id)
     # Đánh dấu lô đang chạy: khoá không cho bắt đầu lô seeding khác cùng lúc (xem _find_running_campaign)
     _running_batches[initial_campaign_id] = chain
     try:
-        for idx, cid in enumerate(chain):
+        # Lô hẹn giờ: chờ tới giờ hẹn (bị Dừng trong lúc chờ thì không chạy bài nào)
+        chain_to_run = chain
+        start_at = _batch_start_at.get(batch)
+        if start_at is not None:
+            db_owner = SessionLocal()
+            try:
+                row = db_owner.query(SeedingCampaign.created_by).filter(SeedingCampaign.id == chain[0]).first()
+                owner = str(row[0]) if row and row[0] is not None else None
+            finally:
+                db_owner.close()
+            if not _wait_until_start(chain, start_at, owner):
+                chain_to_run = []
+            _batch_start_at.pop(batch, None)
+        for idx, cid in enumerate(chain_to_run):
             if idx > 0 and not _rest_before_next_post(chain, cid):
                 break
+            # Tạm dừng giữa 2 bài: chờ tới khi Tiếp tục / Dừng
+            while _is_paused(cid) and not any(
+                _active_seeding_campaigns.get(c, {}).get("stop_requested", False) for c in chain
+            ):
+                time.sleep(1)
             # Kiểm tra nếu có yêu cầu dừng toàn batch
             stop_req = any(
                 _active_seeding_campaigns.get(c, {}).get("stop_requested", False)
@@ -2024,17 +2245,30 @@ def _execute_campaign_runner(initial_campaign_id: int):
 
     finally:
         _running_batches.pop(initial_campaign_id, None)
+        _paused_batches.discard(batch)
+        _batch_start_at.pop(batch, None)
 
 
 @router.post("/campaigns/{campaign_id}/start")
 def start_seeding_campaign(
     campaign_id: int,
     background_tasks: BackgroundTasks,
+    start_at: str | None = Query(None, description="Hẹn giờ chạy (giờ VN, YYYY-MM-DDTHH:MM); bỏ trống = chạy ngay"),
     request: Request = None,
     authorization: str | None = Header(None),
     db: Session = Depends(get_db),
 ):
     """Bắt đầu chạy chiến dịch seeding trong background thread pool."""
+    start_at_dt = None
+    if start_at:
+        try:
+            start_at_dt = datetime.fromisoformat(start_at.strip()[:16])
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Giờ hẹn không hợp lệ.")
+        if start_at_dt > vn_now() + timedelta(days=30):
+            raise HTTPException(status_code=422, detail="Chỉ hẹn giờ trong vòng 30 ngày.")
+        if start_at_dt <= vn_now():
+            start_at_dt = None   # giờ hẹn đã qua → chạy ngay
     campaign = (
         db.query(SeedingCampaign).filter(SeedingCampaign.id == campaign_id).first()
     )
@@ -2066,12 +2300,23 @@ def start_seeding_campaign(
     running = _find_running_campaign(db, campaign.created_by)
     if running and running.id not in _batch_campaign_chains.get(campaign_id, [campaign_id]):
         raise HTTPException(status_code=409, detail=_running_conflict_detail(running))
+    fetch_job_id = running_post_fetch_job(campaign.created_by)
+    if fetch_job_id:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Đang lấy bài viết từ page (lượt #{fetch_job_id}). Dừng lấy bài trước khi chạy seeding.",
+        )
 
+    if start_at_dt is not None:
+        _batch_start_at[_batch_id(campaign_id)] = start_at_dt
     background_tasks.add_task(_execute_campaign_runner, campaign_id)
     return {
-        "message": "Đã bắt đầu chạy chiến dịch",
+        "message": (
+            f"Đã hẹn giờ chạy lúc {start_at_dt.strftime('%H:%M %d/%m/%Y')}" if start_at_dt else "Đã bắt đầu chạy chiến dịch"
+        ),
         "campaign_id": campaign_id,
         "status": "RUNNING",
+        "scheduled_at": start_at_dt.isoformat() if start_at_dt else None,
     }
 
 
@@ -2106,6 +2351,7 @@ def stop_seeding_campaign(
             )
 
     chain = _batch_campaign_chains.get(campaign_id, [campaign_id])
+    _paused_batches.discard(_batch_id(campaign_id))
     total_remaining_failed = 0
     for cid in chain:
         _active_seeding_campaigns.setdefault(cid, {})["stop_requested"] = True
@@ -2180,6 +2426,7 @@ def stop_all_seeding(
             # User thường chỉ dừng được chiến dịch của chính mình
             if is_user_limited and c.created_by != allowed_user_id:
                 continue
+            _paused_batches.discard(_batch_id(cid))
             _active_seeding_campaigns.setdefault(cid, {})["stop_requested"] = True
             total_remaining_failed += _fail_remaining_campaign_tasks(
                 db, cid, reason="Người dùng yêu cầu dừng chiến dịch (Đã dừng thủ công)"
@@ -2225,8 +2472,17 @@ def get_active_seeding_campaign(
     user_id = current_user.get("id") if current_user else None
     camp = _find_running_campaign(db, user_id, campaign_type)
     if not camp:
-        return {"campaign_id": None, "campaign_type": None, "name": None}
-    return {"campaign_id": camp.id, "campaign_type": camp.campaign_type, "name": camp.target_summary}
+        return {"campaign_id": None, "campaign_type": None, "name": None, "batch_id": None, "paused": False, "scheduled_at": None}
+    batch = _batch_id(int(camp.id))
+    start_at = _batch_start_at.get(batch)
+    return {
+        "campaign_id": camp.id,
+        "campaign_type": camp.campaign_type,
+        "name": camp.target_summary,
+        "batch_id": batch,
+        "paused": batch in _paused_batches,
+        "scheduled_at": start_at.isoformat() if start_at and start_at > vn_now() else None,
+    }
 
 
 @router.get("/campaigns")
