@@ -238,6 +238,32 @@ const REACTIONS = [
   { id: "ANGRY", label: "Phẫn nộ", Icon: FbAngryIcon },
 ];
 
+/** Thẻ 1 loại tương tác (bật / tắt). */
+function InteractionCard({ Icon, title, desc, checked, onChecked, disabled }) {
+  return (
+    <label
+      className={`relative flex items-center gap-3.5 p-4 rounded-xl border cursor-pointer transition-all ${
+        checked ? "border-blue-500 bg-blue-50/50 shadow-sm shadow-blue-500/10" : "border-gray-200 hover:border-gray-300 bg-gray-50/30"
+      }`}
+    >
+      <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center text-white shrink-0">
+        <Icon className="w-4 h-4" />
+      </div>
+      <div className="flex-1">
+        <h4 className="text-xs font-bold text-gray-900">{title}</h4>
+        <p className="text-[11px] text-gray-500">{desc}</p>
+      </div>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChecked(e.target.checked)}
+        className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+      />
+    </label>
+  );
+}
+
 export default function PostReactionSelector({
   doLike,
   onDoLikeChange,
@@ -247,6 +273,7 @@ export default function PostReactionSelector({
   onDoShareChange,
   selectedReactions,
   onToggleReaction,
+  disabled = false,
 }) {
   return (
     <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm p-6 space-y-5">
@@ -256,80 +283,36 @@ export default function PostReactionSelector({
           2
         </span>
         <h2 className="text-base font-bold text-gray-900">
-          Chọn loại tương tác & Cảm xúc
+          Chọn loại tương tác &amp; Cảm xúc
         </h2>
       </div>
 
       {/* 3 Interaction Mode Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
-        {/* Like */}
-        <label
-          className={`relative flex items-center gap-3.5 p-4 rounded-xl border cursor-pointer transition-all ${
-            doLike
-              ? "border-blue-500 bg-blue-50/50 shadow-sm shadow-blue-500/10"
-              : "border-gray-200 hover:border-gray-300 bg-gray-50/30"
-          }`}
-        >
-          <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center text-white shrink-0">
-            <ThumbsUp className="w-4 h-4" />
-          </div>
-          <div className="flex-1">
-            <h4 className="text-xs font-bold text-gray-900">Like bài viết</h4>
-            <p className="text-[11px] text-gray-500">Tương tác bài viết này</p>
-          </div>
-          <input
-            type="checkbox"
-            checked={doLike}
-            onChange={(e) => onDoLikeChange(e.target.checked)}
-            className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
-          />
-        </label>
-
-        {/* Comment */}
-        <label
-          className={`relative flex items-center gap-3.5 p-4 rounded-xl border cursor-pointer transition-all ${
-            doComment
-              ? "border-blue-500 bg-blue-50/50 shadow-sm shadow-blue-500/10"
-              : "border-gray-200 hover:border-gray-300 bg-gray-50/30"
-          }`}
-        >
-          <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center text-white shrink-0">
-            <MessageCircle className="w-4 h-4" />
-          </div>
-          <div className="flex-1">
-            <h4 className="text-xs font-bold text-gray-900">Bình luận</h4>
-            <p className="text-[11px] text-gray-500">Tự động bình luận bài viết</p>
-          </div>
-          <input
-            type="checkbox"
-            checked={doComment}
-            onChange={(e) => onDoCommentChange(e.target.checked)}
-            className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
-          />
-        </label>
-
-        {/* Share */}
-        <label
-          className={`relative flex items-center gap-3.5 p-4 rounded-xl border cursor-pointer transition-all ${
-            doShare
-              ? "border-blue-500 bg-blue-50/50 shadow-sm shadow-blue-500/10"
-              : "border-gray-200 hover:border-gray-300 bg-gray-50/30"
-          }`}
-        >
-          <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center text-white shrink-0">
-            <Share2 className="w-4 h-4" />
-          </div>
-          <div className="flex-1">
-            <h4 className="text-xs font-bold text-gray-900">Chia sẻ</h4>
-            <p className="text-[11px] text-gray-500">Chia sẻ về trang cá nhân</p>
-          </div>
-          <input
-            type="checkbox"
-            checked={doShare}
-            onChange={(e) => onDoShareChange(e.target.checked)}
-            className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
-          />
-        </label>
+        <InteractionCard
+          Icon={ThumbsUp}
+          title="Thả cảm xúc"
+          desc="Thích, Yêu thích, Haha… cho bài viết"
+          checked={doLike}
+          onChecked={onDoLikeChange}
+          disabled={disabled}
+        />
+        <InteractionCard
+          Icon={MessageCircle}
+          title="Bình luận"
+          desc="Tự động bình luận bài viết"
+          checked={doComment}
+          onChecked={onDoCommentChange}
+          disabled={disabled}
+        />
+        <InteractionCard
+          Icon={Share2}
+          title="Chia sẻ"
+          desc="Chia sẻ về trang cá nhân"
+          checked={doShare}
+          onChecked={onDoShareChange}
+          disabled={disabled}
+        />
       </div>
 
       {/* Facebook Reactions Picker */}
@@ -352,19 +335,22 @@ export default function PostReactionSelector({
                 <button
                   key={r.id}
                   type="button"
+                  disabled={disabled}
+                  aria-pressed={isSelected}
                   onClick={() => onToggleReaction(r.id)}
-                  className={`relative flex flex-col items-center justify-center py-3.5 px-2 rounded-2xl border transition-all ${
+                  className={`group relative flex flex-col items-center justify-center py-3.5 px-2 rounded-2xl border transition-all select-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${
                     isSelected
-                      ? "border-blue-500 bg-blue-50/40 shadow-sm ring-2 ring-blue-500/20"
-                      : "border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50/50"
+                      ? "border-blue-500 bg-blue-50/40 shadow-sm ring-2 ring-blue-500/20 enabled:hover:bg-blue-50/70"
+                      : "border-gray-200 bg-white enabled:hover:border-blue-300 enabled:hover:bg-blue-50/30"
                   }`}
                 >
                   {isSelected && (
-                    <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-xs">
+                    <span className="pointer-events-none absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-xs">
                       <Check className="w-2.5 h-2.5 stroke-[3]" />
                     </span>
                   )}
-                  <div className="mb-2 transition-transform duration-150 hover:scale-110">
+                  {/* Hiệu ứng phóng to theo cả khung (group-hover), không chỉ khi trỏ đúng vào icon */}
+                  <div className="pointer-events-none mb-2 transition-transform duration-150 group-hover:scale-110">
                     <IconComp className="w-9 h-9" />
                   </div>
                   <span className="text-[11px] font-semibold text-gray-700 text-center select-none">

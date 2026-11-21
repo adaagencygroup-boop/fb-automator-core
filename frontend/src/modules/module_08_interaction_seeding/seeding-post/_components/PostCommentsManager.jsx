@@ -5,6 +5,7 @@ import { Clipboard, FileSpreadsheet, Trash2, MessageSquare, Loader2 } from "luci
 import ConfirmDialog from "@/components/ui/confirm-dialog";
 import { toast } from "@/components/ui/toast";
 import ExcelImportModal from "../../_components/ExcelImportModal";
+import { countVariants, totalVariants } from "../spintax.mjs";
 
 export default function PostCommentsManager({
   comments,
@@ -13,7 +14,10 @@ export default function PostCommentsManager({
   onRemoveComment,
   onClearAllComments,
   isRunning = false,
+  commentPerPost = 0,
 }) {
+  const variantsTotal = totalVariants(comments);
+  const notEnough = commentPerPost > 0 && comments.length > 0 && variantsTotal < commentPerPost;
   const [bulkText, setBulkText] = useState("");
   const [isAddingBulk, setIsAddingBulk] = useState(false);
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
@@ -153,7 +157,7 @@ export default function PostCommentsManager({
 
           <div className="flex items-center justify-between text-xs h-8">
             <span className="text-gray-500 italic">
-              Mỗi dòng 1 câu comment (Hệ thống tự động dùng ngẫu nhiên)
+              Mỗi dòng 1 câu. Hỗ trợ spintax: {"{Hay quá|Tuyệt vời}"} → mỗi lần 1 cách viết
             </span>
             <button
               type="button"
@@ -186,6 +190,9 @@ export default function PostCommentsManager({
               <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-600 font-bold border border-blue-200/60">
                 {comments.length}
               </span>
+              {comments.length > 0 && (
+                <span className="font-medium text-gray-500">→ {variantsTotal.toLocaleString("vi-VN")} câu khác nhau</span>
+              )}
             </div>
 
             {comments.length > 0 && (
@@ -221,6 +228,7 @@ export default function PostCommentsManager({
                   <tr>
                     <th className="py-2.5 px-3 w-10 text-center whitespace-nowrap">STT</th>
                     <th className="py-2.5 px-3">Nội dung bình luận</th>
+                    <th className="py-2.5 px-3 w-16 text-center whitespace-nowrap">Số câu</th>
                     <th className="py-2.5 px-3 w-24 min-w-[75px] text-center whitespace-nowrap">Hành động</th>
                   </tr>
                 </thead>
@@ -230,7 +238,12 @@ export default function PostCommentsManager({
                       <td className="py-2.5 px-3 text-center text-gray-400 font-mono text-[11px] whitespace-nowrap">
                         {idx + 1}
                       </td>
-                      <td className="py-2.5 px-3 truncate max-w-xs">{cmt}</td>
+                      <td className="py-2.5 px-3 truncate max-w-xs" title={cmt}>{cmt}</td>
+                      <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                        <span className={`px-1.5 py-0.5 rounded text-[11px] font-semibold ${countVariants(cmt) > 1 ? "bg-blue-50 text-blue-700" : "bg-gray-100 text-gray-600"}`}>
+                          {countVariants(cmt).toLocaleString("vi-VN")}
+                        </span>
+                      </td>
                       <td className="py-2.5 px-3 text-center whitespace-nowrap">
                         <button
                           type="button"
@@ -255,6 +268,13 @@ export default function PostCommentsManager({
               </table>
             )}
           </div>
+          {notEnough && (
+            <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-[11px] text-amber-900">
+              Mỗi bài cần {commentPerPost} bình luận khác nhau nhưng danh sách mới có {variantsTotal} câu. Thêm ít nhất{" "}
+              {commentPerPost - variantsTotal} câu (hoặc dùng spintax), hoặc giảm số bình luận mỗi bài — để không có 2 nick
+              đăng cùng một câu trên cùng một bài.
+            </div>
+          )}
         </div>
       </div>
 
