@@ -7,7 +7,7 @@ Tương thích SQLite & PostgreSQL, hỗ trợ partial index và cascade delete.
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, ForeignKey, Index, UniqueConstraint, text
+    Boolean, Column, Date, Integer, String, Text, DateTime, ForeignKey, Index, UniqueConstraint, text
 )
 from sqlalchemy.orm import relationship
 
@@ -178,4 +178,75 @@ class SeedingTask(Base):
             sqlite_where=text("status IN ('PENDING', 'RUNNING', 'SUCCESS')"),
             postgresql_where=text("status IN ('PENDING', 'RUNNING', 'SUCCESS')")
         ),
+    )
+
+
+# 6. Job "Lấy bài viết từ page / trang cá nhân" (chạy nền, lấy tới khi hết bài hoặc người dùng dừng)
+class SeedingPostFetchJob(Base):
+    __tablename__ = "seeding_post_fetch_jobs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    created_by = Column(Integer, nullable=True)            # users.id
+    source_url = Column(Text, nullable=False)              # link page / trang cá nhân đã chuẩn hoá
+    source_key = Column(String(255), nullable=False)       # page_key (id:… | user:…)
+    source_name = Column(String(255), nullable=True)
+    account_uid = Column(String(50), nullable=False)       # nick dùng để lấy bài
+    status = Column(String(20), nullable=False, default="RUNNING")  # RUNNING | STOPPING | COMPLETED | STOPPED | FAILED
+    stop_reason = Column(String(30), nullable=True)        # END_OF_FEED | USER_STOPPED | CHECKPOINT | LOGGED_OUT | ERROR
+    found_count = Column(Integer, nullable=False, default=0)   # số bài khác nhau đọc được trong lần lấy này
+    new_count = Column(Integer, nullable=False, default=0)     # trong đó, số bài lần đầu xuất hiện
+    error_message = Column(Text, nullable=True)
+    started_at = Column(DateTime, default=vn_now)
+    finished_at = Column(DateTime, nullable=True)
+    heartbeat_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("idx_seeding_post_fetch_jobs_owner", "created_by", "id"),
+    )
+
+
+# 7. Bài viết lấy được từ page / trang cá nhân (id tăng dần = thứ tự trên feed)
+class SeedingFetchedPost(Base):
+    __tablename__ = "seeding_fetched_posts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    created_by = Column(Integer, nullable=True)
+    source_key = Column(String(255), nullable=False)
+    post_key = Column(String(255), nullable=False)
+    post_url = Column(Text, nullable=False)
+    target_url = Column(Text, nullable=False)              # link đã chuẩn hoá như khi thêm vào danh sách seeding
+    target_fb_id = Column(String(100), nullable=False)     # = seeding_targets.fb_id khi được thêm
+    content = Column(Text, nullable=True)
+    post_type = Column(String(20), nullable=True)          # text | photo | video
+    published_at = Column(Date, nullable=True)
+    published_text = Column(Text, nullable=True)
+    reaction_count = Column(Integer, nullable=False, default=0)
+    comment_count = Column(Integer, nullable=False, default=0)
+    share_count = Column(Integer, nullable=False, default=0)
+    is_pinned = Column(Boolean, nullable=False, default=False)
+    first_job_id = Column(Integer, nullable=True)
+    last_job_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=vn_now)
+    updated_at = Column(DateTime, default=vn_now, onupdate=vn_now)
+
+    __table_args__ = (
+        Index("uq_seeding_fetched_posts_key", "created_by", "source_key", "post_key", unique=True),
+        Index("idx_seeding_fetched_posts_list", "created_by", "source_key", "id"),
+    )
+
+
+# 8. Mẫu cấu hình seeding đã lưu ("Lưu làm mẫu" / "Mở mẫu đã lưu")
+class SeedingTemplate(Base):
+    __tablename__ = "seeding_templates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    created_by = Column(Integer, nullable=True)
+    campaign_type = Column(String(20), nullable=False, default="POST")
+    name = Column(String(120), nullable=False)
+    config = Column(Text, nullable=False)          # JSON cấu hình (loại tương tác, số lượt, tỉ lệ cảm xúc, nghỉ, luồng…)
+    created_at = Column(DateTime, default=vn_now)
+    updated_at = Column(DateTime, default=vn_now, onupdate=vn_now)
+
+    __table_args__ = (
+        Index("uq_seeding_templates_name", "created_by", "campaign_type", "name", unique=True),
     )
