@@ -16,8 +16,8 @@ rm -rf \
   .env.example
 find . \( -path "./.git" -o -path "*/node_modules" \) -prune -o \( -type d -name "__pycache__" -prune -o -type f \( -name "*.md" -o -name "*.excalidraw" \) \) -exec rm -rf {} + 2>/dev/null || true
 echo "VPS Cleanup Complete"
-docker compose build --parallel=false app landing admin
-docker compose up -d app landing admin
+docker compose build --parallel=false app admin
+docker compose up -d --remove-orphans app admin
 docker compose restart nginx
 echo "docker system prune -a -f && docker builder prune -a -f"
 docker compose ps

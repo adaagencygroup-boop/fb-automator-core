@@ -1,13 +1,14 @@
-const VPS = process.env.NEXT_PUBLIC_URL?.trim().replace(/\/$/, "") || "http://127.0.0.1:28129";
-/** @type {import('next').NextConfig} */
+const internalAPI = process.env.NEXT_PUBLIC_URL?.trim().replace(/\/$/, "") || "http://127.0.0.1:28129";
 const nextConfig = {
+  output: "standalone",
   reactStrictMode: true,
+  poweredByHeader: false,
   agentRules: false,
   async rewrites() {
     return [
       {
         source: "/api/v1/:path*",
-        destination: `${VPS}/api/v1/:path*`,
+        destination: `${internalAPI}/api/v1/:path*`,
       },
     ];
   },

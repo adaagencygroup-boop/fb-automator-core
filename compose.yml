@@ -1,9 +1,15 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 services:
   app:
     image: ${appImage:-ghcr.io/adaagencygroup-boop/fb-automator-core/app:latest}
     build: .
     container_name: app
-    restart: always
+    restart: unless-stopped
+    logging: *default-logging
     env_file:
       - .env
     environment:
@@ -19,12 +25,20 @@ services:
     ports:
       - "127.0.0.1:28129:28129"
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:28129/api/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     deploy:
       resources:
         limits:
-          cpus: '1.2'
+          cpus: '1.5'
           memory: 768M
         reservations:
           cpus: '0.2'
@@ -39,43 +53,35 @@ services:
       args:
         NEXT_PUBLIC_URL: ${NEXT_PUBLIC_URL:-https://admin.adagroupservice.com}
     container_name: admin
-    restart: always
+    restart: unless-stopped
+    logging: *default-logging
     environment:
       NODE_ENV: production
       NEXT_PUBLIC_URL: ${NEXT_PUBLIC_URL:-http://app:28129}
-      NODE_OPTIONS: "--max-old-space-size=256"
+      NODE_OPTIONS: "--max-old-space-size=192"
     depends_on:
       - app
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>{if(r.status>=500)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     deploy:
       resources:
         limits:
-          cpus: '0.6'
-          memory: 384M
+          cpus: '0.5'
+          memory: 256M
         reservations:
           cpus: '0.1'
-          memory: 128M
-    networks:
-      - net
-  landing:
-    image: landing
-    build:
-      context: ./landing
-    container_name: landing
-    restart: always
-    deploy:
-      resources:
-        limits:
-          cpus: '0.2'
-          memory: 64M
-        reservations:
-          cpus: '0.02'
-          memory: 16M
+          memory: 96M
     networks:
       - net
   postgres:
-    image: postgres:latest
+    image: postgres:18
     container_name: postgres
-    restart: always
+    restart: unless-stopped
+    logging: *default-logging
     env_file:
       - .env
     environment:
@@ -89,15 +95,25 @@ services:
       - -c
       - work_mem=4MB
       - -c
-      - max_connections=60
+      - max_connections=100
       - -c
       - effective_cache_size=384MB
       - -c
       - maintenance_work_mem=32MB
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - checkpoint_completion_target=0.9
     volumes:
       - pg:/var/lib/postgresql
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     deploy:
       resources:
         limits:
@@ -109,160 +125,57 @@ services:
     networks:
       - net
   redis:
-    image: redis:latest
+    image: redis:7-alpine
     container_name: redis
-    restart: always
+    restart: unless-stopped
+    logging: *default-logging
     command: redis-server --maxmemory 96mb --maxmemory-policy allkeys-lru --save 900 1
     volumes:
       - redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     deploy:
       resources:
         limits:
-          cpus: '0.4'
+          cpus: '0.3'
           memory: 128M
         reservations:
           cpus: '0.05'
-          memory: 32M
+          memory: 24M
     networks:
       - net
   nginx:
-    image: nginx:latest
+    image: nginx:1.27-alpine
     container_name: nginx
-    restart: always
+    restart: unless-stopped
+    logging: *default-logging
     ports:
       - "80:80"
       - "443:443"
-      - "443:443/udp"
     volumes:
       - ./devops/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./devops/nginx/ssl:/etc/nginx/ssl:ro
+      - ./landing:/var/app/landing:ro
       - storage:/var/app/storage:ro
     depends_on:
       - app
       - admin
-      - landing
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     deploy:
       resources:
         limits:
-          cpus: '0.6'
-          memory: 128M
+          cpus: '0.5'
+          memory: 96M
         reservations:
           cpus: '0.1'
-          memory: 32M
-    networks:
-      - net
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-    restart: always
-    ports:
-      - "127.0.0.1:9090:9090"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=7d
-      - --web.enable-lifecycle
-    volumes:
-      - ./devops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus:/prometheus
-    deploy:
-      resources:
-        limits:
-          cpus: '0.4'
-          memory: 256M
-        reservations:
-          cpus: '0.05'
-          memory: 64M
-    networks:
-      - net
-  node:
-    image: prom/node-exporter:latest
-    container_name: node
-    restart: always
-    pid: host
-    command:
-      - --path.procfs=/host/proc
-      - --path.rootfs=/rootfs
-      - --path.sysfs=/host/sys
-      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
-    deploy:
-      resources:
-        limits:
-          cpus: '0.2'
-          memory: 128M
-        reservations:
-          cpus: '0.02'
-          memory: 32M
-    networks:
-      - net
-  loki:
-    image: grafana/loki:latest
-    container_name: loki
-    restart: always
-    command: -config.file=/etc/loki/config.yml
-    volumes:
-      - ./devops/loki/config.yml:/etc/loki/config.yml:ro
-      - loki:/loki
-    deploy:
-      resources:
-        limits:
-          cpus: '0.4'
-          memory: 256M
-        reservations:
-          cpus: '0.05'
-          memory: 64M
-    networks:
-      - net
-  promtail:
-    image: grafana/promtail:latest
-    container_name: promtail
-    restart: always
-    user: "0"
-    command: -config.file=/etc/promtail/config.yml
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - ./devops/promtail/config.yml:/etc/promtail/config.yml:ro
-    deploy:
-      resources:
-        limits:
-          cpus: '0.1'
-          memory: 64M
-        reservations:
-          cpus: '0.02'
-          memory: 16M
-    networks:
-      - net
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    restart: always
-    user: "0"
-    ports:
-      - "9000:3000"
-    environment:
-      GOGC: "50"
-    volumes:
-      - ./devops/grafana/grafana.ini:/etc/grafana/grafana.ini:ro
-      - ./devops/grafana/provisioning:/etc/grafana/provisioning:ro
-      - grafana:/var/lib/grafana
-    depends_on:
-      - prometheus
-      - loki
-    deploy:
-      resources:
-        limits:
-          cpus: '0.8'
-          memory: 768M
-        reservations:
-          cpus: '0.1'
-          memory: 128M
+          memory: 24M
     networks:
       - net
 volumes:
@@ -272,9 +185,6 @@ volumes:
   data:
   downloads:
   logs:
-  loki:
-  prometheus:
-  grafana:
 networks:
   net:
     driver: bridge
