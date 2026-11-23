@@ -205,10 +205,11 @@ def clean_tracking_params(url: str) -> str:
 
 def normalize_target_url(raw_url: str, target_type: str = "") -> str:
     """Tự động chuẩn hóa link hoặc UID / Share post token:
-    - Nếu target_type là POST hoặc chuỗi là token share post (vd: 18NvrpA3BJ) -> https://web.facebook.com/share/p/{token}
-    - Nếu link là facebook.com/{token} trong POST -> tự động chuyển sang https://web.facebook.com/share/p/{token}
-    - Nếu có tiền tố share/(p|r|v)/... -> https://web.facebook.com/share/...
-    - Nếu nhập UID cho PAGE / PROFILE -> https://web.facebook.com/{uid}
+    - Nếu target_type là POST:
+      + Dạng permalink với story_fbid -> https://www.facebook.com/permalink.php?story_fbid=...&id=...
+      + Dạng share post -> https://www.facebook.com/share/p/{token}
+      + Dạng /{owner}/posts/{post_id} -> chuẩn hóa tương ứng
+    - Nếu nhập UID cho PAGE / PROFILE -> https://www.facebook.com/{uid}
     - Loại bỏ tham số tracking rác (?mibextid=..., ?ref=...)
     """
     if not raw_url:
@@ -219,14 +220,100 @@ def normalize_target_url(raw_url: str, target_type: str = "") -> str:
 
     t_type = (target_type or "").upper()
 
-    # 1. Kiểm tra nếu là dạng share link có domain hoặc không domain
+    if t_type == "POST":
+        # 1. Share post link (/share/p/..., /share/r/..., /share/v/...) hoặc p/...
+        m_share = re.search(
+            r"(?:^|/)(?:share/)?(p|r|v)/([a-zA-Z0-9_\-]+)",
+            val,
+            re.IGNORECASE,
+        )
+        if m_share:
+            token = m_share.group(2)
+            if not token.startswith("pfbid"):
+                return f"https://www.facebook.com/share/p/{token}"
+
+        # 2. Permalink có story_fbid (và id) -> giữ nguyên định dạng permalink.php?story_fbid=...&id=...
+        m_story_fbid = re.search(r"[?&]story_fbid=([a-zA-Z0-9_\-]+)", val)
+        if m_story_fbid:
+            story_fbid = m_story_fbid.group(1)
+            m_id = re.search(r"[?&]id=(\d+)", val)
+            if m_id:
+                return f"https://www.facebook.com/permalink.php?story_fbid={story_fbid}&id={m_id.group(1)}"
+            return f"https://www.facebook.com/permalink.php?story_fbid={story_fbid}"
+
+        # 3. /{page_id_or_username}/posts/{post_id}
+        m_posts_slug = re.search(
+            r"^https?://(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.com)/([a-zA-Z0-9._-]+)/posts/([a-zA-Z0-9_\-]+)",
+            val,
+            re.IGNORECASE,
+        )
+        if m_posts_slug:
+            owner = m_posts_slug.group(1)
+            post_id = m_posts_slug.group(2)
+            if owner.isdigit():
+                return f"https://www.facebook.com/permalink.php?story_fbid={post_id}&id={owner}"
+            return f"https://www.facebook.com/{owner}/posts/{post_id}"
+
+        # 4. Photo link có fbid
+        m_fbid = re.search(r"[?&]fbid=([a-zA-Z0-9_\-]+)", val)
+        if m_fbid:
+            fbid = m_fbid.group(1)
+            return f"https://www.facebook.com/photo.php?fbid={fbid}"
+
+        # 5. Single slug token (ví dụ: https://www.facebook.com/1CvwaumQUi hoặc facebook.com/1CvwaumQUi)
+        m_single_slug = re.match(
+            r"^(?:https?://)?(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.com)/([a-zA-Z0-9_\-]{6,30})/?$",
+            val,
+            re.IGNORECASE,
+        )
+        if m_single_slug:
+            slug = m_single_slug.group(1)
+            system_slugs = {
+                "watch",
+                "groups",
+                "pages",
+                "photo",
+                "events",
+                "gaming",
+                "marketplace",
+                "reel",
+                "reels",
+            }
+            if slug.lower() not in system_slugs:
+                if re.fullmatch(r"\d+_\d+", slug):
+                    return f"https://www.facebook.com/{slug}"
+                if not slug.startswith("pfbid"):
+                    return f"https://www.facebook.com/share/p/{slug}"
+
+        # 6. Raw token hoặc UID không có domain
+        clean = val.lstrip("/").rstrip("/")
+        if not re.search(r"[./?#]", clean):
+            if re.match(r"^\d+_\d+$", clean):
+                return f"https://www.facebook.com/{clean}"
+            if re.match(r"^[a-zA-Z0-9_\-]+$", clean) and not clean.startswith("pfbid"):
+                return f"https://www.facebook.com/share/p/{clean}"
+
+        # 7. Fallback cho các URL POST khác
+        prefix = "" if "://" in val else "https://"
+        cleaned = f"{prefix}{val.lstrip('/')}"
+        cleaned = clean_tracking_params(cleaned)
+        cleaned = re.sub(
+            r"^https?://(?:(?:web\.|m\.)?facebook\.com|fb\.com)",
+            "https://www.facebook.com",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        return cleaned
+
+    # Non-POST (PAGE / PROFILE)
+    # 1. Share link
     m_share = re.match(
         r"^(?:(?:https?://)?(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.com)/)?share/(p|r|v)/([a-zA-Z0-9_\-]+)",
         val,
         re.IGNORECASE,
     )
     if m_share:
-        return f"https://web.facebook.com/share/{m_share.group(1)}/{m_share.group(2)}"
+        return f"https://www.facebook.com/share/{m_share.group(1)}/{m_share.group(2)}"
 
     m_short_p = re.match(
         r"^(?:(?:https?://)?(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.com)/)?(p|r|v)/([a-zA-Z0-9_\-]+)",
@@ -234,39 +321,14 @@ def normalize_target_url(raw_url: str, target_type: str = "") -> str:
         re.IGNORECASE,
     )
     if m_short_p and not val.lower().startswith("http"):
-        return f"https://web.facebook.com/share/{m_short_p.group(1)}/{m_short_p.group(2)}"
+        return f"https://www.facebook.com/share/{m_short_p.group(1)}/{m_short_p.group(2)}"
 
     # 2. Đã có protocol http:// hoặc https://
     if re.match(r"^https?://", val, re.IGNORECASE):
-        # Nếu trong POST seeding mà link lại là https://web.facebook.com/18NvrpA3BJ (chỉ có slug token, thiếu /share/p/)
-        if t_type == "POST":
-            m_single_slug = re.match(
-                r"^https?://(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.com)/([a-zA-Z0-9_\-]{6,30})/?$",
-                val,
-                re.IGNORECASE,
-            )
-            if m_single_slug:
-                slug = m_single_slug.group(1)
-                system_slugs = {
-                    "watch",
-                    "groups",
-                    "pages",
-                    "photo",
-                    "events",
-                    "gaming",
-                    "marketplace",
-                    "reel",
-                    "reels",
-                }
-                # UID_PostID (vd 100089123456_987654321) là link bài viết thật, giữ nguyên, không đổi sang /share/p/
-                if slug.lower() not in system_slugs and not re.fullmatch(r"\d+_\d+", slug):
-                    return f"https://web.facebook.com/share/p/{slug}"
-
         cleaned = clean_tracking_params(val)
-        # Chuẩn hóa host về web.facebook.com
         cleaned = re.sub(
-            r"^https?://(?:(?:www\.|m\.)?facebook\.com|fb\.com)",
-            "https://web.facebook.com",
+            r"^https?://(?:(?:web\.|m\.)?facebook\.com|fb\.com)",
+            "https://www.facebook.com",
             cleaned,
             flags=re.IGNORECASE,
         )
@@ -275,60 +337,17 @@ def normalize_target_url(raw_url: str, target_type: str = "") -> str:
     # 3. Chứa domain Facebook nhưng thiếu protocol
     if re.match(r"^(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.watch|fb\.com)", val, re.IGNORECASE):
         full_url = f"https://{val.lstrip('/')}"
-        if t_type == "POST":
-            m_single_slug = re.match(
-                r"^https?://(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.com)/([a-zA-Z0-9_\-]{6,30})/?$",
-                full_url,
-                re.IGNORECASE,
-            )
-            if m_single_slug:
-                slug = m_single_slug.group(1)
-                system_slugs = {
-                    "watch",
-                    "groups",
-                    "pages",
-                    "photo",
-                    "events",
-                    "gaming",
-                    "marketplace",
-                    "reel",
-                    "reels",
-                }
-                # UID_PostID (vd 100089123456_987654321) là link bài viết thật, giữ nguyên, không đổi sang /share/p/
-                if slug.lower() not in system_slugs and not re.fullmatch(r"\d+_\d+", slug):
-                    return f"https://web.facebook.com/share/p/{slug}"
-
         cleaned = clean_tracking_params(full_url)
         cleaned = re.sub(
-            r"^https?://(?:(?:www\.|m\.)?facebook\.com|fb\.com)",
-            "https://web.facebook.com",
+            r"^https?://(?:(?:web\.|m\.)?facebook\.com|fb\.com)",
+            "https://www.facebook.com",
             cleaned,
             flags=re.IGNORECASE,
         )
         return cleaned
 
     clean = val.lstrip("/").rstrip("/")
-
-    # 4. Khi nhập trực tiếp token hoặc UID không có domain:
-    # Nếu là POST seeding:
-    if t_type == "POST":
-        # Dạng UID_PostID (vd: 100089123456_987654321) -> giữ dạng https://web.facebook.com/{clean}
-        if re.match(r"^\d+_\d+$", clean):
-            return f"https://web.facebook.com/{clean}"
-        # Mã share post như 18NvrpA3BJ hoặc id bài viết thông thường
-        return f"https://web.facebook.com/share/p/{clean}"
-
-    # Tự động phát hiện share token (chứa cả chữ và số, độ dài 8-25 ký tự)
-    if (
-        re.match(r"^[a-zA-Z0-9]{8,25}$", clean)
-        and any(c.isalpha() for c in clean)
-        and any(c.isdigit() for c in clean)
-    ):
-        if t_type in ("", "POST"):
-            return f"https://web.facebook.com/share/p/{clean}"
-
-    # 5. Mặc định cho PAGE / PROFILE hoặc UID số thuần
-    return f"https://web.facebook.com/{clean}"
+    return f"https://www.facebook.com/{clean}"
 
 
 def extract_fb_id(url: str, target_type: str = "") -> str:
@@ -569,8 +588,21 @@ def list_seeding_targets(
         query = query.filter(~SeedingTarget.id.in_(completed_stmt))
 
     targets = query.order_by(SeedingTarget.id.asc()).all()
+    filtered_targets = []
+    has_update = False
+    for t in targets:
+        if (target_type or "").upper() == "POST" and re.search(r"/(?:reel|reels|videos?|watch|share/v)\b", t.url, re.IGNORECASE):
+            continue
+        norm_url = normalize_target_url(t.url, target_type or t.target_type or "")
+        if norm_url and norm_url != t.url:
+            t.url = norm_url
+            has_update = True
+        filtered_targets.append(t)
+    if has_update:
+        db.commit()
+
     return {
-        "total": len(targets),
+        "total": len(filtered_targets),
         "targets": [
             {
                 "id": t.id,
@@ -582,7 +614,7 @@ def list_seeding_targets(
                 "created_by": t.created_by,
                 "created_at": to_vn_iso(t.created_at),
             }
-            for idx, t in enumerate(targets)
+            for idx, t in enumerate(filtered_targets)
         ],
     }
 
@@ -706,6 +738,7 @@ def validate_targets(
             db.flush()
         else:
             target_obj.display_name = display_name
+            target_obj.url = url
             if not target_obj.fb_id:
                 target_obj.fb_id = fb_id
 
@@ -746,8 +779,21 @@ def validate_targets(
     all_current_q = all_current_q.filter(~SeedingTarget.id.in_(completed_stmt))
     all_current = all_current_q.order_by(SeedingTarget.id.asc()).all()
 
+    filtered_current = []
+    has_update = False
+    for t in all_current:
+        if camp_type == "POST" and re.search(r"/(?:reel|reels|videos?|watch|share/v)\b", t.url, re.IGNORECASE):
+            continue
+        norm_url = normalize_target_url(t.url, camp_type)
+        if norm_url and norm_url != t.url:
+            t.url = norm_url
+            has_update = True
+        filtered_current.append(t)
+    if has_update:
+        db.commit()
+
     return {
-        "total": len(all_current),
+        "total": len(filtered_current),
         "targets": [
             {
                 "id": t.id,
@@ -757,7 +803,7 @@ def validate_targets(
                 "display_name": t.display_name,
                 "created_by": t.created_by,
             }
-            for idx, t in enumerate(all_current)
+            for idx, t in enumerate(filtered_current)
         ],
     }
 

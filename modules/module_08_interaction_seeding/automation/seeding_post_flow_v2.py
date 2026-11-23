@@ -21,7 +21,7 @@ POSTS_PER_ACCOUNT_TURN = 50
 MAX_DATE_HOVERS = 8
 
 _READ_FEED = r"""
-const anchors = 'a[href*="/posts/"], a[href*="/permalink"], a[href*="story_fbid="], a[href*="/videos/"], a[href*="/watch"], a[href*="/photo"], a[href*="/share/p/"], a[href*="/share/v/"]';
+const anchors = 'a[href*="/posts/"], a[href*="/permalink"], a[href*="story_fbid="], a[href*="/photo"], a[href*="/share/p/"]';
 const preferredCaption = 'div.xdj266r.x14z9mp.xat24cr.x1lziwak.x1vvkbs.x126k92a > div[dir="auto"], div.xdj266r.x14z9mp.xat24cr.x1lziwak.x1vvkbs.x126k92a div[dir="auto"], div.xdj266r.x14z9mp.xat24cr.x1lziwak.x1vvkbs.x126k92a';
 const caption = `${preferredCaption}, [data-ad-preview="message"], [data-ad-comet-preview="message"], div.html-div div[dir="auto"][style*="text-align"]`;
 const cardSelector = '[role="article"], [data-pagelet^="FeedUnit"]';
@@ -64,13 +64,13 @@ const isPostLink = (anchor) => {
   try {
     const href = anchor.getAttribute('href') || anchor.href || '';
     if (!href || /[?&](?:comment_id|reply_comment_id)=/i.test(href)) return false;
-    if (/\/(?:reel|reels)\b/i.test(href)) return false;
+    if (/\/(?:reel|reels|videos?|watch|share\/v)\b/i.test(href)) return false;
     const url = new URL(anchor.href, location.href);
     if (url.searchParams.has('comment_id') || url.searchParams.has('reply_comment_id')) return false;
     const path = url.pathname.replace(/\/+$/, '');
-    if (/\/(?:reel|reels)\b/i.test(path)) return false;
-    return /\/(?:posts|permalink|videos?|photo|photos|share\/(?:p|v))\/[A-Za-z0-9_-]+$/i.test(path) ||
-      ['story_fbid', 'fbid', 'v'].some((key) => /^[A-Za-z0-9_-]+$/.test(url.searchParams.get(key) || ''));
+    if (/\/(?:reel|reels|videos?|watch|share\/v)\b/i.test(path)) return false;
+    return /\/(?:posts|permalink|photo|photos|share\/p)\/[A-Za-z0-9_-]+$/i.test(path) ||
+      ['story_fbid', 'fbid'].some((key) => /^[A-Za-z0-9_-]+$/.test(url.searchParams.get(key) || ''));
   } catch {
     return false;
   }
@@ -87,12 +87,11 @@ const isAvatarOrCoverCard = (card, anchor) => {
   return /(?:cập nhật|thay đổi)\s+(?:ảnh|video)\s+(?:đại diện|bìa)|updated\s+(?:their|his|her|its)?\s*(?:profile\s+picture|cover\s+photo|avatar)/i.test(combined);
 };
 
-const isReelCard = (card, anchor) => {
+const isVideoOrReelCard = (card, anchor) => {
   const href = anchor?.getAttribute?.('href') || anchor?.href || '';
-  if (/\/(?:reel|reels)\b/i.test(href)) return true;
+  if (/\/(?:reel|reels|videos?|share\/v)\b|\/watch\/?\?/i.test(href)) return true;
   if (!card) return false;
-  const reelAnchor = card.querySelector('a[href*="/reel/"], a[href*="/reels/"]');
-  if (reelAnchor && !card.querySelector('a[href*="/posts/"], a[href*="/permalink"], a[href*="story_fbid="]')) {
+  if (card.querySelector('video, [data-pagelet*="Video" i], a[href*="/videos/"], a[href*="/watch?v="], a[href*="/watch/?v="], a[href*="/reel/"], a[href*="/reels/"], a[href*="/share/v/"]')) {
     return true;
   }
   return false;
@@ -122,7 +121,7 @@ for (const anchor of scope.querySelectorAll(anchors)) {
   if (card.parentElement?.closest('[role="article"]') && !card.parentElement?.closest('[data-pagelet^="FeedUnit"]')) continue;
 
   if (isAvatarOrCoverCard(card, anchor)) continue;
-  if (isReelCard(card, anchor)) continue;
+  if (isVideoOrReelCard(card, anchor)) continue;
 
   const time = anchor.querySelector('time[datetime], [data-utime], abbr') ||
     card.querySelector('time[datetime], abbr[data-utime], [data-utime]');
@@ -135,9 +134,16 @@ for (const anchor of scope.querySelectorAll(anchors)) {
   }
   labels.push(time?.innerText, anchor.innerText);
   const timestamps = [...new Set(labels.map(clean).filter(Boolean).filter((text) => text.length <= 120))];
-  const score = (time && anchor.contains(time) ? 4 : 0) +
+  const isShareP = /\/share\/p\/[A-Za-z0-9_-]+/i.test(anchor.href);
+  const isPermalink = /\/(?:posts|permalink)|story_fbid=/i.test(anchor.href);
+  const isPhoto = /\/photo/i.test(anchor.href);
+  const anchorHasTime = (time && anchor.contains(time)) ||
+    /\d+\s*(?:giây|phút|giờ|ngày|tháng|năm|s|m|h|d|w|y|vừa xong|hôm qua|yesterday|just now)\b|\d{1,2}\s+tháng\s+\d{1,2}/i.test(clean(anchor.getAttribute('aria-label') || anchor.innerText || ''));
+  const score = (anchorHasTime ? 6 : 0) +
     (timestamps.some((text) => /\d|yesterday|just now|hôm qua|vừa xong/i.test(text)) ? 2 : 0) +
-    (/\/(posts|permalink)|story_fbid=/.test(anchor.href) ? 1 : 0);
+    (isShareP ? 10 : 0) +
+    (isPermalink ? 8 : 0) +
+    (isPhoto ? 1 : 0);
   const previous = entries.get(card);
   if (previous && previous.score >= score) continue;
   entries.set(card, { anchor, timestamps, score,
@@ -177,11 +183,9 @@ return Array.from(entries).slice(0, 100).map(([card, data]) => {
   }
 
   const path = data.anchor.pathname;
-  const type = /\/(?:videos?|watch)(?:\/|$)/i.test(path) || card.querySelector('video')
-    ? 'video'
-    : /\/photo/i.test(path) || card.querySelector('a[href*="/photo"] img, [data-ad-preview="media"] img')
-      ? 'photo'
-      : 'text';
+  const type = /\/photo/i.test(path) || card.querySelector('a[href*="/photo"] img, [data-ad-preview="media"] img, img[src*="fbcdn"]')
+    ? 'photo'
+    : 'text';
 
   const reactionLabels = [...card.querySelectorAll('[aria-label]')].filter((node) => !isInsideComment(node)).map((node) => clean(node.getAttribute('aria-label')));
   const reactions = reactionLabels.map((text) => text.match(
@@ -228,42 +232,83 @@ def normalize_source_url(raw: str) -> str:
                 return f"https://www.facebook.com/profile.php?id={profile_ids[0]}"
         elif re.fullmatch(r"/(?:people|pages|p)/[^/]+(?:/[0-9]+)?", path, re.IGNORECASE):
             return urlunsplit(("https", "www.facebook.com", path, "", ""))
+        elif re.fullmatch(r"/share/(?:p|v)/[A-Za-z0-9_-]+", path, re.IGNORECASE):
+            return f"https://www.facebook.com{path}"
+        elif re.search(r"/(?:posts|permalink|videos?|photo|photos)/", path, re.IGNORECASE) or (path.lower() == "/permalink.php" and ("story_fbid" in parsed.query or "fbid" in parsed.query)):
+            return urlunsplit(("https", "www.facebook.com", path, parsed.query, ""))
         elif re.fullmatch(r"/[A-Za-z0-9._-]+", path) and path[1:].lower() not in RESERVED_PATHS and not path.lower().endswith(".php"):
             return f"https://www.facebook.com{path}"
     except ValueError:
         pass
-    raise SourceScanError("Vui lòng nhập link Page hoặc trang cá nhân Facebook hợp lệ.")
+    raise SourceScanError("Vui lòng nhập link Page, trang cá nhân hoặc bài viết Facebook hợp lệ.")
 
 
-def _collect_post(raw: dict):
+def _collect_post(raw: dict, source_url: str = ""):
+    raw_url = (raw.get("url") or "").strip()
     try:
-        parsed = _facebook_url(raw.get("url") or "")
+        parsed = _facebook_url(raw_url)
     except ValueError:
         return None
 
     path = parsed.path.rstrip("/")
-    if re.search(r"/(?:reel|reels)\b", path, re.IGNORECASE):
+    if re.search(r"/(?:reel|reels|videos?|watch|share/v)\b", path, re.IGNORECASE) or raw.get("type") == "video":
         return None
 
     query = parse_qs(parsed.query)
     if "comment_id" in query or "reply_comment_id" in query:
         return None
+
     post_id = None
-    params = {}
-    for name in ("story_fbid", "fbid", "v"):
-        values = query.get(name, [])
-        if values and re.fullmatch(r"[A-Za-z0-9_-]+", values[0]):
-            post_id = values[0]
-            params[name] = post_id
-            owner_id = query.get("id", [""])[0]
-            if name == "story_fbid" and owner_id.isdigit():
-                params["id"] = owner_id
-            break
-    if post_id is None:
-        match = re.search(r"/(?:posts|permalink|videos?|photo|photos|share/(?:p|v))/([A-Za-z0-9_-]+)$", path, re.IGNORECASE)
-        if not match:
+    post_url = None
+
+    # 1. Share post link: /share/p/{token}
+    m_share = re.search(r"/share/p/([A-Za-z0-9_-]+)", path, re.IGNORECASE)
+    if m_share:
+        token = m_share.group(1)
+        post_id = token
+        post_url = f"https://www.facebook.com/share/p/{token}"
+
+    # 2. story_fbid trong query (vd: permalink.php?story_fbid=pfbid...&id=61559108794337)
+    elif "story_fbid" in query:
+        story_fbid = query["story_fbid"][0]
+        post_id = story_fbid
+        page_id = query.get("id", [None])[0]
+        if not page_id and source_url:
+            m_src = re.search(r"facebook\.com/(?:profile\.php\?id=(\d+)|(\d+)(?:/|$))", source_url)
+            if m_src:
+                page_id = m_src.group(1) or m_src.group(2)
+        if page_id:
+            post_url = f"https://www.facebook.com/permalink.php?story_fbid={story_fbid}&id={page_id}"
+        else:
+            post_url = f"https://www.facebook.com/permalink.php?story_fbid={story_fbid}"
+
+    # 3. /{page_id_or_username}/posts/{post_id}
+    elif re.search(r"^/([A-Za-z0-9._-]+)/posts/([A-Za-z0-9_-]+)$", path, re.IGNORECASE):
+        m_posts = re.search(r"^/([A-Za-z0-9._-]+)/posts/([A-Za-z0-9_-]+)$", path, re.IGNORECASE)
+        owner_segment = m_posts.group(1)
+        post_id = m_posts.group(2)
+        if owner_segment.isdigit():
+            post_url = f"https://www.facebook.com/permalink.php?story_fbid={post_id}&id={owner_segment}"
+        else:
+            post_url = f"https://www.facebook.com/{owner_segment}/posts/{post_id}"
+
+    # 4. Photo link với fbid
+    elif "fbid" in query:
+        fbid = query["fbid"][0]
+        post_id = fbid
+        post_url = f"https://www.facebook.com/photo.php?fbid={fbid}"
+
+    # 5. Các dạng permalink / posts khác
+    else:
+        m_other = re.search(r"/(?:posts|permalink|photo|photos)/([A-Za-z0-9_-]+)$", path, re.IGNORECASE)
+        if m_other:
+            post_id = m_other.group(1)
+            post_url = urlunsplit(("https", "www.facebook.com", path, parsed.query, ""))
+        else:
             return None
-        post_id = match[1]
+
+    if not post_id or not post_url:
+        return None
 
     try:
         utime = int(raw.get("utime") or 0) or None
@@ -281,7 +326,7 @@ def _collect_post(raw: dict):
 
     return {
         "id": post_id,
-        "post_url": urlunsplit(("https", "www.facebook.com", path, urlencode(params), "")),
+        "post_url": post_url,
         "content": content,
         "post_type": raw.get("type") or "text",
         "published_at": published_at,
@@ -357,7 +402,7 @@ def collect_visible_posts(
         )
 
     posts = {}
-    MAX_IDLE_ROUNDS = 8
+    MAX_IDLE_ROUNDS = 12
 
     while True:
         if stop.is_set():
@@ -366,7 +411,7 @@ def collect_visible_posts(
         while cursor["index"] < len(batch):
             row = batch[cursor["index"]]
             cursor["index"] += 1
-            post = _collect_post(row)
+            post = _collect_post(row, source_url=source_url)
             if post is None:
                 continue
             cursor["observed"].add(post["id"])
@@ -394,8 +439,11 @@ def collect_visible_posts(
             cursor["done"] = True
             break
         cursor["previous_observed"] = len(cursor["observed"])
-        driver.execute_script("window.scrollBy({ top: Math.max(window.innerHeight * 1.2, 1100), left: 0, behavior: 'smooth' });")
-        wait_time = 1.2 if has_new_posts else 2.0
+        # Cuộn từ từ (bước ngắn ~450px) để không bị nhảy cóc bỏ qua bài viết
+        driver.execute_script(
+            "window.scrollBy({ top: Math.min(Math.round(window.innerHeight * 0.55), 480), left: 0, behavior: 'smooth' });"
+        )
+        wait_time = 1.3 if has_new_posts else 2.2
         if stop.wait(wait_time):
             return []
         cursor["batch"] = read_batch(driver)

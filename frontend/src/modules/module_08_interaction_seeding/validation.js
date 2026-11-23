@@ -81,7 +81,7 @@ export const cleanFacebookUrl = (rawUrl) => {
         host === "web.facebook.com" ||
         host === "fb.com"
       ) {
-        urlObj.hostname = "web.facebook.com";
+        urlObj.hostname = "www.facebook.com";
       }
 
       // Xóa các tham số tracking
@@ -197,12 +197,83 @@ export const normalizeTargetUrl = (input, targetType = "") => {
   val = removeVietnameseTones(val);
   const type = String(targetType || "").toUpperCase();
 
+  // Nếu là POST:
+  if (type === "POST") {
+    // 1. Share post link (/share/p/..., /share/r/..., /share/v/...) hoặc p/...
+    const shareMatch = val.match(
+      /(?:^|\/)(?:share\/)?(p|r|v)\/([a-zA-Z0-9_\-]+)/i
+    );
+    if (shareMatch && !shareMatch[2].startsWith("pfbid")) {
+      return `https://www.facebook.com/share/p/${shareMatch[2]}`;
+    }
+
+    // 2. Permalink có story_fbid (và id) -> giữ nguyên định dạng permalink.php?story_fbid=...&id=...
+    const storyFbidMatch = val.match(/[?&]story_fbid=([a-zA-Z0-9_\-]+)/i);
+    if (storyFbidMatch) {
+      const storyFbid = storyFbidMatch[1];
+      const idMatch = val.match(/[?&]id=(\d+)/i);
+      if (idMatch) {
+        return `https://www.facebook.com/permalink.php?story_fbid=${storyFbid}&id=${idMatch[1]}`;
+      }
+      return `https://www.facebook.com/permalink.php?story_fbid=${storyFbid}`;
+    }
+
+    // 3. /{page_id_or_username}/posts/{post_id}
+    const postsSlugMatch = val.match(
+      /^https?:\/\/(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.com)\/([a-zA-Z0-9._-]+)\/posts\/([a-zA-Z0-9_\-]+)/i
+    );
+    if (postsSlugMatch) {
+      const owner = postsSlugMatch[1];
+      const postId = postsSlugMatch[2];
+      if (/^\d+$/.test(owner)) {
+        return `https://www.facebook.com/permalink.php?story_fbid=${postId}&id=${owner}`;
+      }
+      return `https://www.facebook.com/${owner}/posts/${postId}`;
+    }
+
+    // 4. Photo link có fbid
+    const fbidMatch = val.match(/[?&]fbid=([a-zA-Z0-9_\-]+)/i);
+    if (fbidMatch) {
+      return `https://www.facebook.com/photo.php?fbid=${fbidMatch[1]}`;
+    }
+
+    // 5. Link có single slug token (vd: https://www.facebook.com/1CvwaumQUi)
+    const singleSlugMatch = val.match(
+      /^(?:https?:\/\/(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.com)\/)?([a-zA-Z0-9_\-]{6,30})\/?$/i
+    );
+    if (singleSlugMatch) {
+      const slug = singleSlugMatch[1];
+      const systemSlugs = ["watch", "groups", "pages", "photo", "events", "gaming", "marketplace", "reel", "reels"];
+      if (!systemSlugs.includes(slug.toLowerCase())) {
+        if (/^\d+_\d+$/.test(slug)) {
+          return `https://www.facebook.com/${slug}`;
+        }
+        if (!slug.startsWith("pfbid")) {
+          return `https://www.facebook.com/share/p/${slug}`;
+        }
+      }
+    }
+
+    // 6. Raw token hoặc UID không domain
+    const clean = val.replace(/^\/+/, "").replace(/\/+$/, "");
+    if (!/[./?#]/.test(clean)) {
+      if (/^\d+_\d+$/.test(clean)) {
+        return `https://www.facebook.com/${clean}`;
+      }
+      if (/^[a-zA-Z0-9_\-]+$/.test(clean) && !clean.startsWith("pfbid")) {
+        return `https://www.facebook.com/share/p/${clean}`;
+      }
+    }
+
+    return cleanFacebookUrl(val);
+  }
+
   // 1. Kiểm tra nếu là dạng share link có domain hoặc không domain (share/p/..., share/r/..., share/v/...)
   const shareMatch = val.match(
     /^(?:(?:https?:\/\/)?(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.com)\/)?share\/(p|r|v)\/([a-zA-Z0-9_\-]+)/i
   );
   if (shareMatch) {
-    return cleanFacebookUrl(`https://web.facebook.com/share/${shareMatch[1]}/${shareMatch[2]}`);
+    return cleanFacebookUrl(`https://www.facebook.com/share/${shareMatch[1]}/${shareMatch[2]}`);
   }
 
   // 2. Tiền tố ngắn p/ hoặc r/ hoặc v/ (vd: p/18NvrpA3BJ)
@@ -210,24 +281,11 @@ export const normalizeTargetUrl = (input, targetType = "") => {
     /^(?:(?:https?:\/\/)?(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.com)\/)?(p|r|v)\/([a-zA-Z0-9_\-]+)/i
   );
   if (shortShareMatch && !val.toLowerCase().startsWith("http")) {
-    return cleanFacebookUrl(`https://web.facebook.com/share/${shortShareMatch[1]}/${shortShareMatch[2]}`);
+    return cleanFacebookUrl(`https://www.facebook.com/share/${shortShareMatch[1]}/${shortShareMatch[2]}`);
   }
 
   // 3. Đã có protocol http:// hoặc https://
   if (/^https?:\/\//i.test(val)) {
-    // Nếu trong mục POST mà link lại có dạng https://web.facebook.com/18NvrpA3BJ (chỉ có slug token chứa cả chữ và số)
-    if (type === "POST") {
-      const singleSlugMatch = val.match(
-        /^https?:\/\/(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.com)\/([a-zA-Z0-9_\-]{6,30})\/?$/i
-      );
-      if (singleSlugMatch) {
-        const slug = singleSlugMatch[1];
-        const systemSlugs = ["watch", "groups", "pages", "photo", "events", "gaming", "marketplace", "reel", "reels"];
-        if (!systemSlugs.includes(slug.toLowerCase()) && /[a-zA-Z]/.test(slug) && /\d/.test(slug)) {
-          return cleanFacebookUrl(`https://web.facebook.com/share/p/${slug}`);
-        }
-      }
-    }
     return cleanFacebookUrl(val);
   }
 
@@ -237,39 +295,13 @@ export const normalizeTargetUrl = (input, targetType = "") => {
     /^fb\.watch/i.test(val) ||
     /^fb\.com/i.test(val)
   ) {
-    if (type === "POST") {
-      const singleSlugMatch = val.match(
-        /^(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.com)\/([a-zA-Z0-9_\-]{6,30})\/?$/i
-      );
-      if (singleSlugMatch) {
-        const slug = singleSlugMatch[1];
-        const systemSlugs = ["watch", "groups", "pages", "photo", "events", "gaming", "marketplace", "reel", "reels"];
-        if (!systemSlugs.includes(slug.toLowerCase()) && /[a-zA-Z]/.test(slug) && /\d/.test(slug)) {
-          return cleanFacebookUrl(`https://web.facebook.com/share/p/${slug}`);
-        }
-      }
-    }
     return cleanFacebookUrl(`https://${val.replace(/^\/+/, "")}`);
   }
 
   const clean = val.replace(/^\/+/, "").replace(/\/+$/, "");
 
-  // 5. Nếu đang ở mục POST:
-  if (type === "POST") {
-    // Dạng UID_PostID
-    if (/^\d+_\d+$/.test(clean)) {
-      return cleanFacebookUrl(`https://web.facebook.com/${clean}`);
-    }
-    // Mã token share post (chứa cả chữ và số, ví dụ: 18NvrpA3BJ)
-    if (/^[a-zA-Z0-9_\-]{6,30}$/.test(clean) && /[a-zA-Z]/.test(clean) && /\d/.test(clean)) {
-      return cleanFacebookUrl(`https://web.facebook.com/share/p/${clean}`);
-    }
-    // Mặc định gán https://web.facebook.com/
-    return cleanFacebookUrl(`https://web.facebook.com/${clean}`);
-  }
-
-  // 6. Cho PAGE, PROFILE hoặc UID thông thường (chuỗi số thuần):
-  return cleanFacebookUrl(`https://web.facebook.com/${clean}`);
+  // 5. Cho PAGE, PROFILE hoặc UID thông thường (chuỗi số thuần):
+  return cleanFacebookUrl(`https://www.facebook.com/${clean}`);
 };
 
 /**

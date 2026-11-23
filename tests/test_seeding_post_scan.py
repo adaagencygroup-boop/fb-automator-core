@@ -71,7 +71,7 @@ class PostScanTests(unittest.TestCase):
              "reaction_count": None}
             for number in range(125)
         ]
-        self.collect_patch = patch.object(self.scanner, "_collect_post", side_effect=lambda row: row)
+        self.collect_patch = patch.object(self.scanner, "_collect_post", side_effect=lambda row, *args, **kwargs: row)
         self.collect_patch.start()
         self.addCleanup(self.collect_patch.stop)
 
@@ -391,16 +391,49 @@ class CommentFilterTests(unittest.TestCase):
         self.assertIsNotNone(res)
         self.assertEqual(res["content"], "Bài viết không có nội dung")
         self.assertEqual(res["id"], "pfbid0abc123")
+        self.assertEqual(res["post_url"], "https://www.facebook.com/kietdauroi.box/posts/pfbid0abc123")
+
+        # Permalink with story_fbid and page id should be preserved
+        permalink_raw = {
+            "url": "https://www.facebook.com/permalink.php?story_fbid=pfbid0YRHKPDJZvWxj1sxXzKiyrbBdEusgPyQ6GWpoxRuuvpmQ9bbQJrHPugVCv4Sxafd7l&id=61559108794337",
+            "content": "ADA Group post",
+            "type": "photo",
+        }
+        res_perm = self.scanner._collect_post(permalink_raw)
+        self.assertIsNotNone(res_perm)
+        self.assertEqual(res_perm["id"], "pfbid0YRHKPDJZvWxj1sxXzKiyrbBdEusgPyQ6GWpoxRuuvpmQ9bbQJrHPugVCv4Sxafd7l")
+        self.assertEqual(res_perm["post_url"], "https://www.facebook.com/permalink.php?story_fbid=pfbid0YRHKPDJZvWxj1sxXzKiyrbBdEusgPyQ6GWpoxRuuvpmQ9bbQJrHPugVCv4Sxafd7l&id=61559108794337")
+
+        # Numeric page posts should normalize to permalink.php?story_fbid=...&id=...
+        num_page_raw = {
+            "url": "https://www.facebook.com/61559108794337/posts/pfbid0YRHKPDJZvWxj1sxXzKiyrbBdEusgPyQ6GWpoxRuuvpmQ9bbQJrHPugVCv4Sxafd7l",
+            "content": "Numeric page post",
+            "type": "photo",
+        }
+        res_num = self.scanner._collect_post(num_page_raw)
+        self.assertIsNotNone(res_num)
+        self.assertEqual(res_num["post_url"], "https://www.facebook.com/permalink.php?story_fbid=pfbid0YRHKPDJZvWxj1sxXzKiyrbBdEusgPyQ6GWpoxRuuvpmQ9bbQJrHPugVCv4Sxafd7l&id=61559108794337")
 
         # Share links like /share/p/ should be recognized
         share_raw = {
-            "url": "https://www.facebook.com/share/p/18NvrpA3BJ",
+            "url": "https://www.facebook.com/share/p/1CvwaumQUi",
             "content": "Share post test",
             "type": "text",
         }
         res_share = self.scanner._collect_post(share_raw)
         self.assertIsNotNone(res_share)
-        self.assertEqual(res_share["id"], "18NvrpA3BJ")
+        self.assertEqual(res_share["id"], "1CvwaumQUi")
+        self.assertEqual(res_share["post_url"], "https://www.facebook.com/share/p/1CvwaumQUi")
+
+    def test_normalize_source_url_supports_share_p_and_posts(self):
+        norm = self.scanner.normalize_source_url("https://www.facebook.com/share/p/1CvwaumQUi")
+        self.assertEqual(norm, "https://www.facebook.com/share/p/1CvwaumQUi")
+
+        norm_slash = self.scanner.normalize_source_url("https://www.facebook.com/share/p/1CvwaumQUi/")
+        self.assertEqual(norm_slash, "https://www.facebook.com/share/p/1CvwaumQUi")
+
+        norm_post = self.scanner.normalize_source_url("https://www.facebook.com/user/posts/123456789")
+        self.assertEqual(norm_post, "https://www.facebook.com/user/posts/123456789")
 
 
     def test_read_feed_profile_multiple_posts_without_role_article(self):

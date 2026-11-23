@@ -37,8 +37,9 @@ class PostSeedingFlow:
         Nếu không, bình luận / chia sẻ sau khi thả cảm xúc sẽ tưởng là chưa mở và tải lại bài viết."""
         current = (self.driver.current_url or "").split("#")[0]
         target_clean = target_url.split("?")[0].rstrip("/")
-        if current and (target_clean in current or self._opened_post == (target_url, current)):
-            return
+        if current and "facebook.com" in current and "login" not in current.lower():
+            if target_clean in current or (self._opened_post and self._opened_post[0] == target_url):
+                return
         if callback:
             callback(f"🌐 Mở bài viết: {target_url}")
         self.driver.get(target_url)
