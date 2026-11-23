@@ -10,6 +10,20 @@ export const getFarmAccountsPage = (filters = {}, cursor) =>
     params: { limit: 10, status: "live", login_status: "logged_in", ...filters, cursor },
   });
 
+// ── Lấy từ danh sách quét (đọc API của Module 10 Quét nhóm) ──
+// Gọi thẳng api thay vì service Module 10: service đó nuốt lỗi thành danh sách rỗng, Tab 1 cần biết 403 (chưa có license)
+
+export const getPickerGroups = () => api.get("/api/group-scan/groups");
+export const getPickerGroupCategories = () =>
+  api.get("/api/group-scan/categories").then((res) => res?.categories || []);
+export const getPickerGroupMembers = (params) => api.get("/api/group-scan/members", { params });
+
+/** Câu báo lỗi của hộp Lấy từ danh sách quét: 403 = tài khoản app chưa có / hết license module nguồn */
+export function pickerErrorMessage(err, moduleName) {
+  if (err?.status === 403) return `Tài khoản chưa có quyền dùng ${moduleName} (chưa được cấp hoặc đã hết hạn).`;
+  return err?.message || `Không tải được dữ liệu ${moduleName}`;
+}
+
 // ── Chạy tương tác ──
 
 // Kích hoạt phải đọc nick, chia link, tạo lượt chạy trên CSDL (Supabase ở xa có lúc rất chậm): chờ lâu hơn 60s mặc định
