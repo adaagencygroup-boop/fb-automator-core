@@ -29,7 +29,7 @@ export default function PostTargetSection({
   successMessage,
   isRunning = false,
   accounts = [],
-  defaultAccountUid = "",
+  selectedUids = [],
   onTargetsReload,
   onFetchRunningChange,
 }) {
@@ -338,7 +338,7 @@ export default function PostTargetSection({
       <PostFetchModal open={isFetchOpen} onClose={() => setIsFetchOpen(false)}>
         <PostSourceFetcher
           accounts={accounts}
-          defaultAccountUid={defaultAccountUid}
+          selectedUids={selectedUids}
           disabled={isRunning}
           targetsVersion={targetsVersion}
           onTargetsAdded={onTargetsReload}

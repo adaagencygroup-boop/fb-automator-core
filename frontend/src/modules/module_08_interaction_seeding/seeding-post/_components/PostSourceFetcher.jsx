@@ -3,7 +3,9 @@
 /**
  * Nội dung popup "Lấy bài viết từ page/ trang cá nhân": lấy TOÀN BỘ bài (job chạy nền, bài hiện dần),
  * tìm / phân trang, chọn N bài đầu hoặc "Chọn tất cả kết quả lọc", rồi thêm vào danh sách seeding.
- * Nick dùng để lấy bài: nick đầu tiên đang chọn để seeding, không có thì nick Live + đã đăng nhập đầu tiên.
+ * - Nick quét: nick ĐẦU TIÊN trong các nick đã tích chọn ở mục "Số lượng tài khoản sử dụng" (còn Live + đã đăng nhập).
+ *   Chưa tích nick nào thì không cho lấy bài.
+ * - Bài lấy về chỉ lưu TẠM (RAM + file trên máy); bấm "Thêm bài viết đã chọn" mới lưu các bài đã chọn vào DB.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Check, CheckCircle2, FileText, Image as ImageIcon, Loader2, Search, Square, ThumbsUp, Video } from "lucide-react";
@@ -70,7 +72,7 @@ function splitContent(content) {
 
 export default function PostSourceFetcher({
   accounts = [],
-  defaultAccountUid = "",
+  selectedUids = [],
   disabled = false,
   targetsVersion = 0,
   onTargetsAdded,
@@ -85,7 +87,7 @@ export default function PostSourceFetcher({
   const [qInput, setQInput] = useState("");
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
-  const [list, setList] = useState({ items: [], total: 0 });
+  const [list, setList] = useState({ items: [], total: 0, available: true });
   const [loadingList, setLoadingList] = useState(false);
   const [sel, setSel] = useState(emptySelection);
   const [firstN, setFirstN] = useState("3");
@@ -95,12 +97,18 @@ export default function PostSourceFetcher({
   const sourceKey = job?.source_key || "";
   const running = isActive(job);
 
-  // Nick lấy bài: nick đang chạy lượt lấy bài (khôi phục) > nick đầu tiên chọn để seeding > nick khả dụng đầu tiên
-  const accountUid = useMemo(() => {
-    if (job?.account_uid && running) return job.account_uid;
-    const preferred = accounts.find((a) => a.uid === defaultAccountUid) || accounts[0];
-    return preferred?.uid || "";
-  }, [accounts, defaultAccountUid, job?.account_uid, running]);
+  // Nick quét: nick đầu tiên trong các nick ĐÃ TÍCH CHỌN còn khả dụng (Live + đã đăng nhập).
+  // Đang chạy lượt lấy bài (vd mở lại màn) thì giữ đúng nick của lượt đó.
+  const scanAccount = useMemo(() => {
+    const byUid = new Map(accounts.map((a) => [a.uid, a]));
+    if (job?.account_uid && running) return byUid.get(job.account_uid) || { uid: job.account_uid };
+    for (const uid of selectedUids) {
+      if (byUid.has(uid)) return byUid.get(uid);
+    }
+    return null;
+  }, [accounts, selectedUids, job?.account_uid, running]);
+  const accountUid = scanAccount?.uid || "";
+  const accountLabel = scanAccount ? scanAccount.profile_name || scanAccount.name || scanAccount.uid : "";
 
   // Khôi phục lượt lấy bài đang chạy / gần nhất khi mở lại màn
   useEffect(() => {
@@ -136,7 +144,7 @@ export default function PostSourceFetcher({
 
   const loadList = useCallback(async () => {
     if (!sourceKey) {
-      setList({ items: [], total: 0 });
+      setList({ items: [], total: 0, available: true });
       return;
     }
     const seq = ++listSeq.current;
@@ -144,7 +152,7 @@ export default function PostSourceFetcher({
     try {
       const res = await postFetchApi.listPosts({ source_key: sourceKey, q: q || undefined, type: "all", page, page_size: PAGE_SIZE });
       if (seq !== listSeq.current) return;
-      setList({ items: res?.items || [], total: res?.total || 0 });
+      setList({ items: res?.items || [], total: res?.total || 0, available: res?.available !== false });
     } catch (err) {
       if (seq === listSeq.current) toast.error(err?.message || "Không tải được danh sách bài viết.", "LỖI TẢI BÀI");
     } finally {
@@ -197,7 +205,10 @@ export default function PostSourceFetcher({
       return;
     }
     if (!accountUid) {
-      toast.warning("Không có tài khoản Live + đã đăng nhập để lấy bài.", "THIẾU TÀI KHOẢN");
+      toast.warning(
+        "Hãy tích chọn tài khoản ở mục \"Số lượng tài khoản sử dụng\" — tài khoản quét được lấy từ các tài khoản đã tích chọn.",
+        "CHƯA CHỌN TÀI KHOẢN",
+      );
       return;
     }
     setStarting(true);
@@ -298,9 +309,20 @@ export default function PostSourceFetcher({
           )}
         </form>
 
-        {!accounts.length && (
-          <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700">
-            Không có tài khoản Live + đã đăng nhập để lấy bài. Vui lòng kiểm tra trang Quản lý tài khoản.
+        {accountUid ? (
+          <p className="text-xs text-slate-500">
+            Tài khoản quét: <b className="font-semibold text-slate-700">{accountLabel}</b> (lấy từ tài khoản đã tích chọn)
+          </p>
+        ) : (
+          <p role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+            Hãy tích chọn tài khoản ở mục <b>&quot;Số lượng tài khoản sử dụng&quot;</b> — tài khoản quét được lấy từ các tài khoản
+            đã tích chọn (cần còn Live và đã đăng nhập).
+          </p>
+        )}
+
+        {sourceKey && !running && !list.available && (
+          <p role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+            Danh sách bài tạm đã hết hạn — bấm &quot;Lấy danh sách bài viết&quot; để lấy lại.
           </p>
         )}
 
@@ -447,7 +469,9 @@ export default function PostSourceFetcher({
         <footer className="sticky bottom-0 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 bg-white px-5 py-3 sm:px-6">
           <div aria-live="polite">
             <p className="text-sm font-bold text-slate-900">{fmt(chosen)} bài đã chọn</p>
-            <p className="text-xs text-slate-500">Tổng số bài sẽ đưa vào danh sách seeding</p>
+            <p className="text-xs text-slate-500">
+              Bài viết chỉ lưu tạm — bấm &quot;Thêm bài viết đã chọn&quot; mới lưu vào danh sách seeding
+            </p>
           </div>
           <button type="button" disabled={busy || !chosen} onClick={handleAdd} className={PRIMARY}>
             {adding ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Check className="size-4" aria-hidden="true" />}

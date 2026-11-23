@@ -738,7 +738,7 @@ export default function SeedingPostPage() {
         successMessage={successMessage}
         isRunning={isRunning}
         accounts={liveAccountList}
-        defaultAccountUid={selectedUids[0] || ""}
+        selectedUids={selectedUids}
         onTargetsReload={reloadTargets}
         onFetchRunningChange={handleFetchRunningChange}
       />
