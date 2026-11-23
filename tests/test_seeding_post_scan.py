@@ -392,6 +392,16 @@ class CommentFilterTests(unittest.TestCase):
         self.assertEqual(res["content"], "Bài viết không có nội dung")
         self.assertEqual(res["id"], "pfbid0abc123")
 
+        # Share links like /share/p/ should be recognized
+        share_raw = {
+            "url": "https://www.facebook.com/share/p/18NvrpA3BJ",
+            "content": "Share post test",
+            "type": "text",
+        }
+        res_share = self.scanner._collect_post(share_raw)
+        self.assertIsNotNone(res_share)
+        self.assertEqual(res_share["id"], "18NvrpA3BJ")
+
 
     def test_read_feed_profile_multiple_posts_without_role_article(self):
         html = """<!DOCTYPE html><html><body><div role="main">

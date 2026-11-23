@@ -21,7 +21,7 @@ POSTS_PER_ACCOUNT_TURN = 50
 MAX_DATE_HOVERS = 8
 
 _READ_FEED = r"""
-const anchors = 'a[href*="/posts/"], a[href*="/permalink"], a[href*="story_fbid="], a[href*="/videos/"], a[href*="/watch"], a[href*="/photo"]';
+const anchors = 'a[href*="/posts/"], a[href*="/permalink"], a[href*="story_fbid="], a[href*="/videos/"], a[href*="/watch"], a[href*="/photo"], a[href*="/share/p/"], a[href*="/share/v/"]';
 const preferredCaption = 'div.xdj266r.x14z9mp.xat24cr.x1lziwak.x1vvkbs.x126k92a > div[dir="auto"], div.xdj266r.x14z9mp.xat24cr.x1lziwak.x1vvkbs.x126k92a div[dir="auto"], div.xdj266r.x14z9mp.xat24cr.x1lziwak.x1vvkbs.x126k92a';
 const caption = `${preferredCaption}, [data-ad-preview="message"], [data-ad-comet-preview="message"], div.html-div div[dir="auto"][style*="text-align"]`;
 const cardSelector = '[role="article"], [data-pagelet^="FeedUnit"]';
@@ -69,7 +69,7 @@ const isPostLink = (anchor) => {
     if (url.searchParams.has('comment_id') || url.searchParams.has('reply_comment_id')) return false;
     const path = url.pathname.replace(/\/+$/, '');
     if (/\/(?:reel|reels)\b/i.test(path)) return false;
-    return /\/(?:posts|permalink|videos?|photo|photos)\/[A-Za-z0-9_-]+$/i.test(path) ||
+    return /\/(?:posts|permalink|videos?|photo|photos|share\/(?:p|v))\/[A-Za-z0-9_-]+$/i.test(path) ||
       ['story_fbid', 'fbid', 'v'].some((key) => /^[A-Za-z0-9_-]+$/.test(url.searchParams.get(key) || ''));
   } catch {
     return false;
@@ -105,10 +105,9 @@ const findCard = (anchor) => {
   for (let node = anchor.parentElement; node && node !== scope && node !== document.body; node = node.parentElement) {
     if (isInsideComment(node)) continue;
     const hasCaption = !!node.querySelector(caption);
-    const hasMedia = !!node.querySelector('video, img, [data-ad-preview="media"]');
     const hasAction = !!node.querySelector('[role="toolbar"], [aria-label*="Like" i], [aria-label*="Thích" i], [aria-label*="Comment" i], [aria-label*="Bình luận" i], [aria-label*="Chia sẻ" i], [aria-label*="Share" i]');
     const hasTime = !!node.querySelector('time[datetime], [data-utime], abbr');
-    if ((hasCaption && (hasTime || hasAction)) || (hasMedia && hasAction && hasTime)) {
+    if ((hasCaption && (hasTime || hasAction)) || (hasTime && hasAction)) {
       return node;
     }
   }
@@ -261,7 +260,7 @@ def _collect_post(raw: dict):
                 params["id"] = owner_id
             break
     if post_id is None:
-        match = re.search(r"/(?:posts|permalink|videos?|photo|photos)/([A-Za-z0-9_-]+)$", path, re.IGNORECASE)
+        match = re.search(r"/(?:posts|permalink|videos?|photo|photos|share/(?:p|v))/([A-Za-z0-9_-]+)$", path, re.IGNORECASE)
         if not match:
             return None
         post_id = match[1]
@@ -341,24 +340,25 @@ def collect_visible_posts(
         return browser.execute_script(_READ_FEED) or []
 
     if not cursor.get("started"):
-        driver.set_page_load_timeout(15)
+        driver.set_page_load_timeout(20)
         try:
             driver.get(source_url)
         except TimeoutException:
             driver.execute_script("window.stop()")
         try:
-            batch = WebDriverWait(driver, 8).until(lambda browser: read_batch(browser) or stop.is_set())
+            batch = WebDriverWait(driver, 10).until(lambda browser: read_batch(browser) or stop.is_set())
         except TimeoutException:
-            cursor["done"] = True
-            return []
+            batch = read_batch(driver)
         if stop.is_set():
             return []
         cursor.update(
-            started=True, batch=batch, index=0, observed=set(), hovered=set(),
+            started=True, batch=batch or [], index=0, observed=set(), hovered=set(),
             previous_observed=0, idle_rounds=0,
         )
 
     posts = {}
+    MAX_IDLE_ROUNDS = 8
+
     while True:
         if stop.is_set():
             return []
@@ -387,25 +387,31 @@ def collect_visible_posts(
                     previous[field] = previous[field] or post[field]
             if limit is not None and len(posts) >= limit:
                 return list(posts.values())
-        cursor["idle_rounds"] = (
-            cursor["idle_rounds"] + 1
-            if len(cursor["observed"]) == cursor["previous_observed"] else 0
-        )
-        if cursor["idle_rounds"] >= 5:
+
+        has_new_posts = len(cursor["observed"]) > cursor["previous_observed"]
+        cursor["idle_rounds"] = 0 if has_new_posts else (cursor["idle_rounds"] + 1)
+        if cursor["idle_rounds"] >= MAX_IDLE_ROUNDS:
             cursor["done"] = True
             break
         cursor["previous_observed"] = len(cursor["observed"])
-        driver.execute_script("window.scrollBy(0, Math.max(window.innerHeight * 0.85, 600));")
-        if stop.wait(1.5):
+        driver.execute_script("window.scrollBy({ top: Math.max(window.innerHeight * 1.2, 1100), left: 0, behavior: 'smooth' });")
+        wait_time = 1.2 if has_new_posts else 2.0
+        if stop.wait(wait_time):
             return []
         cursor["batch"] = read_batch(driver)
         cursor["index"] = 0
     return list(posts.values())
 
 
-def scan_source_posts(raw_url: str, owner: str, stop: Event) -> list[dict]:
+def scan_source_posts(
+    raw_url: str,
+    owner: str,
+    stop: Event,
+    uids: list[str] | None = None,
+    account_count: int | None = None,
+) -> list[dict]:
     import logging
-    from sqlalchemy import func, or_
+    from sqlalchemy import func
     from selenium.common.exceptions import WebDriverException
 
     from core.browser import close_scoped_active_drivers, get_active_drivers, get_profile_lock, load_cookies, open_browser
@@ -415,15 +421,28 @@ def scan_source_posts(raw_url: str, owner: str, stop: Event) -> list[dict]:
 
     source_url = normalize_source_url(raw_url)
     with SessionLocal() as session:
-        logged_in = func.upper(Account.login_status) == "LOGGED_IN"
-        accounts = session.query(Account.uid, Account.proxy, Account.cookie).filter(
+        query = session.query(Account.uid, Account.proxy, Account.cookie).filter(
             Account.user_id == owner,
             func.upper(Account.status) == "LIVE",
-            or_(logged_in, Account.cookie.contains("c_user=")),
-        ).order_by(logged_in.desc(), Account.id).all()
+            func.upper(Account.login_status) == "LOGGED_IN",
+        )
+        if uids:
+            accounts = query.filter(Account.uid.in_(uids)).order_by(Account.id).all()
+        else:
+            accounts = query.order_by(Account.id).all()
+
+        if not accounts and uids:
+            accounts = session.query(Account.uid, Account.proxy, Account.cookie).filter(
+                Account.user_id == owner,
+                func.upper(Account.status) == "LIVE",
+                func.upper(Account.login_status) == "LOGGED_IN",
+            ).order_by(Account.id).all()
+
+        if account_count and account_count > 0 and len(accounts) > account_count:
+            accounts = accounts[:account_count]
 
     if not accounts:
-        raise SourceScanError("Cần một tài khoản Facebook đang hoạt động và có phiên đăng nhập trong mục Quản lý tài khoản.")
+        raise SourceScanError("Không tìm thấy tài khoản Facebook Live và đã đăng nhập trong mục Số lượng tài khoản sử dụng.")
     scope = f"{SCAN_SCOPE}:{owner}"
     logger = logging.getLogger(__name__)
     states = [
@@ -433,7 +452,6 @@ def scan_source_posts(raw_url: str, owner: str, stop: Event) -> list[dict]:
     ]
     collected = {}
     failures = []
-    successful_turns = 0
     busy_accounts = 0
 
     def close_state(state):
@@ -450,54 +468,41 @@ def scan_source_posts(raw_url: str, owner: str, stop: Event) -> list[dict]:
                 state["lock"] = None
 
     try:
-        while any(state["active"] for state in states):
-            made_progress = False
-            for state in states:
-                if not state["active"]:
-                    continue
-                if stop.is_set():
-                    return []
-                uid = state["uid"]
-                if state["driver"] is None:
-                    lock = get_profile_lock(uid, owner=owner)
-                    if not lock.acquire(blocking=False):
-                        busy_accounts += 1
-                        state["active"] = False
-                        continue
-                    state["lock"] = lock
-                    if get_active_drivers(uid, owner=owner):
-                        busy_accounts += 1
-                        close_state(state)
-                        continue
-                try:
-                    if state["driver"] is None:
-                        state["driver"] = open_browser(
-                            uid=uid, owner=owner, proxy=state["proxy"], scope=scope,
-                            headless=False, verify_egress=False, allow_direct_fallback=True,
-                        )
-                        if state["cookie"]:
-                            load_cookies(state["driver"], state["cookie"])
-                    batch = collect_visible_posts(
-                        state["driver"], source_url, stop, seen_ids=collected,
-                        limit=POSTS_PER_ACCOUNT_TURN if len(states) > 1 else None,
-                        cursor=state["cursor"],
-                    )
-                    successful_turns += 1
-                except (ProxyError, WebDriverException, RuntimeError) as exc:
-                    logger.warning("Quét bài viết thất bại với tài khoản %s: %s", uid, type(exc).__name__)
-                    failures.append(exc)
-                    close_state(state)
-                    continue
-                if stop.is_set():
-                    return []
+        for state in states:
+            if stop.is_set():
+                return []
+            uid = state["uid"]
+            lock = get_profile_lock(uid, owner=owner)
+            if not lock.acquire(blocking=False):
+                busy_accounts += 1
+                continue
+            state["lock"] = lock
+            if get_active_drivers(uid, owner=owner):
+                busy_accounts += 1
+                close_state(state)
+                continue
+            try:
+                state["driver"] = open_browser(
+                    uid=uid, owner=owner, proxy=state["proxy"], scope=scope,
+                    headless=False, verify_egress=False, allow_direct_fallback=True,
+                )
+                if state["cookie"]:
+                    load_cookies(state["driver"], state["cookie"])
+                batch = collect_visible_posts(
+                    state["driver"], source_url, stop, seen_ids=collected,
+                    cursor=state["cursor"],
+                )
                 for post in batch:
                     collected.setdefault(post["id"], post)
-                made_progress = made_progress or bool(batch)
-                if state["cursor"].get("done"):
-                    close_state(state)
-            if not made_progress:
-                break
-        if collected or successful_turns:
+                if collected:
+                    return list(collected.values())
+            except (ProxyError, WebDriverException, RuntimeError) as exc:
+                logger.warning("Quét bài viết thất bại với tài khoản %s: %s", uid, type(exc).__name__)
+                failures.append(exc)
+            finally:
+                close_state(state)
+
+        if collected:
             return list(collected.values())
         if failures:
             raise failures[0]

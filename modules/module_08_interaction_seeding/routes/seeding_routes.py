@@ -589,6 +589,8 @@ def list_seeding_targets(
 
 class PostSourceRequest(BaseModel):
     source_url: str = Field(min_length=1, max_length=2048)
+    uids: list[str] | None = None
+    account_count: int | None = None
 
 
 @router.post("/targets/scan-post-source")
@@ -612,7 +614,14 @@ async def scan_post_source(
     async with anyio.create_task_group() as tasks:
         tasks.start_soon(watch_disconnect)
         try:
-            posts = await anyio.to_thread.run_sync(scan_source_posts, payload.source_url, str(user["id"]), stop)
+            posts = await anyio.to_thread.run_sync(
+                scan_source_posts,
+                payload.source_url,
+                str(user["id"]),
+                stop,
+                payload.uids,
+                payload.account_count,
+            )
         except (WebDriverException, RuntimeError, ProxyError) as exc:
             failure = exc
         finally:

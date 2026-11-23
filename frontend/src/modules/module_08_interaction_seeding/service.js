@@ -1,4 +1,5 @@
 import api from "@/services/api";
+import { loadSavedUids } from "./accountSelection.mjs";
 
 // Tên hiển thị của từng loại seeding (dùng khi báo lô đang chạy ở trang khác)
 export const SEEDING_TYPE_LABELS = { POST: "Bài viết", PAGE: "Page", PROFILE: "Trang cá nhân" };
@@ -27,8 +28,21 @@ export const seedingApi = {
   },
 
   // A full feed scan can take longer than the default request timeout; closing the popup aborts it.
-  scanPostSource: (sourceUrl, signal) =>
-    api.post("/api/seeding/targets/scan-post-source", { source_url: sourceUrl }, { signal, timeout: 0 }),
+  scanPostSource: (sourceUrl, signal) => {
+    let uids = null;
+    try {
+      const saved = loadSavedUids("POST");
+      if (Array.isArray(saved) && saved.length > 0) {
+        uids = saved;
+      }
+    } catch {}
+    const body = { source_url: sourceUrl };
+    if (uids) {
+      body.uids = uids;
+      body.account_count = uids.length;
+    }
+    return api.post("/api/seeding/targets/scan-post-source", body, { signal, timeout: 0 });
+  },
 
   getSeedingTargets: async (targetType, includeCompleted = false) => {
     try {
