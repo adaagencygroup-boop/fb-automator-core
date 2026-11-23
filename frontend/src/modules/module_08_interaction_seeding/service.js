@@ -26,8 +26,9 @@ export const seedingApi = {
     return await api.post("/api/seeding/targets/validate", { target_type: targetType, urls });
   },
 
+  // A full feed scan can take longer than the default request timeout; closing the popup aborts it.
   scanPostSource: (sourceUrl, signal) =>
-    api.post("/api/seeding/targets/scan-post-source", { source_url: sourceUrl }, { signal, timeout: 120000 }),
+    api.post("/api/seeding/targets/scan-post-source", { source_url: sourceUrl }, { signal, timeout: 0 }),
 
   getSeedingTargets: async (targetType, includeCompleted = false) => {
     try {

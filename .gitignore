@@ -43,3 +43,4 @@ Thumbs.db
 *.py[cod]
 *.tsbuildinfo
 npm-debug.log*
+se-metadata.json

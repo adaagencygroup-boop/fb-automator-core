@@ -32,6 +32,7 @@ from selenium.common.exceptions import WebDriverException
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session
 
+from core.browser.proxy_bridge import ProxyError
 from modules.module_02_account_manager.automation.browser_manager import (
     close_driver_for_uid,
     close_scoped_active_drivers,
@@ -612,7 +613,7 @@ async def scan_post_source(
         tasks.start_soon(watch_disconnect)
         try:
             posts = await anyio.to_thread.run_sync(scan_source_posts, payload.source_url, str(user["id"]), stop)
-        except (WebDriverException, RuntimeError) as exc:
+        except (WebDriverException, RuntimeError, ProxyError) as exc:
             failure = exc
         finally:
             stop.set()
@@ -620,6 +621,12 @@ async def scan_post_source(
 
     if isinstance(failure, SourceScanError):
         raise HTTPException(failure.status_code, str(failure))
+    if isinstance(failure, ProxyError):
+        logger.warning("Không thể quét nguồn bài viết: proxy của tài khoản không hoạt động")
+        raise HTTPException(
+            502,
+            "Proxy của tài khoản Facebook không kết nối hoặc xác thực được. Hãy kiểm tra cấu hình proxy trong Quản lý tài khoản rồi thử lại.",
+        )
     if failure is not None:
         logger.warning("Không thể quét nguồn bài viết: %s", type(failure).__name__)
         raise HTTPException(502, "Không thể mở hoặc quét Facebook bằng Chrome. Vui lòng kiểm tra phiên đăng nhập và thử lại.")
