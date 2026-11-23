@@ -1,14 +1,17 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Bot, ListChecks, ScanSearch } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import CustomSelect from "@/components/ui/custom-select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { toast } from "@/lib/toast";
 import {
   LEAVE_CRITERIA_LABELS, LIST_LIMIT_MAX, LIST_LIMIT_MIN, MAX_TIME_VALUE, REACTION_EMOJI, REACTION_TYPES,
 } from "../constants";
+import FollowerPickerModal from "./FollowerPickerModal";
+import GroupPickerModal from "./GroupPickerModal";
 import { NumberInput, RangeInput, SectionCard } from "./parts";
 
 // ─── Danh sách link dán vào: khớp parse_fb_link / parse_link_list phía BE (routes.py) ───
@@ -79,6 +82,53 @@ export function parseLinkList(raw, kind) {
     else seen.add(link.key);
   });
   return { count: seen.size, duplicates, errors };
+}
+
+/** Nhóm / người đang có trong ô danh sách link: Map key -> link (tick sẵn khi mở hộp Lấy từ danh sách quét) */
+export function linksInList(raw, kind) {
+  const out = new Map();
+  String(raw || "").split(/\r?\n/).forEach((value) => {
+    const line = value.trim();
+    const link = parseFbLink(line);
+    if (link?.kind === kind && !out.has(link.key)) out.set(link.key, line);
+  });
+  return out;
+}
+
+/**
+ * Áp lựa chọn của hộp Lấy từ danh sách quét vào ô danh sách (so theo nhóm / người, không theo chữ):
+ * - bỏ dòng có nhóm / người đã bị bỏ tick; dòng khác (dán tay, sai, khác loại) giữ nguyên thứ tự
+ * - thêm vào cuối nhóm / người mới tick (link chưa có scheme thì thêm https://)
+ * picked: Map key -> url (toàn bộ lựa chọn sau khi xác nhận). Trả { value, added, removed }.
+ */
+export function applyPickedLinks(raw, picked, kind) {
+  const kept = [];
+  const seen = new Set();
+  let removed = 0;
+  String(raw || "").split(/\r?\n/).forEach((value) => {
+    const line = value.trim();
+    if (!line) return;
+    const link = parseFbLink(line);
+    if (link?.kind === kind) {
+      if (!picked.has(link.key)) {
+        removed += 1;
+        return;
+      }
+      seen.add(link.key);
+    }
+    kept.push(line);
+  });
+  let added = 0;
+  picked.forEach((value, key) => {
+    if (seen.has(key)) return;
+    let url = String(value || "").trim();
+    if (url && !/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = `https://${url}`;
+    if (parseFbLink(url)?.key !== key) return;
+    seen.add(key);
+    kept.push(url);
+    added += 1;
+  });
+  return { value: kept.join("\n"), added, removed };
 }
 
 /** Lỗi chặn Kích hoạt của ô danh sách link (null = hợp lệ) */
@@ -200,7 +250,9 @@ const OWN_CLICK = 'input, textarea, select, button, a, label, [role="checkbox"],
 /** Bấm vào chỗ trống bất kỳ trong khối thì bật / tắt khối đó */
 function toggleOnBoxClick(checked, onCheck, disabled) {
   return (e) => {
-    if (disabled || e.target.closest(OWN_CLICK)) return;
+    // Hộp chọn nổi (portal, vd Lấy từ danh sách quét) nằm ngoài khối trên trang nhưng sự kiện React vẫn đi lên khối:
+    // bỏ qua, không thì bấm trong hộp là bật / tắt khối phía sau
+    if (disabled || !e.currentTarget.contains(e.target) || e.target.closest(OWN_CLICK)) return;
     onCheck(!checked);
   };
 }
@@ -340,6 +392,18 @@ function SplitToggle({ checked, onChange, disabled, label, hint }) {
 function LinkListPanel({ kind, value, onChange, limit, onLimit, delay, disabled, split }) {
   const parsed = useMemo(() => parseLinkList(value, kind), [value, kind]);
   const isGroup = kind === "group";
+  const [picking, setPicking] = useState(false);
+  // Lấy từ danh sách quét: nhóm từ Module 10 (Quét nhóm); người từ followers Fanpage Module 11 (Quét page) + thành viên nhóm Module 10
+  // Mở hộp: tick sẵn nhóm / người đang có trong ô; xác nhận: thêm cái mới tick, bỏ cái bị bỏ tick
+  const applyPicked = (picked) => {
+    setPicking(false);
+    const res = applyPickedLinks(value, picked, kind);
+    if (!res.added && !res.removed) return;
+    onChange(res.value);
+    const unit = isGroup ? "nhóm" : "người";
+    const parts = [res.added && `thêm ${res.added} ${unit}`, res.removed && `bỏ ${res.removed} ${unit}`].filter(Boolean);
+    toast.success(`Đã ${parts.join(", ")} trong danh sách`, "LẤY TỪ DANH SÁCH QUÉT");
+  };
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
       <div className="space-y-1.5">
@@ -361,12 +425,13 @@ function LinkListPanel({ kind, value, onChange, limit, onLimit, delay, disabled,
           </span>
           <button
             type="button"
-            disabled
-            title="Sắp có: lấy danh sách từ chức năng quét"
-            className="inline-flex cursor-not-allowed items-center gap-1 rounded-md border border-dashed border-slate-300 px-2 py-1 font-semibold text-slate-400"
+            disabled={disabled}
+            onClick={() => setPicking(true)}
+            title={isGroup ? "Chọn nhóm đã quét ở Quét nhóm" : "Chọn người theo dõi Fanpage (Quét page) hoặc thành viên nhóm (Quét nhóm) đã quét"}
+            className="inline-flex items-center gap-1 rounded-md border border-dashed border-primary/40 px-2 py-1 font-semibold text-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
           >
             <ScanSearch className="h-3.5 w-3.5" />
-            Lấy từ danh sách quét (Sắp có)
+            Lấy từ danh sách quét
           </button>
         </div>
         {parsed.errors.length > 0 && (
@@ -377,6 +442,12 @@ function LinkListPanel({ kind, value, onChange, limit, onLimit, delay, disabled,
             {parsed.errors.length > LINK_ERRORS_SHOWN && <li>và {parsed.errors.length - LINK_ERRORS_SHOWN} dòng sai khác</li>}
           </ul>
         )}
+        {picking &&
+          (isGroup ? (
+            <GroupPickerModal initial={linksInList(value, kind)} onClose={() => setPicking(false)} onConfirm={applyPicked} />
+          ) : (
+            <FollowerPickerModal initial={linksInList(value, kind)} onClose={() => setPicking(false)} onConfirm={applyPicked} />
+          ))}
       </div>
       <div className="flex flex-col gap-3 text-xs text-slate-500">
         <span className="flex items-center gap-2">
