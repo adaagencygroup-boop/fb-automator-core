@@ -99,6 +99,15 @@ def _init_remaining_schemas():
     init_database()
   with startup_step("Module 02 Account Manager"):
     initialize_accounts()
+  with startup_step("Module 08 Seeding Post Fetch"):
+    from modules.module_08_interaction_seeding.automation.post_fetcher import (
+      init_post_fetch_schema,
+    )
+    try:
+      init_post_fetch_schema()
+    except Exception as exc:
+      # Không chặn khởi động: API lấy bài sẽ tạo bảng lại ở lần gọi đầu
+      print(f"[Module 08] Bỏ qua tạo bảng lấy bài lúc khởi động: {exc}", flush=True)
   with startup_step("Module 04 Created Pages"):
     from modules.module_04_page_creator.database import (
       ensure_schema as ensure_creator_schema,

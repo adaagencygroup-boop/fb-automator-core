@@ -90,6 +90,8 @@ const NEVER_CACHE = [
   /\/api\/group-scan\/history/,         // module 10 — lịch sử (trạng thái Chạy tiếp thay đổi liên tục)
   /\/seeding\/campaigns\/[^/?]+(\?|$)/, // getSeedingCampaignDetail (module 08)
   /\/scan\/sessions\/[^/?]+(\?|$)/,     // getScanSessionDetail (module 10)
+  /\/api\/seeding\/post-fetch\//,       // module 08 — lấy bài từ page: tiến độ + danh sách bài đổi liên tục khi đang lấy
+  /\/api\/seeding\/campaigns\/(active|[^/?]+\/(batch-progress|detail))(\?|$)/, // module 08 — lô đang chạy / tiến độ (poll)
   /\/api\/v1\/auth\//,                  // đăng nhập, refresh, /me — danh tính không được cache
   /\/api\/v1\/admin\//,
 ];

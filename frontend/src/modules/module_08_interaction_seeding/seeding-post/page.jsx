@@ -5,14 +5,17 @@ import { normalizeTargetUrl } from "@/modules/module_08_interaction_seeding/vali
 import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
 import { toast } from "@/components/ui/toast";
 import { FileText } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import PostAccountConfig from "./_components/PostAccountConfig";
-import PostActionBar from "./_components/PostActionBar";
 import PostCommentsManager from "./_components/PostCommentsManager";
+import PostPlanPreviewModal from "./_components/PostPlanPreviewModal";
 import PostProgressTerminal from "./_components/PostProgressTerminal";
 import PostReactionSelector from "./_components/PostReactionSelector";
-import PostSummaryCards from "./_components/PostSummaryCards";
+import PostRunProgress from "./_components/PostRunProgress";
+import PostRunSidebar from "./_components/PostRunSidebar";
 import PostTargetSection from "./_components/PostTargetSection";
+import { planTotals } from "./runPlan.mjs";
+import { totalVariants } from "./spintax.mjs";
 import AccountSelectModal from "../_components/AccountSelectModal";
 import { loadSavedUids, resolveInitialUids, saveSelectedUids } from "../accountSelection.mjs";
 
@@ -42,6 +45,25 @@ export default function SeedingPostPage() {
 
   const [liveAccountsCount, setLiveAccountsCount] = useState(0);
   const [totalAccountsCount, setTotalAccountsCount] = useState(0);
+  const [liveAccountList, setLiveAccountList] = useState([]); // nick Live + đã đăng nhập (chọn nick lấy bài)
+  const [fetchRunning, setFetchRunning] = useState(false); // đang lấy bài từ page (dùng chung Chrome của nick)
+  const handleFetchRunningChange = useCallback((running) => setFetchRunning(!!running), []);
+
+  // Tốc độ & thời điểm chạy
+  const [threads, setThreads] = useState(2);
+  const [startMode, setStartMode] = useState("now");
+  const [startAt, setStartAt] = useState("");
+  const [spreadEnabled, setSpreadEnabled] = useState(false);
+  const [spreadHours, setSpreadHours] = useState(3);
+
+  // Lô đang chạy: id đầu lô (tiến độ / tạm dừng / thử lại), tạm dừng, hẹn giờ
+  const [batchId, setBatchId] = useState(null);
+  const [paused, setPaused] = useState(false);
+  const [pauseBusy, setPauseBusy] = useState(false);
+  const [scheduledAt, setScheduledAt] = useState(null);
+  const [progress, setProgress] = useState(null);
+  const [retrying, setRetrying] = useState(false);
+  const [preview, setPreview] = useState({ open: false, loading: false, plan: null, error: null });
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "instant" });
@@ -58,6 +80,7 @@ export default function SeedingPostPage() {
           );
           const validCount = validLiveLoggedIn.length;
           setLiveAccountsCount(validCount);
+          setLiveAccountList(validLiveLoggedIn);
           // Giữ đúng tài khoản đã chọn lần trước (bỏ tài khoản không còn khả dụng)
           const { uids: initialUids, restored, dropped } = resolveInitialUids(
             validLiveLoggedIn.map((a) => a.uid),
@@ -125,6 +148,9 @@ export default function SeedingPostPage() {
           if (res?.campaign_id && res.campaign_type === "POST") {
             setOtherRunning(null);
             setCurrentCampaignId(res.campaign_id);
+            setBatchId(res.batch_id || res.campaign_id);
+            setPaused(!!res.paused);
+            setScheduledAt(res.scheduled_at || null);
             setIsRunning(true);
           } else if (res?.campaign_id) {
             const typeLabel = SEEDING_TYPE_LABELS[res.campaign_type] || res.campaign_type;
@@ -181,6 +207,31 @@ export default function SeedingPostPage() {
     return () => clearInterval(interval);
   }, [isRunning, currentCampaignId]);
 
+  // Tiến độ cả lô (từng bài × từng loại): hỏi mỗi 3 giây khi đang chạy; chạy xong thì lấy 1 lần cuối để xem / thử lại lỗi
+  useEffect(() => {
+    if (!batchId) return undefined;
+    let cancelled = false;
+    const load = () =>
+      seedingApi
+        .getBatchProgress(batchId)
+        .then((res) => {
+          if (cancelled || !res) return;
+          setProgress(res);
+          setPaused(!!res.paused);
+          setScheduledAt(res.scheduled_at || null);
+        })
+        .catch(() => {});
+    load();
+    if (!isRunning) return () => {
+      cancelled = true;
+    };
+    const timer = setInterval(load, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [batchId, isRunning]);
+
   // Load saved targets and comments from database on mount
   useEffect(() => {
     seedingApi
@@ -203,6 +254,13 @@ export default function SeedingPostPage() {
         }
       })
       .catch(() => {});
+  }, []);
+
+  // Tải lại danh sách bài sẽ seeding (sau khi thêm bài lấy từ page)
+  const reloadTargets = useCallback(async () => {
+    const res = await seedingApi.getSeedingTargets("POST");
+    setTargets(res?.targets || []);
+    setSuccessMessage(res?.targets?.length ? `Danh sách có ${res.targets.length} bài viết` : null);
   }, []);
 
   const handleToggleReaction = (rId) => {
@@ -333,11 +391,126 @@ export default function SeedingPostPage() {
     setComments([]);
   };
 
+  // Số lượt mỗi bài (cùng cách chia với backend) + số câu bình luận khác nhau (spintax)
+  const totals = useMemo(
+    () => planTotals({ accountCount, targetCount: targets.length, doLike, doComment, doShare }),
+    [accountCount, targets.length, doLike, doComment, doShare],
+  );
+  const commentVariants = useMemo(() => totalVariants(comments), [comments]);
+
+  /** Payload chung cho Bắt đầu và Xem trước kế hoạch. */
+  const buildCampaignPayload = () => {
+    const actions = [];
+    if (doLike) actions.push("REACT");
+    if (doComment) actions.push("COMMENT");
+    if (doShare) actions.push("SHARE");
+    return {
+      name: `Seeding Post - ${new Date().toLocaleTimeString("vi-VN")}`,
+      campaign_type: "POST",
+      actions,
+      reactions: doLike ? selectedReactions : [],
+      comments: doComment ? comments : [],
+      // Backend tự lấy các bài đang chờ trong danh sách (có thể hàng nghìn bài lấy từ page) — không gửi cả danh sách
+      use_saved_targets: true,
+      uids: selectedUids.length > 0 ? selectedUids : undefined,
+      account_count: selectedUids.length > 0 ? selectedUids.length : accountCount,
+      threads: 1,
+      chrome_threads: threads,
+      delay_seconds_min: delayMin,
+      delay_seconds_max: delayMax,
+      spread_hours: spreadEnabled ? spreadHours : null,
+    };
+  };
+
+  const handlePreview = async () => {
+    setPreview({ open: true, loading: true, plan: null, error: null });
+    try {
+      const plan = await seedingApi.previewSeedingPlan(buildCampaignPayload());
+      setPreview({ open: true, loading: false, plan, error: null });
+    } catch (e) {
+      setPreview({ open: true, loading: false, plan: null, error: e?.message || "Không tính được kế hoạch." });
+    }
+  };
+
+  const handlePause = async () => {
+    if (!batchId) return;
+    setPauseBusy(true);
+    try {
+      await seedingApi.pauseSeedingCampaign(batchId);
+      setPaused(true);
+      addLog("Đã tạm dừng — các nick làm xong tác vụ đang dở rồi chờ.", "warn");
+    } catch (e) {
+      toast.error(e?.message || "Không tạm dừng được.", "LỖI");
+    } finally {
+      setPauseBusy(false);
+    }
+  };
+
+  const handleResume = async () => {
+    if (!batchId) return;
+    setPauseBusy(true);
+    try {
+      await seedingApi.resumeSeedingCampaign(batchId);
+      setPaused(false);
+      addLog("Tiếp tục seeding.", "info");
+    } catch (e) {
+      toast.error(e?.message || "Không tiếp tục được.", "LỖI");
+    } finally {
+      setPauseBusy(false);
+    }
+  };
+
+  const handleRetry = async () => {
+    if (!batchId || retrying) return;
+    setRetrying(true);
+    try {
+      const res = await seedingApi.retryFailedTasks(batchId);
+      addLog(res?.message || "Đã tạo lô thử lại lượt lỗi.", "info");
+      setCurrentCampaignId(res.id);
+      setBatchId(res.id);
+      setProgress(null);
+      setPaused(false);
+      setIsRunning(true);
+      await seedingApi.startSeedingCampaign(res.id);
+      toast.success(res?.message || "Đang thử lại các lượt lỗi.", "THỬ LẠI");
+    } catch (e) {
+      setIsRunning(false);
+      toast.error(e?.message || "Không thử lại được.", "LỖI");
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  // Mẫu cấu hình: lưu / áp dụng (không gồm bài viết, tài khoản, câu bình luận)
+  const getTemplateConfig = () => ({
+    doLike, doComment, doShare, selectedReactions,
+    delayMin, delayMax, threads, spreadEnabled, spreadHours,
+  });
+  const applyTemplate = (cfg = {}) => {
+    if (typeof cfg.doLike === "boolean") setDoLike(cfg.doLike);
+    if (typeof cfg.doComment === "boolean") setDoComment(cfg.doComment);
+    if (typeof cfg.doShare === "boolean") setDoShare(cfg.doShare);
+    if (Array.isArray(cfg.selectedReactions)) setSelectedReactions(cfg.selectedReactions);
+    if (cfg.delayMin) setDelayMin(cfg.delayMin);
+    if (cfg.delayMax) setDelayMax(cfg.delayMax);
+    if (cfg.threads) setThreads(cfg.threads);
+    if (typeof cfg.spreadEnabled === "boolean") setSpreadEnabled(cfg.spreadEnabled);
+    if (cfg.spreadHours) setSpreadHours(cfg.spreadHours);
+  };
+
   const handleStart = async () => {
     if (otherRunning) {
       toast.warning(
         `Đang chạy seeding ${otherRunning.label}. Hãy dừng lô đó trước khi bắt đầu seeding mới.`,
         "ĐANG CÓ SEEDING CHẠY",
+      );
+      return;
+    }
+
+    if (fetchRunning) {
+      toast.warning(
+        "Đang lấy bài viết từ page. Dừng lấy bài trước khi chạy seeding (dùng chung Chrome của nick).",
+        "ĐANG LẤY BÀI",
       );
       return;
     }
@@ -397,45 +570,39 @@ export default function SeedingPostPage() {
       return;
     }
 
+    const scheduled = startMode === "schedule";
+    if (scheduled && (!startAt || new Date(startAt).getTime() <= Date.now())) {
+      toast.warning("Chọn giờ hẹn chạy ở tương lai.", "CHƯA CHỌN GIỜ HẸN");
+      return;
+    }
+
     try {
       setIsRunning(true);
+      setProgress(null);
+      setPaused(false);
       toast.info("Đang khởi tạo chiến dịch Seeding Bài viết...", "BẮT ĐẦU");
       addLog("Khởi tạo chiến dịch Seeding Bài viết trên máy thật...", "info");
 
-      const actions = [];
-      if (doLike) actions.push("REACT");
-      if (doComment) actions.push("COMMENT");
-      if (doShare) actions.push("SHARE");
-
-      const campaign = await seedingApi.createSeedingCampaign({
-        name: `Seeding Post - ${new Date().toLocaleTimeString("vi-VN")}`,
-        campaign_type: "POST",
-        actions,
-        reactions: doLike ? selectedReactions : [],
-        comments: doComment ? comments : [],
-        targets: targets.map((t) => ({
-          url: t.url,
-          display_name: t.display_name,
-        })),
-        uids: selectedUids.length > 0 ? selectedUids : undefined,
-        account_count: selectedUids.length > 0 ? selectedUids.length : accountCount,
-        threads: 1,
-        delay_seconds_min: delayMin,
-        delay_seconds_max: delayMax,
-      });
+      const campaign = await seedingApi.createSeedingCampaign(buildCampaignPayload());
 
       setCurrentCampaignId(campaign.id);
+      setBatchId(campaign.id);
       const totalPosts = campaign.total_targets || targets.length;
       addLog(
-        `Đã khởi tạo ${totalPosts} chiến dịch riêng biệt (${campaign.total_tasks} tác vụ). Bắt đầu thực thi...`,
+        `Đã khởi tạo ${totalPosts} chiến dịch riêng biệt (${campaign.total_tasks} tác vụ, ${campaign.chrome_threads || threads} luồng Chrome` +
+          (spreadEnabled ? `, nghỉ ${campaign.delay_seconds_min}–${campaign.delay_seconds_max}s để rải đều ${spreadHours} giờ` : "") +
+          ").",
         "success",
       );
-      toast.success(
-        `Chiến dịch đã được khởi chạy với ${totalPosts} bài viết!`,
-        "KHỞI CHẠY THÀNH CÔNG"
-      );
 
-      await seedingApi.startSeedingCampaign(campaign.id);
+      const res = await seedingApi.startSeedingCampaign(campaign.id, scheduled ? startAt : undefined);
+      setScheduledAt(res?.scheduled_at || null);
+      toast.success(
+        res?.scheduled_at
+          ? `${res.message} — ${totalPosts} bài viết.`
+          : `Chiến dịch đã được khởi chạy với ${totalPosts} bài viết!`,
+        res?.scheduled_at ? "ĐÃ HẸN GIỜ" : "KHỞI CHẠY THÀNH CÔNG",
+      );
     } catch (e) {
       setIsRunning(false);
       addLog(`Lỗi khởi chạy seeding: ${e.message}`, "error");
@@ -476,6 +643,8 @@ export default function SeedingPostPage() {
     } finally {
       setIsStopping(false);
       setIsRunning(false);
+      setPaused(false);
+      setScheduledAt(null);
     }
   };
 
@@ -499,6 +668,9 @@ export default function SeedingPostPage() {
         </div>
       </div>
 
+      <div className="flex flex-wrap items-start gap-6">
+      {/* Cột trái: các bước cấu hình */}
+      <div className="flex-[999_1_560px] min-w-0 space-y-6">
       {/* Step 1: Input Targets */}
       <PostTargetSection
         targets={targets}
@@ -507,6 +679,10 @@ export default function SeedingPostPage() {
         onClearTargets={handleClearTargets}
         successMessage={successMessage}
         isRunning={isRunning}
+        accounts={liveAccountList}
+        defaultAccountUid={selectedUids[0] || ""}
+        onTargetsReload={reloadTargets}
+        onFetchRunningChange={handleFetchRunningChange}
       />
 
       {/* Step 2: Reactions & Interactions */}
@@ -519,6 +695,7 @@ export default function SeedingPostPage() {
         onDoShareChange={setDoShare}
         selectedReactions={selectedReactions}
         onToggleReaction={handleToggleReaction}
+        disabled={isRunning}
       />
 
       {/* Step 3: Comments Pool */}
@@ -530,6 +707,7 @@ export default function SeedingPostPage() {
           onRemoveComment={handleRemoveComment}
           onClearAllComments={handleClearAllComments}
           isRunning={isRunning}
+          commentPerPost={totals.comment}
         />
       )}
 
@@ -556,38 +734,76 @@ export default function SeedingPostPage() {
         }}
         selectedUids={selectedUids}
         isRunning={isRunning || isStopping}
+        threads={threads}
+        onThreadsChange={setThreads}
+        startMode={startMode}
+        onStartModeChange={setStartMode}
+        startAt={startAt}
+        onStartAtChange={setStartAt}
+        spreadEnabled={spreadEnabled}
+        onSpreadEnabledChange={setSpreadEnabled}
+        spreadHours={spreadHours}
+        onSpreadHoursChange={setSpreadHours}
       />
 
-      {/* Summary Cards */}
-      <PostSummaryCards
-        targets={targets}
-        accountCount={accountCount}
-        doLike={doLike}
-        doComment={doComment}
-        doShare={doShare}
-        selectedReactions={selectedReactions}
-        minDelay={delayMin}
-        maxDelay={delayMax}
-      />
+      {/* Tiến độ lô: từng bài × từng loại, thử lại lượt lỗi khi chạy xong */}
+      {progress && (
+        <PostRunProgress progress={progress} isRunning={isRunning} onRetry={handleRetry} retrying={retrying} />
+      )}
 
-      {/* Progress Terminal */}
-      <PostProgressTerminal logs={combinedLogs} isRunning={isRunning} />
+      {/* Log: chỉ hiện khi đang chạy hoặc đã có log */}
+      {(isRunning || combinedLogs.length > 0) && (
+        <PostProgressTerminal logs={combinedLogs} isRunning={isRunning} />
+      )}
+      </div>
 
-      {/* Bottom Action Bar */}
-      <PostActionBar
-        isRunning={isRunning}
-        isStopping={isStopping}
-        onStart={handleStart}
-        onStop={handleStop}
-        disabled={
-          targets.length === 0 ||
-          !delayMin ||
-          !delayMax ||
-          Number(delayMax) <= Number(delayMin) ||
-          Number(delayMax) > 3600
-        }
-        otherRunning={otherRunning}
-        onStopOther={handleStopOther}
+      {/* Cột phải: tóm tắt + kiểm tra + Bắt đầu / Dừng (dính khi cuộn) */}
+      <aside
+        aria-label="Tóm tắt và chạy seeding"
+        className="flex-[1_1_320px] min-w-0 lg:sticky lg:top-2 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pr-1"
+      >
+        <PostRunSidebar
+          targets={targets}
+          accountCount={accountCount}
+          liveAccounts={liveAccountsCount}
+          doLike={doLike}
+          doComment={doComment}
+          doShare={doShare}
+          selectedReactions={selectedReactions}
+          commentCount={comments.length}
+          commentVariants={commentVariants}
+          threads={threads}
+          spreadEnabled={spreadEnabled}
+          spreadHours={spreadHours}
+          startMode={startMode}
+          startAt={startAt}
+          delayMin={delayMin}
+          delayMax={delayMax}
+          isRunning={isRunning}
+          isStopping={isStopping}
+          paused={paused}
+          scheduledAt={scheduledAt}
+          onStart={handleStart}
+          onStop={handleStop}
+          onPause={handlePause}
+          onResume={handleResume}
+          pauseBusy={pauseBusy}
+          onPreview={handlePreview}
+          otherRunning={otherRunning}
+          onStopOther={handleStopOther}
+          fetchRunning={fetchRunning}
+          getTemplateConfig={getTemplateConfig}
+          onApplyTemplate={applyTemplate}
+        />
+      </aside>
+      </div>
+
+      <PostPlanPreviewModal
+        open={preview.open}
+        loading={preview.loading}
+        plan={preview.plan}
+        error={preview.error}
+        onClose={() => setPreview((p) => ({ ...p, open: false }))}
       />
 
       {/* Popup chọn tài khoản */}

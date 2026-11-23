@@ -44,10 +44,14 @@ logger = logging.getLogger(__name__)
 DEFAULT_PAGES_PER_ACC_DAY = 50
 
 _EXTRACT_POSTS_JS = r"""
+// arguments[0] = selector bài cần đọc (mặc định: mọi bài trên trang), arguments[1] = tối đa số bài trả về (mặc định 40).
+// Có selector riêng thì không dò ngược sang mọi <div> (tránh đọc lại bài đã xử lý).
+const customSel = arguments[0] || '';
+const LIMIT = arguments[1] || 40;
 const out = [];
 const seen = new Set();
-const articles = Array.from(document.querySelectorAll('[role="article"], div[data-pagelet*="FeedUnit"]'));
-const nodes = articles.length ? articles : Array.from(document.querySelectorAll('div')).filter(d => {
+const articles = Array.from(document.querySelectorAll(customSel || '[role="article"], div[data-pagelet*="FeedUnit"]'));
+const nodes = (articles.length || customSel) ? articles : Array.from(document.querySelectorAll('div')).filter(d => {
   const a = d.querySelector('a[href*="/posts/"], a[href*="/permalink"], a[href*="/videos/"], a[href*="/reel/"], a[href*="story_fbid"]');
   return !!a;
 }).slice(0, 40);
@@ -277,7 +281,7 @@ for (const node of nodes) {
     share_text: shareText,
     is_pinned: /đã ghim|pinned/i.test(allText.slice(0, 200)),
   });
-  if (out.length >= 40) break;
+  if (out.length >= LIMIT) break;
 }
 return out;
 """
@@ -494,10 +498,19 @@ def expand_see_more(driver, scope_selector: str = '[role="article"]') -> int:
     return clicked
 
 
-def extract_posts_batch(driver, exclude_names: Tuple[str, ...] = ()) -> List[Dict[str, Any]]:
-    expand_see_more(driver)
+def extract_posts_batch(
+    driver,
+    exclude_names: Tuple[str, ...] = (),
+    selector: Optional[str] = None,
+    limit: int = 40,
+) -> List[Dict[str, Any]]:
+    """selector: chỉ đọc các bài khớp (mặc định mọi bài trên trang); limit: tối đa số bài trả về."""
+    if selector:
+        expand_see_more(driver, selector)
+    else:
+        expand_see_more(driver)
     try:
-        raw = driver.execute_script(_EXTRACT_POSTS_JS) or []
+        raw = driver.execute_script(_EXTRACT_POSTS_JS, selector or "", int(limit or 40)) or []
     except Exception as exc:
         logger.debug(f"[POST_SCAN] extract: {exc}")
         return []

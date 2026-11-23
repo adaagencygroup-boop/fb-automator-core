@@ -1,11 +1,20 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
-import { FileSpreadsheet, RotateCcw, CheckCircle2, Trash2, ExternalLink, Copy, AlertCircle } from "lucide-react";
+import { FileSpreadsheet, RotateCcw, CheckCircle2, Trash2, ExternalLink, Copy, AlertCircle, Link2, Newspaper } from "lucide-react";
 import ConfirmDialog from "@/components/ui/confirm-dialog";
+import Pagination from "@/components/ui/pagination";
 import { toast } from "@/components/ui/toast";
 import ExcelImportModal from "../../_components/ExcelImportModal";
 import { seedingApi } from "../../service";
+import PostSourceFetcher from "./PostSourceFetcher";
+
+const SOURCE_TABS = [
+  { id: "paste", label: "Nhập link bài viết", Icon: Link2 },
+  { id: "excel", label: "Import từ file (Excel)", Icon: FileSpreadsheet },
+  { id: "fetch", label: "Lấy bài viết từ page / trang cá nhân", Icon: Newspaper },
+];
+const TARGETS_PAGE_SIZE = 10;
 import {
   normalizeTargetUrl,
   parseInputTargetsStats,
@@ -22,10 +31,24 @@ export default function PostTargetSection({
   onClearTargets,
   successMessage,
   isRunning = false,
+  accounts = [],
+  defaultAccountUid = "",
+  onTargetsReload,
+  onFetchRunningChange,
 }) {
+  const [mode, setMode] = useState("paste");
   const [textInput, setTextInput] = useState("");
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
   const [dbHistoryTargets, setDbHistoryTargets] = useState([]);
+  const [targetsPage, setTargetsPage] = useState(1);
+  const [targetsVersion, setTargetsVersion] = useState(0);
+
+  // Danh sách thay đổi → làm mới nhãn "Đã thêm" ở tab lấy bài; giữ trang hợp lệ
+  useEffect(() => {
+    setTargetsVersion((v) => v + 1);
+    const pages = Math.max(1, Math.ceil((targets?.length || 0) / TARGETS_PAGE_SIZE));
+    setTargetsPage((p) => Math.min(p, pages));
+  }, [targets]);
 
   // Tải danh sách toàn bộ mục tiêu trong DB (bao gồm cả các link đã chạy) để kiểm tra trùng lặp thời gian thực
   useEffect(() => {
@@ -277,44 +300,82 @@ export default function PostTargetSection({
     }
   };
 
-  const currentCount = textInput
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0).length;
+  const targetsTotalPages = Math.max(1, Math.ceil(targets.length / TARGETS_PAGE_SIZE));
+  const targetsOffset = (targetsPage - 1) * TARGETS_PAGE_SIZE;
+  const visibleTargets = targets.slice(targetsOffset, targetsOffset + TARGETS_PAGE_SIZE);
 
   return (
     <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm p-6 space-y-5">
       {/* Step Header */}
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <span className="w-6 h-6 rounded-full bg-rose-500 text-white text-xs font-bold flex items-center justify-center shrink-0">
-            1
-          </span>
-          <h2 className="text-base font-bold text-gray-900">
-            Thêm bài viết cần seeding
-          </h2>
-        </div>
+      <div className="flex items-center gap-3">
+        <span className="w-6 h-6 rounded-full bg-rose-500 text-white text-xs font-bold flex items-center justify-center shrink-0">
+          1
+        </span>
+        <h2 className="text-base font-bold text-gray-900">
+          Thêm bài viết cần seeding
+        </h2>
+      </div>
 
-        <button
-          type="button"
-          onClick={() => {
-            if (isRunning) return;
-            setIsExcelModalOpen(true);
-          }}
+      {/* Cách thêm bài */}
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Cách thêm bài viết">
+        {SOURCE_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            aria-pressed={mode === tab.id}
+            onClick={() => setMode(tab.id)}
+            className={`flex items-center gap-2 h-9 px-3.5 rounded-xl text-xs font-semibold border transition-all ${
+              mode === tab.id
+                ? "bg-[#2563EB] border-[#2563EB] text-white shadow-sm shadow-blue-500/30"
+                : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
+            }`}
+          >
+            <tab.Icon className="w-3.5 h-3.5" />
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {mode === "excel" && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-emerald-300 bg-emerald-50/40 p-4">
+          <div className="text-xs text-gray-700">
+            <div className="font-semibold text-gray-900">Import danh sách link bài viết từ file Excel</div>
+            <div className="mt-0.5 text-gray-500">Link trùng hoặc không hợp lệ sẽ được lọc trước khi thêm.</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (isRunning) return;
+              setIsExcelModalOpen(true);
+            }}
+            disabled={isRunning}
+            title={isRunning ? "Đang chạy seeding, không thể import từ file" : "Import danh sách link từ tệp Excel"}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all shadow-sm shrink-0 ${
+              isRunning
+                ? "bg-gray-100 text-gray-400 border-gray-200 opacity-60 cursor-not-allowed select-none"
+                : "bg-emerald-50 hover:bg-emerald-100/80 text-emerald-700 border-emerald-200/70 active:scale-95 cursor-pointer"
+            }`}
+          >
+            <FileSpreadsheet className={`w-3.5 h-3.5 ${isRunning ? "text-gray-400" : "text-emerald-600"}`} />
+            Chọn file Excel
+          </button>
+        </div>
+      )}
+
+      {/* Giữ component luôn mount (ẩn khi đổi tab) để không mất lượt lấy bài đang theo dõi */}
+      <div className={mode === "fetch" ? "" : "hidden"}>
+        <PostSourceFetcher
+          accounts={accounts}
+          defaultAccountUid={defaultAccountUid}
           disabled={isRunning}
-          title={isRunning ? "Đang chạy seeding, không thể import từ file" : "Import danh sách link từ tệp Excel"}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all shadow-sm shrink-0 ${
-            isRunning
-              ? "bg-gray-100 text-gray-400 border-gray-200 opacity-60 cursor-not-allowed select-none"
-              : "bg-emerald-50 hover:bg-emerald-100/80 text-emerald-700 border-emerald-200/70 active:scale-95 cursor-pointer"
-          }`}
-        >
-          <FileSpreadsheet className={`w-3.5 h-3.5 ${isRunning ? "text-gray-400" : "text-emerald-600"}`} />
-          Import từ file (Excel)
-        </button>
+          targetsVersion={targetsVersion}
+          onTargetsAdded={onTargetsReload}
+          onFetchRunningChange={onFetchRunningChange}
+        />
       </div>
 
       {/* Input Textarea Area */}
+      {mode === "paste" && (
       <div className="space-y-3">
         <textarea
           rows={4}
@@ -432,14 +493,15 @@ export default function PostTargetSection({
           </div>
         </div>
       </div>
+      )}
 
       {/* Targets Table */}
       {targets.length > 0 && (
-        <div className="space-y-2 mt-2">
+        <div className="space-y-2 mt-2 rounded-xl border border-blue-200 bg-blue-50/30 p-3">
           <div className="flex items-center justify-between px-1">
             <span className="text-xs font-bold text-gray-800">
-              Danh sách bài viết đã thêm:{" "}
-              <span className="text-blue-600 font-semibold">({targets.length})</span>
+              Bài viết sẽ seeding{" "}
+              <span className="text-blue-600 font-semibold">({targets.length.toLocaleString("vi-VN")})</span>
             </span>
             <button
               type="button"
@@ -460,8 +522,8 @@ export default function PostTargetSection({
             </button>
           </div>
 
-          <div className="border border-gray-100 rounded-xl overflow-hidden">
-            <div className="max-h-60 overflow-y-auto">
+          <div className="border border-gray-100 rounded-xl overflow-hidden bg-white">
+            <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
                 <thead className="bg-gray-50/80 sticky top-0 z-10 text-gray-500 font-semibold border-b border-gray-100">
                   <tr>
@@ -472,8 +534,10 @@ export default function PostTargetSection({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 text-gray-700 font-medium">
-                  {targets.map((item, idx) => (
-                    <tr key={idx} className="hover:bg-blue-50/30 transition-colors">
+                  {visibleTargets.map((item, i) => {
+                    const idx = targetsOffset + i; // vị trí trong cả danh sách (onRemoveTarget dùng index)
+                    return (
+                    <tr key={item.id ?? idx} className="hover:bg-blue-50/30 transition-colors">
                       <td className="py-2.5 px-4 text-center text-gray-400 font-mono whitespace-nowrap">
                         {idx + 1}
                       </td>
@@ -510,11 +574,22 @@ export default function PostTargetSection({
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           </div>
+          {targetsTotalPages > 1 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-gray-500">
+              <span>
+                Hiển thị {(targetsOffset + 1).toLocaleString("vi-VN")}–
+                {Math.min(targetsOffset + TARGETS_PAGE_SIZE, targets.length).toLocaleString("vi-VN")} /{" "}
+                {targets.length.toLocaleString("vi-VN")} bài
+              </span>
+              <Pagination currentPage={targetsPage} totalPages={targetsTotalPages} onPageChange={setTargetsPage} siblingCount={1} />
+            </div>
+          )}
         </div>
       )}
 
@@ -527,8 +602,9 @@ export default function PostTargetSection({
           existingTargets={allKnownTargets}
           onImportTargets={(imported) => {
             if (imported.length > 0) {
-              onAddTargets(imported.map((item) => item.url));
-              toast.success(`Đã nhập thành công ${imported.length} bài viết từ file Excel!`, "THÀNH CÔNG");
+              Promise.resolve(onAddTargets(imported.map((item) => item.url)))
+                .then(() => toast.success(`Đã nhập thành công ${imported.length} bài viết từ file Excel!`, "THÀNH CÔNG"))
+                .catch((e) => toast.error(e?.message || "Không lưu được bài viết từ file Excel.", "LỖI NHẬP FILE"));
             }
           }}
         />
