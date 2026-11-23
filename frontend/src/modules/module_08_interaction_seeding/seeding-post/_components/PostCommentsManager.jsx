@@ -1,13 +1,15 @@
 "use client";
 
 import React, { useState } from "react";
-import { Clipboard, FileSpreadsheet, Trash2, MessageSquare, Loader2 } from "lucide-react";
+import { Clipboard, FileSpreadsheet, Loader2, Plus, Trash2 } from "lucide-react";
 import ConfirmDialog from "@/components/ui/confirm-dialog";
 import { toast } from "@/components/ui/toast";
 import ExcelImportModal from "../../_components/ExcelImportModal";
-import { countVariants, totalVariants } from "../spintax.mjs";
+import { totalVariants } from "../spintax.mjs";
+import StepCard from "./StepCard";
 
 export default function PostCommentsManager({
+  step = 3,
   comments,
   onAddComment,
   onAddBulkComments,
@@ -19,7 +21,9 @@ export default function PostCommentsManager({
   const variantsTotal = totalVariants(comments);
   const notEnough = commentPerPost > 0 && comments.length > 0 && variantsTotal < commentPerPost;
   const [bulkText, setBulkText] = useState("");
+  const [singleText, setSingleText] = useState("");
   const [isAddingBulk, setIsAddingBulk] = useState(false);
+  const [isAddingSingle, setIsAddingSingle] = useState(false);
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
 
   // Dialog states for deleting comments
@@ -81,6 +85,20 @@ export default function PostCommentsManager({
     }
   };
 
+  const handleSingleAdd = async () => {
+    const text = singleText.trim();
+    if (!text || isAddingSingle) return;
+    setIsAddingSingle(true);
+    try {
+      await onAddComment(text);
+      setSingleText("");
+    } catch (e) {
+      toast.error(e?.message || "Không thể thêm bình luận!", "LỖI");
+    } finally {
+      setIsAddingSingle(false);
+    }
+  };
+
   // Confirm delete single comment
   const handleConfirmDeleteComment = async () => {
     if (isRunning) return;
@@ -113,37 +131,20 @@ export default function PostCommentsManager({
   };
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm p-6 space-y-5">
-      {/* Step Header */}
-      <div className="flex items-center gap-3">
-        <span className="w-6 h-6 rounded-full bg-rose-500 text-white text-xs font-bold flex items-center justify-center shrink-0">
-          3
-        </span>
-        <h2 className="text-base font-bold text-gray-900">
-          Danh sách bình luận (Random)
-        </h2>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-        {/* Left Column: Bulk input */}
+    <StepCard step={step} title="Danh sách bình luận (Random)">
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+        {/* Cột trái: dán nhiều câu */}
         <div className="space-y-3">
-          <div className="flex items-center gap-2 h-8">
-            <button
-              type="button"
-              onClick={handlePasteClipboard}
-              disabled={isAddingBulk}
-              className="flex items-center gap-1.5 px-3 h-8 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition-all shadow-sm shadow-blue-500/20 cursor-pointer disabled:opacity-60"
-            >
-              <Clipboard className="w-3.5 h-3.5" />
-              Dán nhanh từ clipboard
-            </button>
-
+          <div className="flex h-8 items-center gap-2">
+            <span className="flex h-8 items-center rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm">
+              Dán nhanh từ văn bản
+            </span>
             <button
               type="button"
               onClick={() => setIsExcelModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 h-8 rounded-lg bg-emerald-50 hover:bg-emerald-100/80 text-emerald-700 border border-emerald-200/70 text-xs font-semibold transition-all shadow-sm active:scale-95 cursor-pointer"
+              className="flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
             >
-              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+              <FileSpreadsheet className="size-3.5 text-emerald-600" aria-hidden="true" />
               Import file (Excel)
             </button>
           </div>
@@ -151,115 +152,92 @@ export default function PostCommentsManager({
           <textarea
             value={bulkText}
             onChange={(e) => setBulkText(e.target.value)}
-            placeholder={`Bài viết rất hữu ích, cảm ơn ad!\nThông tin quý báu 👍\nMình rất thích, cảm ơn bạn đã chia sẻ\nĐịa điểm này đẹp quá, nhất định sẽ đi!\nBài viết chất lượng, rất chi tiết!\nCảnh đẹp quá, cho mình xin thêm thông tin với ạ!`}
-            className="w-full h-[180px] text-xs font-mono p-3.5 rounded-xl border border-gray-200 bg-gray-50/50 text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all resize-none leading-relaxed"
+            aria-label="Dán danh sách bình luận, mỗi dòng 1 bình luận"
+            placeholder={`Dán danh sách bình luận (mỗi dòng 1 bình luận)...\nBài viết rất hữu ích, cảm ơn ad!\nThông tin quá hay 👍\nMình rất thích, cảm ơn bạn đã chia sẻ!\nĐịa điểm này đẹp quá, nhất định sẽ đi!\nBài viết chất lượng, rất chi tiết!\nCảnh đẹp quá, cho mình xin thêm thông tin với ạ!`}
+            className="h-[188px] w-full resize-none rounded-xl border border-slate-200 bg-white p-3.5 text-xs leading-relaxed text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
           />
 
-          <div className="flex items-center justify-between text-xs h-8">
-            <span className="text-gray-500 italic">
-              Mỗi dòng 1 câu. Hỗ trợ spintax: {"{Hay quá|Tuyệt vời}"} → mỗi lần 1 cách viết
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <span className="italic text-slate-400">
+              Mỗi dòng là 1 bình luận. Hệ thống sẽ tự động tách từng dòng. Hỗ trợ spintax {"{Hay quá|Tuyệt vời}"}.
             </span>
             <button
               type="button"
               onClick={handleBulkAdd}
               disabled={bulkText.trim().length === 0 || isAddingBulk}
-              className={`flex items-center gap-1.5 px-3.5 h-8 rounded-xl text-xs font-semibold transition-all shrink-0 ${
-                bulkText.trim().length > 0 && !isAddingBulk
-                  ? "bg-blue-600 text-white hover:bg-blue-700 shadow-sm shadow-blue-500/20 cursor-pointer active:scale-95"
-                  : "bg-gray-100 text-gray-400 cursor-not-allowed"
-              }`}
+              className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
             >
-              {isAddingBulk ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>Đang thêm...</span>
-                </>
-              ) : (
-                "+ Thêm vào danh sách"
-              )}
+              {isAddingBulk ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Plus className="size-3.5" aria-hidden="true" />}
+              {isAddingBulk ? "Đang thêm..." : "Thêm vào danh sách"}
             </button>
           </div>
         </div>
 
-        {/* Right Column: Active comments table */}
+        {/* Cột phải: danh sách đang dùng */}
         <div className="space-y-3">
-          <div className="flex items-center justify-between h-8">
-            <div className="flex items-center gap-2 text-xs font-bold text-gray-800">
-              <MessageSquare className="w-4 h-4 text-blue-600" />
-              <span>Danh sách bình luận:</span>
-              <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-600 font-bold border border-blue-200/60">
-                {comments.length}
+          <div className="flex h-8 items-center justify-between gap-2">
+            <span className="text-sm font-bold text-slate-800">
+              Danh sách bình luận{" "}
+              <span className="font-semibold text-slate-500">
+                ({comments.length.toLocaleString("vi-VN")}
+                {commentPerPost > 1 ? `/${commentPerPost.toLocaleString("vi-VN")}` : ""})
               </span>
+            </span>
+            <div className="flex items-center gap-1.5">
               {comments.length > 0 && (
-                <span className="font-medium text-gray-500">→ {variantsTotal.toLocaleString("vi-VN")} câu khác nhau</span>
+                <button
+                  type="button"
+                  onClick={() => !isRunning && setClearAllOpen(true)}
+                  disabled={isRunning}
+                  title={isRunning ? "Đang chạy seeding, không thể xóa bình luận" : "Xóa toàn bộ bình luận"}
+                  className="h-8 rounded-lg px-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Xóa tất cả
+                </button>
               )}
-            </div>
-
-            {comments.length > 0 && (
               <button
                 type="button"
-                onClick={() => {
-                  if (isRunning) return;
-                  setClearAllOpen(true);
-                }}
-                disabled={isRunning}
-                title={isRunning ? "Đang chạy seeding, không thể xóa bình luận" : undefined}
-                className={`flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-md transition-colors ${
-                  isRunning
-                    ? "text-gray-400 opacity-50 cursor-not-allowed"
-                    : "text-rose-600 hover:text-rose-700 hover:bg-rose-50 cursor-pointer"
-                }`}
+                onClick={handlePasteClipboard}
+                disabled={isAddingBulk}
+                className="flex h-8 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-60"
               >
-                <Trash2 className="w-3.5 h-3.5" />
-                Xóa toàn bộ
+                <Clipboard className="size-3.5" aria-hidden="true" />
+                Dán nhanh
               </button>
-            )}
+            </div>
           </div>
 
-          {/* Table */}
-          <div className="border border-gray-100 rounded-xl overflow-hidden overflow-y-auto h-[224px] bg-white">
+          <div className="h-[188px] overflow-y-auto rounded-xl border border-slate-200 bg-white">
             {comments.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-gray-400 text-xs italic">
+              <div className="flex h-full items-center justify-center text-xs italic text-slate-400">
                 Chưa có bình luận nào trong danh sách.
               </div>
             ) : (
-              <table className="w-full text-left border-collapse text-xs">
-                <thead className="bg-gray-50/80 sticky top-0 z-10 text-gray-500 font-semibold border-b border-gray-100">
+              <table className="w-full border-collapse text-left text-xs">
+                <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 font-semibold text-slate-600">
                   <tr>
-                    <th className="py-2.5 px-3 w-10 text-center whitespace-nowrap">STT</th>
-                    <th className="py-2.5 px-3">Nội dung bình luận</th>
-                    <th className="py-2.5 px-3 w-16 text-center whitespace-nowrap">Số câu</th>
-                    <th className="py-2.5 px-3 w-24 min-w-[75px] text-center whitespace-nowrap">Hành động</th>
+                    <th className="w-10 px-3 py-2.5">#</th>
+                    <th className="px-3 py-2.5">Nội dung bình luận</th>
+                    <th className="w-20 px-3 py-2.5 text-right">Thao tác</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100 text-gray-700 font-medium">
+                <tbody className="divide-y divide-slate-100 text-slate-700">
                   {comments.map((cmt, idx) => (
-                    <tr key={idx} className="hover:bg-blue-50/30 transition-colors">
-                      <td className="py-2.5 px-3 text-center text-gray-400 font-mono text-[11px] whitespace-nowrap">
-                        {idx + 1}
+                    <tr key={idx} className="hover:bg-blue-50/30">
+                      <td className="px-3 py-2.5 font-semibold text-blue-600">{idx + 1}</td>
+                      <td className="max-w-xs truncate px-3 py-2.5" title={cmt}>
+                        {cmt}
                       </td>
-                      <td className="py-2.5 px-3 truncate max-w-xs" title={cmt}>{cmt}</td>
-                      <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                        <span className={`px-1.5 py-0.5 rounded text-[11px] font-semibold ${countVariants(cmt) > 1 ? "bg-blue-50 text-blue-700" : "bg-gray-100 text-gray-600"}`}>
-                          {countVariants(cmt).toLocaleString("vi-VN")}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                      <td className="px-3 py-2.5 text-right">
                         <button
                           type="button"
-                          onClick={() => {
-                            if (isRunning) return;
-                            setDeleteComment({ isOpen: true, text: cmt, index: idx });
-                          }}
+                          onClick={() => !isRunning && setDeleteComment({ isOpen: true, text: cmt, index: idx })}
                           disabled={isRunning}
+                          aria-label={`Xóa bình luận ${idx + 1}`}
                           title={isRunning ? "Đang chạy seeding, không thể xóa" : "Xóa bình luận này"}
-                          className={`p-1 rounded-md transition-colors inline-flex items-center justify-center ${
-                            isRunning
-                              ? "text-gray-300 opacity-50 cursor-not-allowed"
-                              : "text-rose-500 hover:bg-rose-50 hover:text-rose-600 cursor-pointer"
-                          }`}
+                          className="inline-flex items-center justify-center rounded-md p-1 text-rose-500 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:text-slate-300"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="size-3.5" aria-hidden="true" />
                         </button>
                       </td>
                     </tr>
@@ -268,6 +246,35 @@ export default function PostCommentsManager({
               </table>
             )}
           </div>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSingleAdd();
+            }}
+            className="flex items-center gap-2"
+          >
+            <input
+              type="text"
+              value={singleText}
+              onChange={(e) => setSingleText(e.target.value)}
+              aria-label="Nhập 1 bình luận"
+              placeholder="Nhập bình luận..."
+              className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+            />
+            <button
+              type="submit"
+              disabled={!singleText.trim() || isAddingSingle}
+              className="flex h-9 shrink-0 items-center gap-1 rounded-lg bg-blue-600 px-4 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+            >
+              {isAddingSingle ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Plus className="size-3.5" aria-hidden="true" />}
+              Thêm
+            </button>
+          </form>
+
+          {comments.length > 0 && variantsTotal > comments.length && (
+            <p className="text-[11px] text-slate-500">Spintax: {variantsTotal.toLocaleString("vi-VN")} câu khác nhau.</p>
+          )}
           {notEnough && (
             <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-[11px] text-amber-900">
               Mỗi bài cần {commentPerPost} bình luận khác nhau nhưng danh sách mới có {variantsTotal} câu. Thêm ít nhất{" "}
@@ -317,6 +324,6 @@ export default function PostCommentsManager({
         variant="danger"
         loading={isClearing}
       />
-    </div>
+    </StepCard>
   );
 }

@@ -8,7 +8,7 @@ import React, { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Loader2, MessageCircle, Share2, ThumbsUp, X } from "lucide-react";
 
-const REACTION_NAMES = { LIKE: "Thích", LOVE: "Yêu thích", CARE: "Thương thương", HAHA: "Haha", WOW: "Wow", SAD: "Buồn", ANGRY: "Phẫn nộ" };
+const REACTION_NAMES = { LIKE: "Thích", LOVE: "Yêu thích", CARE: "Thương", HAHA: "Haha", WOW: "Wow", SAD: "Buồn", ANGRY: "Phẫn nộ" };
 const ACTION_NAMES = { REACT: "cảm xúc", COMMENT: "bình luận", SHARE: "chia sẻ" };
 const fmt = (n) => Number(n || 0).toLocaleString("vi-VN");
 const nick = (x) => x.name || x.uid;
@@ -73,6 +73,37 @@ export default function PostPlanPreviewModal({ open, onClose, loading, plan, err
                   {fmt(plan.totals.SKIPPED)} lượt sẽ bị bỏ qua vì nick đã làm hành động đó trên bài từ trước.
                 </p>
               )}
+              {plan.distribution_mode === "rotation" && plan.by_account?.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs text-slate-600">
+                    Chia xoay vòng: mỗi tài khoản <b>{fmt(plan.posts_per_account)}</b> bài liên tiếp, hết tài khoản thì quay lại tài khoản đầu.
+                  </p>
+                  <div className="overflow-x-auto rounded-xl border border-slate-200 text-[11px]">
+                    <table className="w-full border-collapse text-left">
+                      <thead className="bg-slate-50 font-bold text-slate-600">
+                        <tr>
+                          <th className="px-3 py-2">Tài khoản</th>
+                          <th className="px-3 py-2 text-right">Số bài</th>
+                          <th className="px-3 py-2 text-right">Cảm xúc</th>
+                          <th className="px-3 py-2 text-right">Bình luận</th>
+                          <th className="px-3 py-2 text-right">Chia sẻ</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-slate-700">
+                        {plan.by_account.map((a) => (
+                          <tr key={a.uid}>
+                            <td className="px-3 py-1.5 font-semibold">{nick(a)}</td>
+                            <td className="px-3 py-1.5 text-right">{fmt(a.posts)}</td>
+                            <td className="px-3 py-1.5 text-right">{fmt(a.react)}</td>
+                            <td className="px-3 py-1.5 text-right">{fmt(a.comment)}</td>
+                            <td className="px-3 py-1.5 text-right">{fmt(a.share)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
               {plan.post_count > plan.shown && (
                 <p className="text-xs text-gray-500">Hiện chi tiết {fmt(plan.shown)} bài đầu / {fmt(plan.post_count)} bài.</p>
               )}
@@ -82,6 +113,7 @@ export default function PostPlanPreviewModal({ open, onClose, loading, plan, err
                   <div className="flex items-center justify-between gap-3">
                     <span className="truncate text-xs font-bold text-gray-900">
                       Bài {p.index}: {p.name}
+                      {p.owner && <span className="ml-2 font-semibold text-blue-700">· {nick(p.owner)}</span>}
                     </span>
                     {p.url && (
                       <a href={p.url} target="_blank" rel="noreferrer" className="shrink-0 text-[11px] font-semibold text-blue-700 hover:underline">

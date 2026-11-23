@@ -1,78 +1,68 @@
 "use client";
 
-import React, { useRef, useEffect } from "react";
-import { Activity, CheckCircle, AlertTriangle } from "lucide-react";
+import React, { useEffect, useRef } from "react";
+import { Activity, AlertTriangle, CheckCircle } from "lucide-react";
+import { CARD } from "./StepCard";
 
-export default function PostProgressTerminal({
-  logs,
-  isRunning,
-}) {
+const TEXT = {
+  success: "text-emerald-700",
+  warn: "text-amber-700",
+  error: "font-semibold text-rose-700",
+  info: "text-slate-600",
+};
+
+/** Thẻ "Theo dõi tiến trình" (theo Figma): tiến độ lô (children) + nhật ký chạy nền sáng, luôn hiện. */
+export default function PostProgressTerminal({ logs, isRunning, children }) {
   const terminalContainerRef = useRef(null);
 
   useEffect(() => {
-    // Chỉ cuộn riêng khung chứa terminal, tuyệt đối không cuộn toàn bộ trang web
+    // Chỉ cuộn riêng khung nhật ký, không cuộn cả trang
     const container = terminalContainerRef.current;
-    if (container) {
-      container.scrollTop = container.scrollHeight;
-    }
+    if (container) container.scrollTop = container.scrollHeight;
   }, [logs]);
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm p-6 space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 text-xs font-bold text-gray-800">
-          <Activity className="w-4 h-4 text-emerald-600" />
-          <span>Theo dõi tiến trình</span>
+    <section className={`${CARD} space-y-4 p-6`} aria-labelledby="seeding-progress-title">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Activity className="size-4 text-emerald-600" aria-hidden="true" />
+          <h2 id="seeding-progress-title" className="text-sm font-bold text-slate-900">
+            Theo dõi tiến trình
+          </h2>
           {isRunning && (
-            <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 text-[10px] font-semibold border border-emerald-200 animate-pulse ml-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            <span className="ml-1 flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
+              <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" aria-hidden="true" />
               Đang chạy...
             </span>
           )}
         </div>
-        <span className="text-[11px] text-gray-400 font-mono">
-          {logs.length} dòng nhật ký
-        </span>
+        <span className="font-mono text-[11px] text-slate-400">{logs.length} dòng nhật ký</span>
       </div>
+
+      {children}
 
       <div
         ref={terminalContainerRef}
-        className="h-44 bg-gray-950 text-gray-200 font-mono text-[11px] rounded-xl p-4 overflow-y-auto border border-gray-800 space-y-1.5 select-text shadow-inner scroll-smooth"
+        role="log"
+        aria-live="polite"
+        className="h-56 select-text space-y-1.5 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50/70 p-4 font-mono text-[11px]"
       >
         {logs.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-gray-500 italic">
-            Chưa có tiến trình nào đang chạy. Nhấn &quot;Bắt đầu Seeding&quot; để khởi chạy tự động.
+          <div className="flex h-full items-center justify-center text-center italic text-slate-400">
+            Chưa có tiến trình nào đang chạy. Nhấn &quot;Bắt đầu seeding&quot; để khởi chạy tự động.
           </div>
         ) : (
           logs.map((log) => (
             <div key={log.id} className="flex items-start gap-2 leading-relaxed">
-              <span className="text-gray-500 shrink-0 select-none">[{log.time}]</span>
-              {log.type === "success" && (
-                <CheckCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-              )}
-              {log.type === "warn" && (
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
-              )}
-              {log.type === "error" && (
-                <span className="text-rose-400 font-bold shrink-0">[ERR]</span>
-              )}
-              <span
-                className={
-                  log.type === "success"
-                    ? "text-emerald-300"
-                    : log.type === "warn"
-                    ? "text-amber-300"
-                    : log.type === "error"
-                    ? "text-rose-300 font-semibold"
-                    : "text-gray-300"
-                }
-              >
-                {log.text}
-              </span>
+              <span className="shrink-0 select-none text-slate-400">[{log.time}]</span>
+              {log.type === "success" && <CheckCircle className="mt-0.5 size-3.5 shrink-0 text-emerald-600" aria-hidden="true" />}
+              {log.type === "warn" && <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-600" aria-hidden="true" />}
+              {log.type === "error" && <span className="shrink-0 font-bold text-rose-600">[ERR]</span>}
+              <span className={TEXT[log.type] || TEXT.info}>{log.text}</span>
             </div>
           ))
         )}
       </div>
-    </div>
+    </section>
   );
 }

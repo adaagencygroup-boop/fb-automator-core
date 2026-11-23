@@ -65,10 +65,10 @@ export default function PostRunProgress({ progress, isRunning, onRetry, retrying
   else if (isRunning || progress.running) state = { text: "Đang chạy", cls: "bg-blue-50 text-blue-700", Icon: Loader2 };
 
   return (
-    <section aria-labelledby="run-progress-title" className="space-y-4 rounded-2xl border border-gray-200/90 bg-white p-6 shadow-sm">
+    <div className="space-y-4" aria-label="Tiến độ lô seeding">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <h2 id="run-progress-title" className="text-base font-bold text-gray-900">Theo dõi tiến trình</h2>
+          <span className="text-xs font-semibold text-slate-700">Tiến độ lô</span>
           <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${state.cls}`}>
             {state.Icon && <state.Icon className={`h-3.5 w-3.5 ${state.Icon === Loader2 ? "animate-spin" : ""}`} />}
             {state.text}
@@ -154,6 +154,6 @@ export default function PostRunProgress({ progress, isRunning, onRetry, retrying
           <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} siblingCount={1} />
         </div>
       )}
-    </section>
+    </div>
   );
 }

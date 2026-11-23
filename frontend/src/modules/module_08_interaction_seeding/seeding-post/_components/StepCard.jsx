@@ -1,0 +1,29 @@
+"use client";
+
+/** Khung chung các bước của Seeding Bài viết (theo Figma): thẻ trắng bo góc + badge số đỏ + tiêu đề, phần phải tuỳ chọn. */
+export const CARD = "rounded-2xl border border-slate-200 bg-white shadow-sm";
+
+export function StepHeader({ step, title, children }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex items-center gap-3">
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-red-500 text-sm font-bold text-white">
+          {step}
+        </span>
+        <h2 className="text-lg font-bold text-slate-900">{title}</h2>
+      </div>
+      {children ? <div className="flex flex-wrap items-center gap-2">{children}</div> : null}
+    </div>
+  );
+}
+
+export default function StepCard({ step, title, actions, className = "", children }) {
+  return (
+    <section className={`${CARD} space-y-5 p-6 ${className}`}>
+      <StepHeader step={step} title={title}>
+        {actions}
+      </StepHeader>
+      {children}
+    </section>
+  );
+}

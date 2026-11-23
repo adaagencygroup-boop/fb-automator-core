@@ -273,9 +273,12 @@ def retry_failed_tasks(
     db.commit()
 
     threads = sr._campaign_threads.get(chain[0], sr.DEFAULT_CHROME_THREADS)
+    rotation = bool(sr._batch_rotation.get(chain[0]))   # lô gốc chia xoay vòng → lô thử lại cũng chạy theo khối
     for cid in new_ids:
         sr._batch_campaign_chains[cid] = new_ids
         sr._campaign_threads[cid] = threads
+        if rotation:
+            sr._batch_rotation[cid] = True
     return {
         "id": new_ids[0],
         "campaign_ids": new_ids,
@@ -326,7 +329,11 @@ def preview_seeding_plan(
     if "COMMENT" in post_actions:
         src = req.comments or sr.get_user_draft_comments(db, created_by_int)
         comment_texts = [t.strip() for t in src if t and t.strip()]
-    share_groups = sr._split_share_accounts(used_uids, len(targets)) if "SHARE" in post_actions else []
+    rotation = sr.normalize_distribution(req.distribution_mode) == sr.DISTRIBUTION_ROTATION
+    per_account = sr.clamp_posts_per_account(req.posts_per_account)
+    share_groups = (
+        sr._split_share_accounts(used_uids, len(targets)) if "SHARE" in post_actions and not rotation else []
+    )
     share_load = {u: 0 for u in used_uids}
     for g in share_groups:
         for u in g:
@@ -351,8 +358,11 @@ def preview_seeding_plan(
     names = dict(db.query(Account.uid, Account.profile_name).filter(Account.uid.in_(used_uids)).all())
     totals = {"REACT": 0, "COMMENT": 0, "SHARE": 0, "SKIPPED": 0}
     posts = []
+    # Chia xoay vòng: số bài / lượt của từng nick (theo thứ tự nick)
+    by_account = {u: {"uid": u, "name": names.get(u), "posts": 0, "react": 0, "comment": 0, "share": 0} for u in used_uids}
     for idx, (fb_id, url, display_name) in enumerate(targets):
         active = active_by_target.get(target_id_by_fb.get(fb_id), set())
+        owner_uid = sr.rotation_owner(idx, used_uids, per_account) if rotation else None
         a = sr._post_assignment(
             idx=idx,
             used_uids=used_uids,
@@ -363,6 +373,7 @@ def preview_seeding_plan(
             share_load=share_load,
             reactions_pool=req.reactions or ["LIKE"],
             comment_texts=comment_texts,
+            rotation_uid=owner_uid,
         )
         skipped = [
             {"uid": u, "action": act}
@@ -376,11 +387,18 @@ def preview_seeding_plan(
         totals["COMMENT"] += len(comment)
         totals["SHARE"] += len(share)
         totals["SKIPPED"] += len(skipped)
+        if owner_uid is not None:
+            row = by_account[owner_uid]
+            row["posts"] += 1
+            row["react"] += len(react)
+            row["comment"] += len(comment)
+            row["share"] += len(share)
         if idx < PREVIEW_POSTS:
             posts.append({
                 "index": idx + 1,
                 "name": display_name or f"Bài viết {fb_id}",
                 "url": url,
+                "owner": {"uid": owner_uid, "name": names.get(owner_uid)} if owner_uid else None,
                 "react": react,
                 "comment": comment,
                 "share": share,
@@ -392,6 +410,9 @@ def preview_seeding_plan(
         "shown": len(posts),
         "totals": totals,
         "posts": posts,
+        "distribution_mode": sr.DISTRIBUTION_ROTATION if rotation else sr.DISTRIBUTION_ALL,
+        "posts_per_account": per_account if rotation else None,
+        "by_account": [r for r in by_account.values() if r["posts"]] if rotation else [],
     }
 
 
