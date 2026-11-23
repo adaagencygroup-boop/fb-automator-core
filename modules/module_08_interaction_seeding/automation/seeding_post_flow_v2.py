@@ -100,21 +100,19 @@ const isReelCard = (card, anchor) => {
 
 const findCard = (anchor) => {
   let card = anchor.closest(cardSelector);
-  if (card) return card;
+  if (card && !isInsideComment(card)) return card;
 
-  let current = anchor.parentElement;
-  let candidate = null;
-  while (current && current !== scope && current !== document.body) {
-    if (current.parentElement?.closest(cardSelector)) break;
-    const hasCaption = !!current.querySelector(caption);
-    const hasToolbar = !!current.querySelector('[role="toolbar"], button, [role="button"]');
-    const hasTime = !!current.querySelector('time[datetime], [data-utime], abbr');
-    if (hasCaption || (hasToolbar && hasTime)) {
-      candidate = current;
+  for (let node = anchor.parentElement; node && node !== scope && node !== document.body; node = node.parentElement) {
+    if (isInsideComment(node)) continue;
+    const hasCaption = !!node.querySelector(caption);
+    const hasMedia = !!node.querySelector('video, img, [data-ad-preview="media"]');
+    const hasAction = !!node.querySelector('[role="toolbar"], [aria-label*="Like" i], [aria-label*="Thích" i], [aria-label*="Comment" i], [aria-label*="Bình luận" i], [aria-label*="Chia sẻ" i], [aria-label*="Share" i]');
+    const hasTime = !!node.querySelector('time[datetime], [data-utime], abbr');
+    if ((hasCaption && (hasTime || hasAction)) || (hasMedia && hasAction && hasTime)) {
+      return node;
     }
-    current = current.parentElement;
   }
-  return candidate;
+  return null;
 };
 
 for (const anchor of scope.querySelectorAll(anchors)) {
@@ -393,12 +391,12 @@ def collect_visible_posts(
             cursor["idle_rounds"] + 1
             if len(cursor["observed"]) == cursor["previous_observed"] else 0
         )
-        if cursor["idle_rounds"] >= 3:
+        if cursor["idle_rounds"] >= 5:
             cursor["done"] = True
             break
         cursor["previous_observed"] = len(cursor["observed"])
-        driver.execute_script("window.scrollBy(0, Math.max(window.innerHeight * 0.85, 400));")
-        if stop.wait(1.2):
+        driver.execute_script("window.scrollBy(0, Math.max(window.innerHeight * 0.85, 600));")
+        if stop.wait(1.5):
             return []
         cursor["batch"] = read_batch(driver)
         cursor["index"] = 0
@@ -475,7 +473,7 @@ def scan_source_posts(raw_url: str, owner: str, stop: Event) -> list[dict]:
                     if state["driver"] is None:
                         state["driver"] = open_browser(
                             uid=uid, owner=owner, proxy=state["proxy"], scope=scope,
-                            headless=True, verify_egress=False, allow_direct_fallback=True,
+                            headless=False, verify_egress=False, allow_direct_fallback=True,
                         )
                         if state["cookie"]:
                             load_cookies(state["driver"], state["cookie"])

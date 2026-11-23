@@ -393,5 +393,55 @@ class CommentFilterTests(unittest.TestCase):
         self.assertEqual(res["id"], "pfbid0abc123")
 
 
+    def test_read_feed_profile_multiple_posts_without_role_article(self):
+        html = """<!DOCTYPE html><html><body><div role="main">
+          <div class="timeline-container">
+            <div class="feed-unit-1">
+              <div class="header">
+                <h2><a href="/luuminhhuyeen">Lưu Minh Huyền</a></h2>
+                <a href="https://www.facebook.com/luuminhhuyeen/posts/1001"><time datetime="2026-11-20T10:00:00">1h</time></a>
+                <button aria-label="Tùy chọn bài viết">...</button>
+              </div>
+              <div class="xdj266r x14z9mp xat24cr x1lziwak x1vvkbs x126k92a"><div dir="auto">Bài viết số 1 của Huyền</div></div>
+              <div class="media"><a href="https://www.facebook.com/photo/?fbid=photo1"><img src="p1.jpg" /></a></div>
+              <div role="toolbar"><div role="button" aria-label="Thích">Thích</div></div>
+            </div>
+            <div class="feed-unit-2">
+              <div class="header">
+                <h2><a href="/luuminhhuyeen">Lưu Minh Huyền</a></h2>
+                <a href="https://www.facebook.com/luuminhhuyeen/posts/1002"><time datetime="2026-11-19T10:00:00">2h</time></a>
+              </div>
+              <div class="media"><a href="https://www.facebook.com/photo/?fbid=photo2"><img src="p2.jpg" /></a></div>
+              <div role="toolbar"><div role="button" aria-label="Thích">Thích</div></div>
+            </div>
+            <div class="feed-unit-3">
+              <div class="header">
+                <h2><a href="/luuminhhuyeen">Lưu Minh Huyền</a></h2>
+                <a href="https://www.facebook.com/luuminhhuyeen/posts/1003"><time datetime="2026-11-18T10:00:00">3h</time></a>
+              </div>
+              <div class="xdj266r x14z9mp xat24cr x1lziwak x1vvkbs x126k92a"><div dir="auto">Bài viết số 3 của Huyền</div></div>
+              <div role="toolbar"><div role="button" aria-label="Thích">Thích</div></div>
+            </div>
+          </div>
+        </div></body></html>"""
+
+        options = Options()
+        options.add_argument("--headless=new")
+        options.add_argument("--disable-gpu")
+        driver = webdriver.Chrome(options=options)
+        try:
+            driver.get("data:text/html;charset=utf-8," + quote(html))
+            items = driver.execute_script(self.scanner._READ_FEED)
+            self.assertEqual(len(items), 3)
+            self.assertEqual(items[0]["url"], "https://www.facebook.com/luuminhhuyeen/posts/1001")
+            self.assertEqual(items[0]["content"], "Bài viết số 1 của Huyền")
+            self.assertEqual(items[1]["url"], "https://www.facebook.com/luuminhhuyeen/posts/1002")
+            self.assertEqual(items[1]["content"], "Bài viết không có nội dung")
+            self.assertEqual(items[2]["url"], "https://www.facebook.com/luuminhhuyeen/posts/1003")
+            self.assertEqual(items[2]["content"], "Bài viết số 3 của Huyền")
+        finally:
+            driver.quit()
+
+
 if __name__ == "__main__":
     unittest.main()
