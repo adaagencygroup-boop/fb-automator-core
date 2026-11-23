@@ -10,7 +10,10 @@ from threading import Lock
 from unittest.mock import patch
 
 from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 from sqlalchemy.sql import column
+from urllib.parse import quote
 
 
 def load_scanner():
@@ -291,9 +294,103 @@ class CommentFilterTests(unittest.TestCase):
             self.assertEqual(items[0]["url"], "https://www.facebook.com/kietdauroi.box/posts/pfbid0abc123")
             self.assertEqual(items[0]["content"], "Dạ lỗi em #kietdauroi")
             self.assertEqual(items[1]["url"], "https://www.facebook.com/kietdauroi.box/posts/pfbid0def456")
-            self.assertEqual(items[1]["content"], "")
+            self.assertEqual(items[1]["content"], "Bài viết không có nội dung")
         finally:
             driver.quit()
+
+    def test_read_feed_excludes_avatar_updates_and_reels(self):
+        html = """<!DOCTYPE html><html><body>
+          <div data-pagelet="ProfileHeader">
+            <a href="https://www.facebook.com/photo/?fbid=111111&set=a.100"><img src="avatar.jpg" alt="Ảnh đại diện" /></a>
+          </div>
+          <div role="main">
+            <!-- Normal post with quote -->
+            <div role="article" aria-posinset="1">
+              <div class="header">
+                <h2><a href="https://www.facebook.com/kietdauroi.box">Kiệt Đâu Rồi</a></h2>
+                <a href="https://www.facebook.com/kietdauroi.box/posts/pfbid0quote123" role="link">
+                  <time datetime="2026-11-20T10:00:00">2 giờ</time>
+                </a>
+              </div>
+              <div class="xdj266r x14z9mp xat24cr x1lziwak x1vvkbs x126k92a">
+                <div dir="auto" style="text-align: start;">“Điều tuyệt vời nhất của một tấm ảnh là nó sẽ không bao giờ thay đổi, thậm chí cả khi con người trong bức ảnh ấy đã đổi thay”</div>
+              </div>
+              <div class="media"><a href="https://www.facebook.com/photo/?fbid=987654321"><img src="photo.jpg" /></a></div>
+              <div role="toolbar"><div role="button">Thích</div><div role="button">Bình luận</div></div>
+            </div>
+
+            <!-- Avatar update post: SHOULD BE EXCLUDED -->
+            <div role="article" aria-posinset="2">
+              <div class="header">
+                <h2><a href="https://www.facebook.com/kietdauroi.box">Kiệt Đâu Rồi</a> đã cập nhật ảnh đại diện của mình.</h2>
+                <a href="https://www.facebook.com/photo/?fbid=222222&set=a.200" role="link">
+                  <time datetime="2026-11-19T10:00:00">Hôm qua</time>
+                </a>
+              </div>
+              <div class="media"><a href="https://www.facebook.com/photo/?fbid=222222"><img src="avatar2.jpg" /></a></div>
+              <div role="toolbar"><div role="button">Thích</div></div>
+            </div>
+
+            <!-- Reel post: SHOULD BE EXCLUDED -->
+            <div role="article" aria-posinset="3">
+              <div class="header">
+                <h2><a href="https://www.facebook.com/kietdauroi.box">Kiệt Đâu Rồi</a></h2>
+                <a href="https://www.facebook.com/reel/999888777" role="link">
+                  <time datetime="2026-11-18T10:00:00">2 ngày</time>
+                </a>
+              </div>
+              <div data-ad-preview="message">Video reel vui nhộn</div>
+              <video src="reel.mp4"></video>
+              <div role="toolbar"><div role="button">Thích</div></div>
+            </div>
+
+            <!-- Normal post without caption: default content -->
+            <div role="article" aria-posinset="4">
+              <div class="header">
+                <h2><a href="https://www.facebook.com/kietdauroi.box">Kiệt Đâu Rồi</a></h2>
+                <a href="https://www.facebook.com/kietdauroi.box/posts/pfbid0notext" role="link">
+                  <time datetime="2026-11-17T10:00:00">3 ngày</time>
+                </a>
+              </div>
+              <div class="media"><a href="https://www.facebook.com/photo/?fbid=333333"><img src="photo3.jpg" /></a></div>
+              <div role="toolbar"><div role="button">Thích</div></div>
+            </div>
+          </div>
+        </body></html>"""
+
+        options = Options()
+        options.add_argument("--headless=new")
+        options.add_argument("--disable-gpu")
+        driver = webdriver.Chrome(options=options)
+        try:
+            driver.get("data:text/html;charset=utf-8," + quote(html))
+            items = driver.execute_script(self.scanner._READ_FEED)
+            self.assertEqual(len(items), 2)
+            self.assertEqual(items[0]["url"], "https://www.facebook.com/kietdauroi.box/posts/pfbid0quote123")
+            self.assertEqual(items[0]["content"], "“Điều tuyệt vời nhất của một tấm ảnh là nó sẽ không bao giờ thay đổi, thậm chí cả khi con người trong bức ảnh ấy đã đổi thay”")
+            self.assertEqual(items[1]["url"], "https://www.facebook.com/kietdauroi.box/posts/pfbid0notext")
+            self.assertEqual(items[1]["content"], "Bài viết không có nội dung")
+        finally:
+            driver.quit()
+
+    def test_collect_post_excludes_reels_and_defaults_empty_content(self):
+        # Reels should be ignored
+        reel_raw = {"url": "https://www.facebook.com/reel/1234567890", "content": "Reel test"}
+        self.assertIsNone(self.scanner._collect_post(reel_raw))
+
+        reels_raw = {"url": "https://www.facebook.com/reels/1234567890", "content": "Reels test"}
+        self.assertIsNone(self.scanner._collect_post(reels_raw))
+
+        # Normal post with empty content should default to "Bài viết không có nội dung"
+        post_raw = {
+            "url": "https://www.facebook.com/kietdauroi.box/posts/pfbid0abc123",
+            "content": "",
+            "type": "photo",
+        }
+        res = self.scanner._collect_post(post_raw)
+        self.assertIsNotNone(res)
+        self.assertEqual(res["content"], "Bài viết không có nội dung")
+        self.assertEqual(res["id"], "pfbid0abc123")
 
 
 if __name__ == "__main__":

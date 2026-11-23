@@ -21,13 +21,26 @@ POSTS_PER_ACCOUNT_TURN = 50
 MAX_DATE_HOVERS = 8
 
 _READ_FEED = r"""
-const anchors = 'a[href*="/posts/"], a[href*="/permalink"], a[href*="story_fbid="], a[href*="/videos/"], a[href*="/reel/"], a[href*="/reels/"], a[href*="/watch"], a[href*="/photo"]';
-const preferredCaption = 'div.xdj266r.x14z9mp.xat24cr.x1lziwak.x1vvkbs.x126k92a > div[dir="auto"]';
+const anchors = 'a[href*="/posts/"], a[href*="/permalink"], a[href*="story_fbid="], a[href*="/videos/"], a[href*="/watch"], a[href*="/photo"]';
+const preferredCaption = 'div.xdj266r.x14z9mp.xat24cr.x1lziwak.x1vvkbs.x126k92a > div[dir="auto"], div.xdj266r.x14z9mp.xat24cr.x1lziwak.x1vvkbs.x126k92a div[dir="auto"], div.xdj266r.x14z9mp.xat24cr.x1lziwak.x1vvkbs.x126k92a';
 const caption = `${preferredCaption}, [data-ad-preview="message"], [data-ad-comet-preview="message"], div.html-div div[dir="auto"][style*="text-align"]`;
 const cardSelector = '[role="article"], [data-pagelet^="FeedUnit"]';
 const scope = document.querySelector('[role="main"]') || document.body;
 const entries = new Map();
 const clean = (text) => (text || '').replace(/[\u034f\u200b-\u200f\u2060\ufeff]/g, '').trim();
+
+const isHeaderOrIntro = (node) => {
+  return !!node.closest?.(
+    '[data-pagelet*="ProfileHeader" i], ' +
+    '[data-pagelet*="page_header" i], ' +
+    '[data-pagelet*="CoverPhoto" i], ' +
+    '[data-pagelet*="ProfileTabs" i], ' +
+    '[data-pagelet*="ProfileTiles" i], ' +
+    '[data-pagelet*="Intro" i], ' +
+    '[data-pagelet*="header" i], ' +
+    '[role="banner"]'
+  );
+};
 
 const isInsideComment = (node) => {
   if (!node || node === scope || node === document.body) return false;
@@ -51,30 +64,68 @@ const isPostLink = (anchor) => {
   try {
     const href = anchor.getAttribute('href') || anchor.href || '';
     if (!href || /[?&](?:comment_id|reply_comment_id)=/i.test(href)) return false;
+    if (/\/(?:reel|reels)\b/i.test(href)) return false;
     const url = new URL(anchor.href, location.href);
     if (url.searchParams.has('comment_id') || url.searchParams.has('reply_comment_id')) return false;
     const path = url.pathname.replace(/\/+$/, '');
-    return /\/(?:posts|permalink|videos?|reels?|photo|photos)\/[A-Za-z0-9_-]+$/i.test(path) ||
+    if (/\/(?:reel|reels)\b/i.test(path)) return false;
+    return /\/(?:posts|permalink|videos?|photo|photos)\/[A-Za-z0-9_-]+$/i.test(path) ||
       ['story_fbid', 'fbid', 'v'].some((key) => /^[A-Za-z0-9_-]+$/.test(url.searchParams.get(key) || ''));
   } catch {
     return false;
   }
 };
 
-for (const anchor of scope.querySelectorAll(anchors)) {
-  if (anchor.closest(caption) || !isPostLink(anchor) || isInsideComment(anchor)) continue;
+const isAvatarOrCoverCard = (card, anchor) => {
+  if (!card) return false;
+  if (isHeaderOrIntro(anchor) || isHeaderOrIntro(card)) return true;
 
-  let card = anchor.closest(cardSelector);
-  if (!card) {
-    for (let node = anchor.parentElement; node && node !== scope; node = node.parentElement) {
-      if (node.querySelector(caption) || node.querySelector('video, img[src*="scontent"], img[src*="fbcdn"], [data-ad-preview="media"]')) {
-        card = node;
-        break;
-      }
-    }
+  const headings = [...card.querySelectorAll('h2, h3, h4, [role="heading"], strong')].map((el) => clean(el.innerText)).join(' ');
+  const aria = clean(card.getAttribute('aria-label') || anchor.getAttribute('aria-label') || '');
+  const combined = `${headings} ${aria}`;
+
+  return /(?:cập nhật|thay đổi)\s+(?:ảnh|video)\s+(?:đại diện|bìa)|updated\s+(?:their|his|her|its)?\s*(?:profile\s+picture|cover\s+photo|avatar)/i.test(combined);
+};
+
+const isReelCard = (card, anchor) => {
+  const href = anchor?.getAttribute?.('href') || anchor?.href || '';
+  if (/\/(?:reel|reels)\b/i.test(href)) return true;
+  if (!card) return false;
+  const reelAnchor = card.querySelector('a[href*="/reel/"], a[href*="/reels/"]');
+  if (reelAnchor && !card.querySelector('a[href*="/posts/"], a[href*="/permalink"], a[href*="story_fbid="]')) {
+    return true;
   }
+  return false;
+};
+
+const findCard = (anchor) => {
+  let card = anchor.closest(cardSelector);
+  if (card) return card;
+
+  let current = anchor.parentElement;
+  let candidate = null;
+  while (current && current !== scope && current !== document.body) {
+    if (current.parentElement?.closest(cardSelector)) break;
+    const hasCaption = !!current.querySelector(caption);
+    const hasToolbar = !!current.querySelector('[role="toolbar"], button, [role="button"]');
+    const hasTime = !!current.querySelector('time[datetime], [data-utime], abbr');
+    if (hasCaption || (hasToolbar && hasTime)) {
+      candidate = current;
+    }
+    current = current.parentElement;
+  }
+  return candidate;
+};
+
+for (const anchor of scope.querySelectorAll(anchors)) {
+  if (anchor.closest(caption) || !isPostLink(anchor) || isInsideComment(anchor) || isHeaderOrIntro(anchor)) continue;
+
+  const card = findCard(anchor);
   if (!card || isInsideComment(card)) continue;
   if (card.parentElement?.closest('[role="article"]') && !card.parentElement?.closest('[data-pagelet^="FeedUnit"]')) continue;
+
+  if (isAvatarOrCoverCard(card, anchor)) continue;
+  if (isReelCard(card, anchor)) continue;
 
   const time = anchor.querySelector('time[datetime], [data-utime], abbr') ||
     card.querySelector('time[datetime], abbr[data-utime], [data-utime]');
@@ -118,14 +169,18 @@ return Array.from(entries).slice(0, 100).map(([card, data]) => {
     (node === first || node.parentElement === first?.parentElement) &&
     !node.parentElement?.closest(preferred.length ? preferredCaption : caption)
   );
-  const content = messages.map((node) => {
+  let content = messages.map((node) => {
     const text = node.cloneNode(true);
     text.querySelectorAll('[role="button"], button').forEach((child) => child.remove());
     return clean(text.textContent);
   }).filter(Boolean).join('\n').slice(0, 5000);
 
+  if (!content || !content.trim()) {
+    content = 'Bài viết không có nội dung';
+  }
+
   const path = data.anchor.pathname;
-  const type = /\/(?:videos?|reels?|watch)(?:\/|$)/i.test(path) || card.querySelector('video')
+  const type = /\/(?:videos?|watch)(?:\/|$)/i.test(path) || card.querySelector('video')
     ? 'video'
     : /\/photo/i.test(path) || card.querySelector('a[href*="/photo"] img, [data-ad-preview="media"] img')
       ? 'photo'
@@ -190,6 +245,9 @@ def _collect_post(raw: dict):
         return None
 
     path = parsed.path.rstrip("/")
+    if re.search(r"/(?:reel|reels)\b", path, re.IGNORECASE):
+        return None
+
     query = parse_qs(parsed.query)
     if "comment_id" in query or "reply_comment_id" in query:
         return None
@@ -205,7 +263,7 @@ def _collect_post(raw: dict):
                 params["id"] = owner_id
             break
     if post_id is None:
-        match = re.search(r"/(?:posts|permalink|videos?|reels?|photo|photos)/([A-Za-z0-9_-]+)$", path, re.IGNORECASE)
+        match = re.search(r"/(?:posts|permalink|videos?|photo|photos)/([A-Za-z0-9_-]+)$", path, re.IGNORECASE)
         if not match:
             return None
         post_id = match[1]
@@ -220,10 +278,14 @@ def _collect_post(raw: dict):
             break
         published_at, _ = parse_facebook_published_at(timestamp)
 
+    content = (raw.get("content") or "").strip()
+    if not content:
+        content = "Bài viết không có nội dung"
+
     return {
         "id": post_id,
         "post_url": urlunsplit(("https", "www.facebook.com", path, urlencode(params), "")),
-        "content": raw.get("content") or "",
+        "content": content,
         "post_type": raw.get("type") or "text",
         "published_at": published_at,
         "reaction_count": raw.get("reactions"),

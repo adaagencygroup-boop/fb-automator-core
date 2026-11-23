@@ -48,7 +48,7 @@ export default function PostSourcePicker({ existingTargets, onAddTargets, onClos
       return {
         ...item,
         url,
-        title: firstLine.length > 100 ? `${firstLine.slice(0, 100)}…` : firstLine || "Bài viết Facebook",
+        title: firstLine.length > 100 ? `${firstLine.slice(0, 100)}…` : firstLine || "Bài viết không có nội dung",
         description: firstLine.length > 100 ? item.content : rest.join(" "),
         available: available.delete(url),
       };
