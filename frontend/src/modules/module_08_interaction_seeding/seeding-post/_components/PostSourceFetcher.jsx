@@ -24,15 +24,16 @@ import {
 
 const PAGE_SIZE = 20;
 const POLL_MS = 2000;
+const FETCH_ACCOUNT_CURSOR_KEY = "m8-seeding-post-fetch-account-cursor";
 const TYPES = {
   photo: { Icon: ImageIcon, label: "Ảnh" },
   video: { Icon: Video, label: "Video" },
   text: { Icon: FileText, label: "Bài viết" },
 };
 const INPUT =
-  "min-w-0 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50 disabled:text-slate-400";
+  "min-w-0 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50 disabled:text-slate-400";
 const PRIMARY =
-  "inline-flex items-center justify-center gap-2 rounded-full bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400";
+  "inline-flex items-center justify-center gap-2 rounded-full bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400";
 const CHECKBOX =
   "size-4 shrink-0 cursor-pointer appearance-none rounded-full border-2 border-slate-300 bg-white checked:border-blue-600 checked:bg-blue-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:opacity-50 disabled:checked:border-slate-400 disabled:checked:bg-slate-400 disabled:checked:opacity-100";
 const fmt = (n) => Number(n || 0).toLocaleString("vi-VN");
@@ -81,6 +82,7 @@ export default function PostSourceFetcher({
 }) {
   const [sourceUrl, setSourceUrl] = useState("");
   const [job, setJob] = useState(null);
+  const [fetchAccountCursor, setFetchAccountCursor] = useState(0);
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
 
@@ -97,16 +99,24 @@ export default function PostSourceFetcher({
   const sourceKey = job?.source_key || "";
   const running = isActive(job);
 
-  // Nick quét: nick đầu tiên trong các nick ĐÃ TÍCH CHỌN còn khả dụng (Live + đã đăng nhập).
-  // Đang chạy lượt lấy bài (vd mở lại màn) thì giữ đúng nick của lượt đó.
+  useEffect(() => {
+    try {
+      const savedCursor = Number(window.localStorage.getItem(FETCH_ACCOUNT_CURSOR_KEY));
+      if (Number.isInteger(savedCursor) && savedCursor >= 0) setFetchAccountCursor(savedCursor);
+    } catch {
+      // Storage có thể bị trình duyệt chặn; khi đó luân phiên trong phiên hiện tại.
+    }
+  }, []);
+
+  // Mỗi lượt lấy bài dùng tài khoản kế tiếp trong danh sách đã chọn.
+  // Nếu job đang chạy thì giữ nguyên tài khoản đã gắn với job đó.
   const scanAccount = useMemo(() => {
     const byUid = new Map(accounts.map((a) => [a.uid, a]));
     if (job?.account_uid && running) return byUid.get(job.account_uid) || { uid: job.account_uid };
-    for (const uid of selectedUids) {
-      if (byUid.has(uid)) return byUid.get(uid);
-    }
-    return null;
-  }, [accounts, selectedUids, job?.account_uid, running]);
+    const eligibleUids = selectedUids.filter((uid) => byUid.has(uid));
+    if (eligibleUids.length === 0) return null;
+    return byUid.get(eligibleUids[fetchAccountCursor % eligibleUids.length]);
+  }, [accounts, selectedUids, fetchAccountCursor, job?.account_uid, running]);
   const accountUid = scanAccount?.uid || "";
   const accountLabel = scanAccount ? scanAccount.profile_name || scanAccount.name || scanAccount.uid : "";
 
@@ -214,6 +224,16 @@ export default function PostSourceFetcher({
     setStarting(true);
     try {
       const res = await postFetchApi.startJob(sourceUrl.trim(), accountUid);
+      const eligibleCount = selectedUids.filter((uid) => accounts.some((account) => account.uid === uid)).length;
+      if (eligibleCount > 0) {
+        const nextCursor = (fetchAccountCursor + 1) % eligibleCount;
+        setFetchAccountCursor(nextCursor);
+        try {
+          window.localStorage.setItem(FETCH_ACCOUNT_CURSOR_KEY, String(nextCursor));
+        } catch {
+          // Không ảnh hưởng đến lượt lấy bài hiện tại nếu storage không khả dụng.
+        }
+      }
       lastFound.current = -1;
       setJob(res?.job || null);
       toast.info("Đã bắt đầu lấy bài viết — bài sẽ hiện dần bên dưới.", "ĐANG LẤY BÀI");
@@ -275,7 +295,7 @@ export default function PostSourceFetcher({
     <>
       <div className="space-y-4 p-5 sm:p-6">
         <form onSubmit={handleStart} className="space-y-3">
-          <label className="block space-y-1.5 text-sm text-slate-600">
+          <label className="block space-y-1.5 text-xs text-slate-600">
             <span>Link Page hoặc trang cá nhân Facebook</span>
             <input
               type="text"
@@ -292,7 +312,7 @@ export default function PostSourceFetcher({
               type="button"
               onClick={handleStop}
               disabled={stopping || job?.status === "STOPPING"}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-rose-600 px-4 py-2.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
             >
               {stopping || job?.status === "STOPPING" ? (
                 <Loader2 className="size-4 animate-spin" aria-hidden="true" />
@@ -311,23 +331,23 @@ export default function PostSourceFetcher({
 
         {accountUid ? (
           <p className="text-xs text-slate-500">
-            Tài khoản quét: <b className="font-semibold text-slate-700">{accountLabel}</b> (lấy từ tài khoản đã tích chọn)
+            Tài khoản quét lượt này: <b className="font-semibold text-slate-700">{accountLabel}</b> (luân phiên theo các tài khoản đã tích chọn)
           </p>
         ) : (
-          <p role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+          <p role="alert" className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
             Hãy tích chọn tài khoản ở mục <b>&quot;Số lượng tài khoản sử dụng&quot;</b> — tài khoản quét được lấy từ các tài khoản
             đã tích chọn (cần còn Live và đã đăng nhập).
           </p>
         )}
 
         {sourceKey && !running && !list.available && (
-          <p role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+          <p role="alert" className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
             Danh sách bài tạm đã hết hạn — bấm &quot;Lấy danh sách bài viết&quot; để lấy lại.
           </p>
         )}
 
         {line && (
-          <p role="status" className={`flex items-center gap-2 text-sm ${TONE[line.tone]}`}>
+          <p role="status" className={`flex items-center gap-2 text-xs ${TONE[line.tone]}`}>
             {line.tone === "run" ? (
               <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />
             ) : line.tone === "ok" ? (
@@ -343,7 +363,7 @@ export default function PostSourceFetcher({
           <>
             <div className="space-y-3 border-t border-slate-100 pt-4">
               <div className="flex items-center justify-between gap-2">
-                <h3 className="text-sm font-bold text-slate-900">Danh sách bài viết</h3>
+                <h3 className="text-xs font-bold text-slate-900">Danh sách bài viết</h3>
                 <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{fmt(list.total)} kết quả</span>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -371,12 +391,12 @@ export default function PostSourceFetcher({
                   type="button"
                   onClick={handlePickFirst}
                   disabled={busy || !list.total || !pickValid}
-                  className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+                  className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-200 disabled:opacity-50"
                 >
                   Chọn {pickValid ? fmt(pickN) : "N"} bài
                 </button>
               </div>
-              <div className="flex items-center justify-between gap-3 text-sm">
+              <div className="flex items-center justify-between gap-3 text-xs">
                 <label className="flex cursor-pointer items-center gap-2 text-slate-700">
                   <input
                     type="checkbox"
@@ -400,11 +420,11 @@ export default function PostSourceFetcher({
 
             <div className="space-y-2">
               {loadingList && !list.items.length ? (
-                <p className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 p-4 text-sm text-slate-500">
+                <p className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 p-4 text-xs text-slate-500">
                   <Loader2 className="size-4 animate-spin text-blue-600" aria-hidden="true" /> Đang tải bài viết...
                 </p>
               ) : !list.items.length ? (
-                <p className="rounded-xl border border-slate-200 p-4 text-center text-sm text-slate-500">
+                <p className="rounded-xl border border-slate-200 p-4 text-center text-xs text-slate-500">
                   {running
                     ? "Đang chờ bài đầu tiên..."
                     : q
@@ -433,7 +453,7 @@ export default function PostSourceFetcher({
                       />
                       <Icon className="size-4 shrink-0 text-slate-400" aria-hidden="true" />
                       <span className="min-w-0 space-y-1">
-                        <span className="block break-words text-sm font-semibold text-slate-900">{title}</span>
+                        <span className="block break-words text-xs font-semibold text-slate-900">{title}</span>
                         {desc && <span className="line-clamp-2 break-words text-xs text-slate-500">{desc}</span>}
                         <span className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                           <span className="rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-700">{label}</span>
@@ -468,7 +488,7 @@ export default function PostSourceFetcher({
       {sourceKey && (
         <footer className="sticky bottom-0 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 bg-white px-5 py-3 sm:px-6">
           <div aria-live="polite">
-            <p className="text-sm font-bold text-slate-900">{fmt(chosen)} bài đã chọn</p>
+            <p className="text-xs font-bold text-slate-900">{fmt(chosen)} bài đã chọn</p>
             <p className="text-xs text-slate-500">
               Bài viết chỉ lưu tạm — bấm &quot;Thêm bài viết đã chọn&quot; mới lưu vào danh sách seeding
             </p>

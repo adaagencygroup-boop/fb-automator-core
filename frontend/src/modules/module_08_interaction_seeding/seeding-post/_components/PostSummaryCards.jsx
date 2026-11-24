@@ -1,35 +1,39 @@
 "use client";
 
 import React from "react";
-import { ClipboardList, BarChart2, Info, Lightbulb, CheckCircle2, Check, Shield } from "lucide-react";
-import { DEFAULT_POSTS_PER_ACCOUNT } from "../runPlan.mjs";
+import { ClipboardList, BarChart2, Lightbulb, Check, Shield } from "lucide-react";
 
-// Danh sách bài có thể rất dài (lấy từ page): chỉ vẽ N dòng đầu trong bảng phân bổ
-const MAX_ROWS = 300;
-
-/**
- * 3 thẻ tóm tắt dưới bước Thời gian — giao diện giống hệt Seeding Page / Seeding Trang cá nhân (PageSummaryCards).
- * Chia xoay vòng: bài thứ i do tài khoản số floor(i / N) mod (số tài khoản) làm.
- */
 export default function PostSummaryCards({
   targets,
   accountCount,
-  accountNames = [],
   doLike,
   doComment,
   doShare,
+  selectedReactions,
   minDelay,
   maxDelay,
-  postsPerAccount = DEFAULT_POSTS_PER_ACCOUNT,
 }) {
   const targetCount = targets.length;
-  const actions = [doLike && "Cảm xúc", doComment && "Bình luận", doShare && "Chia sẻ"].filter(Boolean);
-  const estimatedTotal = accountCount > 0 ? targetCount * actions.length : 0;
-  const ownerOf = (idx) => {
-    if (!accountCount) return "—";
-    const k = Math.floor(idx / postsPerAccount) % accountCount;
-    return accountNames[k] || `Tài khoản ${k + 1}`;
-  };
+
+  // Phân bổ dự kiến (cùng quy tắc với backend create_seeding_campaign):
+  // cảm xúc = mọi nick trên mỗi bài, bình luận = random 1 nửa số nick trên mỗi bài,
+  // chia sẻ = tổng bằng số nick, chia ngẫu nhiên cho các bài trong khoảng ±20% mức chia đều.
+  const reactPerPost = doLike ? accountCount : 0;
+  const halfAccounts = accountCount > 0 ? Math.max(1, Math.floor(accountCount / 2)) : 0;
+  const commentPerPost = doComment ? halfAccounts : 0;
+
+  // Giống share_range_per_post() ở backend (vd 50 nick / 4 bài -> 10–15)
+  // Mỗi bài luôn có ít nhất 1 lượt; ít nick hơn số bài thì mỗi bài đúng 1 lượt (1 nick share nhiều bài)
+  const fewerAccountsThanPosts = targetCount > 1 && accountCount > 0 && accountCount < targetCount;
+  const shareMin = targetCount <= 1 ? accountCount
+    : fewerAccountsThanPosts ? 1 : Math.max(1, Math.floor((4 * accountCount) / (5 * targetCount)));
+  const shareMax = targetCount <= 1 ? accountCount
+    : fewerAccountsThanPosts ? 1 : Math.ceil((6 * accountCount) / (5 * targetCount));
+  const sharePerPostLabel = !doShare ? 0 : shareMin === shareMax ? shareMin : `${shareMin}–${shareMax}`;
+
+  const totalReacts = targetCount * reactPerPost;
+  const totalComments = targetCount * commentPerPost;
+  const totalShares = doShare && targetCount > 0 && accountCount > 0 ? Math.max(accountCount, targetCount) : 0;
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
@@ -40,56 +44,69 @@ export default function PostSummaryCards({
             <ClipboardList className="w-4 h-4" />
             <h3 className="text-xs font-bold tracking-wide">Tóm tắt cấu hình</h3>
           </div>
+          <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-medium">
+            Bài viết
+          </span>
         </div>
 
-        <div className="p-5 space-y-3.5 text-xs text-gray-700 font-medium flex-1">
+        <div className="p-5 space-y-3 text-xs text-gray-700 font-medium flex-1">
           <div className="flex justify-between items-center py-1 border-b border-gray-100">
             <span className="text-gray-500">Số bài viết</span>
-            <strong className="text-gray-900 font-bold">{targetCount}</strong>
+            <strong className="text-gray-900 font-bold">{targetCount} bài</strong>
           </div>
 
           <div className="flex justify-between items-center py-1 border-b border-gray-100">
-            <span className="text-gray-500">Số tài khoản sử dụng</span>
-            <strong className="text-gray-900 font-bold">{accountCount}</strong>
-          </div>
-
-          <div className="flex justify-between items-center gap-2 py-1 border-b border-gray-100">
-            <span className="text-gray-500 shrink-0">Loại tương tác</span>
-            <span className="flex flex-wrap justify-end gap-1">
-              {actions.length ? (
-                actions.map((a) => (
-                  <span
-                    key={a}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-[11px] border border-emerald-200/60"
-                  >
-                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                    {a}
-                  </span>
-                ))
-              ) : (
-                <span className="text-gray-400 font-normal">Chưa chọn</span>
-              )}
+            <span className="text-gray-500">Số tài khoản</span>
+            <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 font-bold">
+              {accountCount} tài khoản
             </span>
           </div>
 
           <div className="flex justify-between items-center py-1 border-b border-gray-100">
-            <span className="text-gray-500">Tổng lượt tối đa</span>
-            <div className="text-right">
-              <strong className="text-gray-900 font-bold">{estimatedTotal} lượt</strong>
-              <div className="text-[10px] text-gray-400 font-normal">
-                (mỗi bài 1 tài khoản, mỗi loại 1 lần)
-              </div>
+            <span className="text-gray-500">Loại tương tác</span>
+            <div className="flex flex-wrap gap-1 justify-end">
+              {doLike && (
+                <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200">
+                  Cảm xúc
+                </span>
+              )}
+              {doComment && (
+                <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 text-[10px] font-bold border border-blue-200">
+                  Bình luận
+                </span>
+              )}
+              {doShare && (
+                <span className="px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 text-[10px] font-bold border border-purple-200">
+                  Chia sẻ
+                </span>
+              )}
             </div>
           </div>
 
-          <div className="flex justify-between items-center py-1">
-            <span className="text-gray-500">Nghỉ giữa 2 lần</span>
+          {doLike && (
+            <div className="flex justify-between items-center py-1 border-b border-gray-100">
+              <span className="text-gray-500">Cảm xúc Facebook</span>
+              <span className="font-bold text-gray-800">
+                {selectedReactions.length} cảm xúc
+              </span>
+            </div>
+          )}
+
+          <div className="flex justify-between items-center py-1 border-b border-gray-100">
+            <span className="text-gray-500">Thời gian nghỉ</span>
             <strong className="text-gray-900 font-bold">{minDelay} – {maxDelay} giây</strong>
+          </div>
+
+          <div className="flex justify-between items-center py-1">
+            <span className="text-gray-500">Số lượng mỗi bài</span>
+            <span className="text-emerald-600 font-bold">
+              {accountCount} tài khoản chạy
+            </span>
           </div>
         </div>
       </div>
 
-      {/* Card 2: Phân bổ lượt tương tác (dự kiến) */}
+      {/* Card 2: Phân bổ lượt (dự kiến) */}
       <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm p-5 flex flex-col justify-between">
         <div>
           <div className="flex items-center justify-between pb-3 border-b border-gray-100 mb-3">
@@ -97,46 +114,52 @@ export default function PostSummaryCards({
               <span className="p-1 rounded-md bg-emerald-100 text-emerald-600">
                 <BarChart2 className="w-3.5 h-3.5" />
               </span>
-              <span>Phân bổ lượt tương tác (dự kiến)</span>
+              <span>Phân bổ lượt (dự kiến)</span>
             </div>
-            <Info className="w-3.5 h-3.5 text-gray-400" />
+            <span className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-semibold">
+              Đã cân bằng
+            </span>
           </div>
 
           <div className="overflow-y-auto max-h-[195px] pr-1">
-            <table className="w-full text-left text-xs border-collapse">
+            <table className="w-full text-center text-xs border-collapse">
               <thead className="sticky top-0 bg-white z-10">
-                <tr className="text-gray-400 text-[11px] border-b border-gray-100 bg-white">
-                  <th className="py-2 font-normal bg-white">Bài viết</th>
-                  <th className="py-2 text-right font-normal bg-white">Tài khoản thực hiện</th>
+                <tr className="text-gray-500 text-[11px] border-b border-gray-100 bg-gray-50/90 font-semibold">
+                  <th className="py-2 px-2 text-left bg-white">Tên hiển thị</th>
+                  <th className="py-2 px-2 text-blue-600 bg-white">Cảm xúc</th>
+                  <th className="py-2 px-2 text-emerald-600 bg-white">Bình luận</th>
+                  <th className="py-2 px-2 text-purple-600 bg-white">Chia sẻ</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-50 text-gray-800 font-medium">
+              <tbody className="divide-y divide-gray-100 text-gray-700 font-medium">
                 {targets.length === 0 ? (
                   <tr>
-                    <td colSpan={2} className="py-8 text-center text-gray-400 text-xs">
-                      Chưa có bài viết nào được thêm
+                    <td colSpan={4} className="py-8 text-center text-gray-400 text-xs">
+                      Chưa có bài viết nào
                     </td>
                   </tr>
                 ) : (
-                  <>
-                    {targets.slice(0, MAX_ROWS).map((t, idx) => (
-                      <tr key={t.id ?? idx} className="hover:bg-gray-50/50">
-                        <td className="py-2.5 truncate max-w-[140px] font-semibold text-gray-900" title={t.display_name || t.url}>
-                          {t.display_name || `Bài viết ${idx + 1}`}
-                        </td>
-                        <td className="py-2.5 text-right font-bold text-gray-900 truncate max-w-[120px]" title={ownerOf(idx)}>
-                          {ownerOf(idx)}
-                        </td>
-                      </tr>
-                    ))}
-                    {targets.length > MAX_ROWS && (
-                      <tr>
-                        <td colSpan={2} className="py-2.5 text-center text-gray-400 text-[11px]">
-                          … và {targets.length - MAX_ROWS} bài viết khác
-                        </td>
-                      </tr>
-                    )}
-                  </>
+                  targets.map((t, idx) => (
+                    <tr key={idx} className="hover:bg-gray-50/50">
+                      <td
+                        className="py-2 px-2 text-left font-bold text-gray-900 truncate max-w-[140px]"
+                        title={t.display_name || (t.fb_id ? `Bài viết ${t.fb_id}` : `Bài viết ${idx + 1}`)}
+                      >
+                        {t.display_name || (t.fb_id ? `Bài viết ${t.fb_id}` : `Bài viết ${idx + 1}`)}
+                      </td>
+                      <td className="py-2 px-2 font-semibold">{doLike ? reactPerPost : 0}</td>
+                      <td className="py-2 px-2 font-semibold">{commentPerPost}</td>
+                      <td className="py-2 px-2 font-semibold">{sharePerPostLabel}</td>
+                    </tr>
+                  ))
+                )}
+                {targets.length > 0 && (
+                  <tr className="bg-gray-50/80 font-bold text-gray-900 border-t border-gray-200">
+                    <td className="py-2 px-2 text-left">Tổng</td>
+                    <td className="py-2 px-2 text-blue-700">{totalReacts}</td>
+                    <td className="py-2 px-2 text-emerald-700">{totalComments}</td>
+                    <td className="py-2 px-2 text-purple-700">{totalShares}</td>
+                  </tr>
                 )}
               </tbody>
             </table>
@@ -144,7 +167,7 @@ export default function PostSummaryCards({
         </div>
       </div>
 
-      {/* Card 3: Lưu ý */}
+      {/* Card 3: Lưu ý quan trọng */}
       <div className="bg-[#FFFDF9] rounded-2xl border border-amber-200/90 shadow-sm p-5 flex flex-col justify-between">
         <div>
           {/* Header */}
@@ -157,19 +180,51 @@ export default function PostSummaryCards({
 
           {/* List */}
           <div className="space-y-3.5 text-xs text-gray-700 leading-relaxed font-normal">
-            {[
-              "Mỗi bài viết chỉ 1 tài khoản tương tác (theo các loại tương tác đã chọn).",
-              `Mỗi tài khoản làm ${postsPerAccount} bài liên tiếp, hết tài khoản thì quay lại tài khoản đầu.`,
-              "Nên để thời gian nghỉ từ 30 – 60 giây để an toàn.",
-              "Không nên chạy quá nhiều trong thời gian ngắn.",
-            ].map((text) => (
-              <div key={text} className="flex items-start gap-2.5">
-                <div className="w-4 h-4 rounded-full bg-amber-500 flex items-center justify-center shrink-0 mt-0.5">
-                  <Check className="w-2.5 h-2.5 text-white stroke-[3]" />
-                </div>
-                <p>{text}</p>
+            <div className="flex items-start gap-2.5">
+              <div className="w-4 h-4 rounded-full bg-amber-500 flex items-center justify-center shrink-0 mt-0.5">
+                <Check className="w-2.5 h-2.5 text-white stroke-[3]" />
               </div>
-            ))}
+              <p>
+                Tổng số lượt tương tác bằng tổng số tài khoản khả dụng ({accountCount || 50}).
+              </p>
+            </div>
+
+            <div className="flex items-start gap-2.5">
+              <div className="w-4 h-4 rounded-full bg-amber-500 flex items-center justify-center shrink-0 mt-0.5">
+                <Check className="w-2.5 h-2.5 text-white stroke-[3]" />
+              </div>
+              <p>
+                Mỗi tài khoản chỉ thực hiện <strong className="font-semibold text-gray-900">1 lần</strong> cho mỗi loại tương tác trên mỗi bài viết.
+              </p>
+            </div>
+
+            <div className="flex items-start gap-2.5">
+              <div className="w-4 h-4 rounded-full bg-amber-500 flex items-center justify-center shrink-0 mt-0.5">
+                <Check className="w-2.5 h-2.5 text-white stroke-[3]" />
+              </div>
+              <p>
+                Hệ thống{" "}
+                <span className="text-blue-600 font-medium">
+                  tự động random phân bổ
+                </span>{" "}
+                mỗi bài {accountCount} cảm xúc và {halfAccounts} bình luận (1 nửa số tài khoản);{" "}
+                {accountCount} lượt chia sẻ chia cho {targetCount || 1} bài
+                {targetCount > 1 ? ` (mỗi bài ${shareMin}–${shareMax} lượt)` : ""}.
+              </p>
+            </div>
+
+            <div className="flex items-start gap-2.5">
+              <div className="w-4 h-4 rounded-full bg-amber-500 flex items-center justify-center shrink-0 mt-0.5">
+                <Check className="w-2.5 h-2.5 text-white stroke-[3]" />
+              </div>
+              <p>
+                Nên thiết lập thời gian nghỉ từ{" "}
+                <span className="text-blue-600 font-medium">
+                  30 – 60
+                </span>{" "}
+                giây để hạn chế checkpoint và an toàn nhất.
+              </p>
+            </div>
           </div>
         </div>
 

@@ -11,7 +11,6 @@ import StepCard from "./StepCard";
 export default function PostCommentsManager({
   step = 3,
   comments,
-  onAddComment,
   onAddBulkComments,
   onRemoveComment,
   onClearAllComments,
@@ -21,9 +20,7 @@ export default function PostCommentsManager({
   const variantsTotal = totalVariants(comments);
   const notEnough = commentPerPost > 0 && comments.length > 0 && variantsTotal < commentPerPost;
   const [bulkText, setBulkText] = useState("");
-  const [singleText, setSingleText] = useState("");
   const [isAddingBulk, setIsAddingBulk] = useState(false);
-  const [isAddingSingle, setIsAddingSingle] = useState(false);
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
 
   // Dialog states for deleting comments
@@ -36,30 +33,14 @@ export default function PostCommentsManager({
   const handlePasteClipboard = async () => {
     try {
       const text = await navigator.clipboard.readText();
-      if (text) {
-        const lines = text
-          .split("\n")
-          .map((l) => l.trim())
-          .filter((l) => l.length > 0);
-        if (lines.length > 0) {
-          setIsAddingBulk(true);
-          try {
-            await Promise.all([
-              onAddBulkComments(lines),
-              new Promise((resolve) => setTimeout(resolve, 600)),
-            ]);
-            toast.success(`Đã dán và thêm ${lines.length} câu bình luận từ clipboard!`, "THÀNH CÔNG");
-          } finally {
-            setIsAddingBulk(false);
-          }
-        } else {
-          toast.warning("Nội dung trong Clipboard không chứa dòng văn bản hợp lệ!", "CẢNH BÁO");
-        }
-      } else {
-        toast.warning("Clipboard hiện tại đang trống!", "THÔNG BÁO");
+      if (!text) {
+        toast.warning("Clipboard hiện đang trống.", "KHÔNG CÓ VĂN BẢN");
+        return;
       }
+      setBulkText((current) => (current ? `${current.replace(/\s+$/, "")}\n${text}` : text));
+      toast.success("Đã dán văn bản từ clipboard vào ô nhập.", "ĐÃ DÁN VĂN BẢN");
     } catch {
-      toast.error("Không thể đọc từ Clipboard. Vui lòng dán thủ công vào ô nhập.", "LỖI TRUY CẬP");
+      toast.error("Không thể đọc clipboard. Hãy cấp quyền clipboard cho trình duyệt rồi thử lại.", "KHÔNG ĐỌC ĐƯỢC CLIPBOARD");
     }
   };
 
@@ -82,20 +63,6 @@ export default function PostCommentsManager({
       } finally {
         setIsAddingBulk(false);
       }
-    }
-  };
-
-  const handleSingleAdd = async () => {
-    const text = singleText.trim();
-    if (!text || isAddingSingle) return;
-    setIsAddingSingle(true);
-    try {
-      await onAddComment(text);
-      setSingleText("");
-    } catch (e) {
-      toast.error(e?.message || "Không thể thêm bình luận!", "LỖI");
-    } finally {
-      setIsAddingSingle(false);
     }
   };
 
@@ -135,18 +102,36 @@ export default function PostCommentsManager({
       <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
         {/* Cột trái: dán nhiều câu */}
         <div className="space-y-3">
-          <div className="flex h-8 items-center gap-2">
-            <span className="flex h-8 items-center rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm">
-              Dán nhanh từ văn bản
-            </span>
+          <div className="flex min-h-8 flex-wrap items-center justify-between gap-2">
             <button
               type="button"
-              onClick={() => setIsExcelModalOpen(true)}
-              className="flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              onClick={handlePasteClipboard}
+              disabled={isAddingBulk}
+              className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              <FileSpreadsheet className="size-3.5 text-emerald-600" aria-hidden="true" />
-              Import file (Excel)
+              <Clipboard className="size-3.5" aria-hidden="true" />
+              Dán nhanh từ văn bản
             </button>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsExcelModalOpen(true)}
+                disabled={isAddingBulk}
+                className="flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FileSpreadsheet className="size-3.5 text-emerald-600" aria-hidden="true" />
+                Import file (Excel)
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkAdd}
+                disabled={bulkText.trim().length === 0 || isAddingBulk}
+                className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
+              >
+                {isAddingBulk ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Plus className="size-3.5" aria-hidden="true" />}
+                {isAddingBulk ? "Đang thêm..." : "Thêm vào danh sách"}
+              </button>
+            </div>
           </div>
 
           <textarea
@@ -157,26 +142,12 @@ export default function PostCommentsManager({
             className="h-[188px] w-full resize-none rounded-xl border border-slate-200 bg-white p-3.5 text-xs leading-relaxed text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
           />
 
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-            <span className="italic text-slate-400">
-              Mỗi dòng là 1 bình luận. Hệ thống sẽ tự động tách từng dòng. Hỗ trợ spintax {"{Hay quá|Tuyệt vời}"}.
-            </span>
-            <button
-              type="button"
-              onClick={handleBulkAdd}
-              disabled={bulkText.trim().length === 0 || isAddingBulk}
-              className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
-            >
-              {isAddingBulk ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Plus className="size-3.5" aria-hidden="true" />}
-              {isAddingBulk ? "Đang thêm..." : "Thêm vào danh sách"}
-            </button>
-          </div>
         </div>
 
         {/* Cột phải: danh sách đang dùng */}
         <div className="space-y-3">
           <div className="flex h-8 items-center justify-between gap-2">
-            <span className="text-sm font-bold text-slate-800">
+            <span className="text-xs font-bold text-slate-800">
               Danh sách bình luận{" "}
               <span className="font-semibold text-slate-500">
                 ({comments.length.toLocaleString("vi-VN")}
@@ -195,15 +166,6 @@ export default function PostCommentsManager({
                   Xóa tất cả
                 </button>
               )}
-              <button
-                type="button"
-                onClick={handlePasteClipboard}
-                disabled={isAddingBulk}
-                className="flex h-8 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-60"
-              >
-                <Clipboard className="size-3.5" aria-hidden="true" />
-                Dán nhanh
-              </button>
             </div>
           </div>
 
@@ -216,7 +178,7 @@ export default function PostCommentsManager({
               <table className="w-full border-collapse text-left text-xs">
                 <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 font-semibold text-slate-600">
                   <tr>
-                    <th className="w-10 px-3 py-2.5">#</th>
+                    <th className="w-10 px-3 py-2.5">STT</th>
                     <th className="px-3 py-2.5">Nội dung bình luận</th>
                     <th className="w-20 px-3 py-2.5 text-right">Thao tác</th>
                   </tr>
@@ -246,31 +208,6 @@ export default function PostCommentsManager({
               </table>
             )}
           </div>
-
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleSingleAdd();
-            }}
-            className="flex items-center gap-2"
-          >
-            <input
-              type="text"
-              value={singleText}
-              onChange={(e) => setSingleText(e.target.value)}
-              aria-label="Nhập 1 bình luận"
-              placeholder="Nhập bình luận..."
-              className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-            />
-            <button
-              type="submit"
-              disabled={!singleText.trim() || isAddingSingle}
-              className="flex h-9 shrink-0 items-center gap-1 rounded-lg bg-blue-600 px-4 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-            >
-              {isAddingSingle ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Plus className="size-3.5" aria-hidden="true" />}
-              Thêm
-            </button>
-          </form>
 
           {comments.length > 0 && variantsTotal > comments.length && (
             <p className="text-[11px] text-slate-500">Spintax: {variantsTotal.toLocaleString("vi-VN")} câu khác nhau.</p>

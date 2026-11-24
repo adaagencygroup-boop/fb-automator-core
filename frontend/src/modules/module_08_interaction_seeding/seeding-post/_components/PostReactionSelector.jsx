@@ -252,7 +252,7 @@ function InteractionCard({ Icon, title, desc, checked, onChecked, disabled }) {
         <Icon className="size-[18px]" aria-hidden="true" />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block text-sm font-bold text-slate-900">{title}</span>
+        <span className="block text-xs font-bold text-slate-900">{title}</span>
         <span className="block text-xs text-slate-500">{desc}</span>
       </span>
       <input
@@ -311,7 +311,7 @@ export default function PostReactionSelector({
           <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-bold text-slate-800">Cảm xúc Facebook (Reactions):</span>
+                <span className="text-xs font-bold text-slate-800">Cảm xúc Facebook (Reactions):</span>
                 <span className="rounded-md border border-blue-100 bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-600">
                   Đã chọn {selectedReactions.length} cảm xúc
                 </span>

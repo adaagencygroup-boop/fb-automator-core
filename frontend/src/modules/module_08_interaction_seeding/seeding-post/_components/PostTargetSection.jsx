@@ -325,8 +325,10 @@ export default function PostTargetSection({
           <button
             type="button"
             aria-haspopup="dialog"
-            onClick={() => setIsFetchOpen(true)}
-            className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3.5 py-2 text-left text-xs font-semibold text-blue-700 shadow-sm hover:bg-blue-100"
+            onClick={() => !isRunning && setIsFetchOpen(true)}
+            disabled={isRunning}
+            title={isRunning ? "Đang chạy seeding, không thể lấy bài viết từ page" : undefined}
+            className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3.5 py-2 text-left text-xs font-semibold text-blue-700 shadow-sm hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Link2 className="size-3.5 shrink-0" aria-hidden="true" />
             Lấy bài viết từ page/ trang cá nhân
@@ -470,7 +472,7 @@ export default function PostTargetSection({
       {targets.length > 0 && (
         <div className="space-y-2 pt-1">
           <div className="flex items-center justify-between px-1">
-            <span className="text-sm font-bold text-slate-900">
+            <span className="text-xs font-bold text-slate-900">
               Danh sách bài viết đã thêm:{" "}
               <span className="text-blue-600 font-semibold">({targets.length.toLocaleString("vi-VN")})</span>
             </span>

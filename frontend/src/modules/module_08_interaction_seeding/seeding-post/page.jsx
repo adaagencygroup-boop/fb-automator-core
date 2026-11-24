@@ -13,7 +13,7 @@ import PostProgressTerminal from "./_components/PostProgressTerminal";
 import PostReactionSelector from "./_components/PostReactionSelector";
 import PostSummaryCards from "./_components/PostSummaryCards";
 import PostTargetSection from "./_components/PostTargetSection";
-import { DEFAULT_POSTS_PER_ACCOUNT, DISTRIBUTION_ROTATION, planTotals } from "./runPlan.mjs";
+import { DISTRIBUTION_ALL, planTotals } from "./runPlan.mjs";
 import AccountSelectModal from "../_components/AccountSelectModal";
 import { loadSavedUids, resolveInitialUids, saveSelectedUids } from "../accountSelection.mjs";
 
@@ -36,9 +36,8 @@ export default function SeedingPostPage() {
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [delayMin, setDelayMin] = useState(30);
   const [delayMax, setDelayMax] = useState(60);
-  // Luôn chia xoay vòng: mỗi tài khoản làm 50 bài liên tiếp, hết tài khoản thì quay lại tài khoản đầu
-  const distributionMode = DISTRIBUTION_ROTATION;
-  const postsPerAccount = DEFAULT_POSTS_PER_ACCOUNT;
+  // Dùng lại cách phân bổ cũ: các tài khoản được chọn cùng tham gia trên từng bài.
+  const distributionMode = DISTRIBUTION_ALL;
 
   const [isRunning, setIsRunning] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
@@ -287,21 +286,6 @@ export default function SeedingPostPage() {
     setSuccessMessage(null);
   };
 
-  const handleAddComment = async (cmt) => {
-    const trimmed = cmt.trim();
-    if (!trimmed) return;
-    try {
-      const res = await seedingApi.addSeedingComments([trimmed]);
-      if (res && res.comments) {
-        setComments(res.comments);
-        return res.comments;
-      }
-    } catch (e) {
-      throw e;
-    }
-    setComments((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
-  };
-
   const handleAddBulkComments = async (newCmts) => {
     const cleaned = newCmts.map((c) => c.trim()).filter((c) => c.length > 0);
     if (cleaned.length === 0) return;
@@ -352,12 +336,6 @@ export default function SeedingPostPage() {
     [accountCount, targets.length, doLike, doComment, doShare, distributionMode],
   );
 
-  // Tên nick theo đúng thứ tự đã chọn (nick 1, nick 2… của cách chia xoay vòng)
-  const accountNames = useMemo(() => {
-    const byUid = new Map(liveAccountList.map((a) => [a.uid, a.profile_name || a.name || a.uid]));
-    return selectedUids.map((uid) => byUid.get(uid) || uid);
-  }, [liveAccountList, selectedUids]);
-
   /** Payload tạo chiến dịch Seeding Bài viết. */
   const buildCampaignPayload = () => {
     const actions = [];
@@ -378,7 +356,6 @@ export default function SeedingPostPage() {
       delay_seconds_min: delayMin,
       delay_seconds_max: delayMax,
       distribution_mode: distributionMode,
-      posts_per_account: postsPerAccount,
     };
   };
 
@@ -558,7 +535,6 @@ export default function SeedingPostPage() {
         <PostCommentsManager
           step={3}
           comments={comments}
-          onAddComment={handleAddComment}
           onAddBulkComments={handleAddBulkComments}
           onRemoveComment={handleRemoveComment}
           onClearAllComments={handleClearAllComments}
@@ -574,8 +550,10 @@ export default function SeedingPostPage() {
         accountCount={accountCount}
         availableAccounts={liveAccountsCount}
         selectedUids={selectedUids}
-        targetCount={targets.length}
-        postsPerAccount={postsPerAccount}
+        selectedReactionsCount={selectedReactions.length}
+        doLike={doLike}
+        doComment={doComment}
+        doShare={doShare}
         minDelay={delayMin}
         maxDelay={delayMax}
         onMinDelayChange={setDelayMin}
@@ -591,13 +569,12 @@ export default function SeedingPostPage() {
       <PostSummaryCards
         targets={targets}
         accountCount={accountCount}
-        accountNames={accountNames}
         doLike={doLike}
         doComment={doComment}
         doShare={doShare}
+        selectedReactions={selectedReactions}
         minDelay={delayMin}
         maxDelay={delayMax}
-        postsPerAccount={postsPerAccount}
       />
 
       {/* Live Terminal */}
