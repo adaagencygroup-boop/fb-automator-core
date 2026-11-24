@@ -637,7 +637,7 @@ def assert_request_module_access(authorization: Optional[str], path: str, method
         "/api/groups": "spam_group", "/api/group-scan": "scan_group",
         "/api/page-scanner": "scan_page", "/api/seeding": "seeding",
         "/api/farm": "post_interact", "/api/post": "post_interact",
-        "/api/facebook": "chat_fanpage",
+        "/api/facebook": "chat_fanpage", "/api/profile-scan": "scan_profile",
     }
     feature_key = next((key for prefix, key in prefixes.items() if path == prefix or path.startswith(prefix + "/")), None)
     return assert_module_access(authorization, feature_key)

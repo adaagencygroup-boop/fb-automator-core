@@ -302,28 +302,12 @@ export const NAV_ITEMS = [
         icon: icon("icon_nav_fb_accounts", 16.5417, 14.1667),
       },
       {
-        id: "scanner.posts",
-        label: "Quét bài viết page",
-        title: "Quét bài viết page",
-        description: "Thu thập bài viết từ Fanpage đã chọn.",
-        moduleId: "scanner",
-        icon: icon("icon_nav_post_facebook", 14, 14),
-      },
-      {
         id: "scanner.list",
         label: "Danh sách page",
         title: "Danh sách page",
         description: "Kho Fanpage đã quét — dùng lại cho quét followers / bài viết.",
         moduleId: "scanner",
         icon: icon("icon_nav_fanpage_list", 24, 10.5),
-      },
-      {
-        id: "scanner.list-posts",
-        label: "Danh sách bài viết page",
-        title: "Danh sách bài viết page",
-        description: "Kho bài viết đã quét từ Fanpage.",
-        moduleId: "scanner",
-        icon: icon("icon_nav_seeding_post", 16, 16),
       },
       {
         id: "scanner.list-followers",
@@ -343,6 +327,27 @@ export const NAV_ITEMS = [
       },
     ],
   },
+  {
+    id: "profile_scan",
+    label: "Quét profile",
+    icon: icon("icon_nav_group_spam", 30, 13),
+    children: [
+      {
+        id: "profile_scan.info",
+        label: "Quét thông tin profile",
+        description: "Quét tên, hồ sơ, UID, link, số bạn bè của profile từ nhóm, page, bài viết, link hoặc tệp.",
+        moduleId: "profile_scan",
+        icon: icon("icon_nav_fb_accounts", 16.5417, 14.1667),
+      },
+      {
+        id: "profile_scan.list",
+        label: "Danh sách profile",
+        description: "Kho profile đã quét theo nhóm, bài viết, page và danh mục.",
+        moduleId: "profile_scan",
+        icon: icon("icon_nav_seeding_profile", 16, 13),
+      },
+    ],
+  },
 ];
 
 /** Trang không nằm trên Sidebar, mở từ chỗ khác (vd. bấm avatar trên Header) */
@@ -353,6 +358,23 @@ export const HIDDEN_NAV_ITEMS = [
     description: "Quản trị thông tin xác thực tài khoản, thời hạn License và liên kết phần cứng HWID an toàn.",
     moduleId: "settings",
     icon: icon("icon_nav_profile", 30, 13),
+  },
+  // Tạm ẩn khỏi menu Quét page — chuyển lại vào "scanner" để hiện
+  {
+    id: "scanner.posts",
+    label: "Quét bài viết page",
+    title: "Quét bài viết page",
+    description: "Thu thập bài viết từ Fanpage đã chọn.",
+    moduleId: "scanner",
+    icon: icon("icon_nav_post_facebook", 14, 14),
+  },
+  {
+    id: "scanner.list-posts",
+    label: "Danh sách bài viết page",
+    title: "Danh sách bài viết page",
+    description: "Kho bài viết đã quét từ Fanpage.",
+    moduleId: "scanner",
+    icon: icon("icon_nav_seeding_post", 16, 16),
   },
 ];
 

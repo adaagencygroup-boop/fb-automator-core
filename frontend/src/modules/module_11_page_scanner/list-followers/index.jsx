@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "@/lib/toast";
 import { runDelete } from "../_shared";
+import CreateCategoryModal from "@/modules/module_10_group_scan/member-list/_components/CreateCategoryModal";
 import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
 import {
@@ -25,6 +26,7 @@ import {
   getPagesWithFollowers,
   importFollowers,
   deletePageFollowers,
+  createPageList,
 } from "../service";
 import {
   ListPageHeader,
@@ -42,6 +44,9 @@ const ALL_ID = "__all__";
 
 export default function PageScannerListFollowers() {
   const [pages, setPages] = useState([]);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newListName, setNewListName] = useState("");
+  const [creating, setCreating] = useState(false);
   const [sideSearch, setSideSearch] = useState("");
   const [activePageKey, setActivePageKey] = useState(ALL_ID);
 
@@ -50,8 +55,7 @@ export default function PageScannerListFollowers() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [keyword, setKeyword] = useState("");
-  const [locationFilter, setLocationFilter] = useState("");
-  const [friendFilter, setFriendFilter] = useState("ALL");
+  const [hideSuspect, setHideSuspect] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState([]);
 
@@ -101,30 +105,11 @@ export default function PageScannerListFollowers() {
         page_size: pageSize,
         keyword: keyword.trim() || undefined,
         page_key: activePageKey !== ALL_ID ? activePageKey : undefined,
+        hide_suspect: hideSuspect || undefined,
       })
         .then((data) => {
-          let rows = data.items || [];
-          if (locationFilter.trim()) {
-            const loc = locationFilter.trim().toLowerCase();
-            rows = rows.filter((r) =>
-              `${r.location || ""}`.toLowerCase().includes(loc),
-            );
-          }
-          if (friendFilter !== "ALL") {
-            const minFr =
-              friendFilter === "GT_2000"
-                ? 2000
-                : friendFilter === "GT_1000"
-                  ? 1000
-                  : 500;
-            rows = rows.filter((r) => Number(r.friend_count || 0) >= minFr);
-          }
-          setItems(rows);
-          setTotal(
-            locationFilter.trim() || friendFilter !== "ALL"
-              ? rows.length
-              : data.total || 0,
-          );
+          setItems(data.items || []);
+          setTotal(data.total || 0);
           setPage(p);
           setSelectedIds([]);
         })
@@ -133,12 +118,12 @@ export default function PageScannerListFollowers() {
         })
         .finally(() => setLoading(false));
     },
-    [pageSize, keyword, activePageKey, locationFilter, friendFilter],
+    [pageSize, keyword, activePageKey, hideSuspect],
   );
 
   useEffect(() => {
     load(1);
-  }, [activePageKey, pageSize, locationFilter, friendFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activePageKey, pageSize, hideSuspect]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const reload = (p = 1) => {
     setLoading(true);
@@ -166,9 +151,9 @@ export default function PageScannerListFollowers() {
       "Họ và Tên",
       "UID Facebook",
       "Profile Link",
-      "Số bạn bè",
-      "Vị trí",
+      "Avatar",
       "Page nguồn",
+      "Nghi nick ảo",
     ];
     const rows = rowsSrc.map((r, i) => {
       const uid = String(r.follower_key || r.user_uid || "").replace(
@@ -180,9 +165,9 @@ export default function PageScannerListFollowers() {
         r.follower_name || r.user_name || "",
         uid,
         r.profile_url || (uid ? `https://facebook.com/${uid}` : ""),
-        r.friend_count ?? "",
-        r.location || "",
+        r.avatar_url || "",
         r.page_name || r.page_key || "",
+        r.suspect_fake ? "Có" : "",
       ];
     });
     const csv = [headers, ...rows]
@@ -264,6 +249,31 @@ export default function PageScannerListFollowers() {
   const allSelected = items.length > 0 && selectedIds.length === items.length;
   const detailTitle = activePage?.page_name || "Tất cả followers";
 
+  const openCreateList = () => {
+    setNewListName("");
+    setCreateOpen(true);
+  };
+
+  const handleCreateList = async (e) => {
+    e.preventDefault();
+    const name = newListName.trim();
+    if (creating) return;
+    if (!name) {
+      toast.error("Vui lòng nhập tên danh mục.");
+      return;
+    }
+    setCreating(true);
+    try {
+      const cat = await createPageList(name);
+      setCreateOpen(false);
+      toast.success(cat.created ? `Đã tạo danh mục “${cat.name}”` : `Danh mục “${cat.name}” đã có.`);
+    } catch (err) {
+      toast.error(`Lỗi tạo danh mục: ${err.message}`);
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <div className="pb-8">
       <ListPageHeader
@@ -302,7 +312,11 @@ export default function PageScannerListFollowers() {
                   active={activePageKey === p.page_key}
                   onClick={() => selectPage(p.page_key)}
                   title={p.page_name || p.page_key}
-                  subtitle={`ID: ${String(p.page_key || "").replace(/^id:|^user:/, "")}`}
+                  subtitle={
+                    p.suspect_count > 0
+                      ? `⚠ ${Number(p.suspect_count).toLocaleString("vi-VN")}/${Number(uidCount || 0).toLocaleString("vi-VN")} nghi nick ảo`
+                      : `ID: ${String(p.page_key || "").replace(/^id:|^user:/, "")}`
+                  }
                   badge={
                     uidCount != null
                       ? `${Number(uidCount).toLocaleString("vi-VN")} UID`
@@ -330,11 +344,7 @@ export default function PageScannerListFollowers() {
             <div className="pt-2">
               <button
                 type="button"
-                onClick={() => {
-                  const name = window.prompt("Tên danh mục Page mới?");
-                  if (name?.trim())
-                    toast.success(`Đã tạo danh mục "${name.trim()}".`);
-                }}
+                onClick={openCreateList}
                 className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-300 bg-slate-50/70 py-2 text-[11px] font-semibold text-slate-600 transition hover:border-blue-400 hover:bg-blue-50/40 hover:text-blue-600"
               >
                 <Plus className="size-3.5" />
@@ -408,32 +418,17 @@ export default function PageScannerListFollowers() {
                 value={keyword}
                 onChange={(e) => setKeyword(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && reload(1)}
-                placeholder="Tìm kiếm theo UID, Tên người dùng, SĐT…"
+                placeholder="Tìm kiếm theo UID, Tên người dùng…"
                 className="h-9 text-[11px]"
               />
             </div>
-            <select
-              value={locationFilter}
-              onChange={(e) => setLocationFilter(e.target.value)}
-              className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-700 outline-none"
-            >
-              <option value="">Tỉnh thành: Toàn quốc</option>
-              <option value="Hà Nội">Hà Nội</option>
-              <option value="Hồ Chí Minh">TP. Hồ Chí Minh</option>
-              <option value="Đà Nẵng">Đà Nẵng</option>
-              <option value="Hải Phòng">Hải Phòng</option>
-              <option value="Cần Thơ">Cần Thơ</option>
-            </select>
-            <select
-              value={friendFilter}
-              onChange={(e) => setFriendFilter(e.target.value)}
-              className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-700 outline-none"
-            >
-              <option value="ALL">Lọc theo số bạn bè</option>
-              <option value="GT_500">Trên 500 bạn bè</option>
-              <option value="GT_1000">Trên 1.000 bạn bè</option>
-              <option value="GT_2000">Trên 2.000 bạn bè</option>
-            </select>
+            <label className="flex cursor-pointer items-center gap-2 text-[11px] font-medium text-slate-700 select-none">
+              <Checkbox
+                checked={hideSuspect}
+                onCheckedChange={(c) => setHideSuspect(!!c)}
+              />
+              Ẩn nick nghi ảo
+            </label>
           </div>
 
           <div className="px-5">
@@ -450,7 +445,7 @@ export default function PageScannerListFollowers() {
           </div>
 
           <div className="overflow-auto">
-            <table className="w-full min-w-[960px] text-left text-[11px]">
+            <table className="w-full min-w-[720px] text-left text-[11px]">
               <thead className="sticky top-0 z-10 bg-slate-50 text-slate-500">
                 <tr className="border-b border-slate-200">
                   <th className="w-10 px-4 py-3">
@@ -465,16 +460,14 @@ export default function PageScannerListFollowers() {
                   <th className="px-3 py-3 font-semibold">HỌ VÀ TÊN</th>
                   <th className="px-3 py-3 font-semibold">UID FACEBOOK</th>
                   <th className="px-3 py-3 font-semibold">PROFILE LINK</th>
-                  <th className="px-3 py-3 font-semibold">SỐ BẠN BÈ</th>
-                  <th className="px-3 py-3 font-semibold">VỊ TRÍ</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {loading ? (
-                  <TableLoading colSpan={7} />
+                  <TableLoading colSpan={5} />
                 ) : items.length === 0 ? (
                   <TableEmpty
-                    colSpan={7}
+                    colSpan={5}
                     message="Chưa có followers — import CSV hoặc chạy Quét followers."
                   />
                 ) : (
@@ -524,7 +517,14 @@ export default function PageScannerListFollowers() {
                         </td>
                         <td className="px-3 py-2.5">
                           <div className="flex items-center gap-2.5">
-                            <Avatar className="size-7">
+                            <Avatar className="relative size-7">
+                              <AvatarImage
+                                src={r.avatar_url}
+                                className="absolute inset-0 z-10"
+                                onError={(e) => {
+                                  e.currentTarget.style.display = "none";
+                                }}
+                              />
                               <AvatarFallback
                                 className={
                                   AVATAR_COLORS[idx % AVATAR_COLORS.length]
@@ -536,6 +536,14 @@ export default function PageScannerListFollowers() {
                             <span className="font-semibold text-slate-800">
                               {fullName}
                             </span>
+                            {r.suspect_fake && (
+                              <span
+                                className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700"
+                                title="Nhiều UID của page này dồn một dải — chỉ là nghi ngờ, chưa kiểm chứng"
+                              >
+                                Nghi nick ảo
+                              </span>
+                            )}
                           </div>
                         </td>
                         <td className="px-3 py-2.5 font-mono text-slate-600">
@@ -571,16 +579,6 @@ export default function PageScannerListFollowers() {
                             "—"
                           )}
                         </td>
-                        <td className="px-3 py-2.5 font-semibold text-slate-700">
-                          {r.friend_count != null
-                            ? `${Number(r.friend_count).toLocaleString("vi-VN")} bạn bè`
-                            : "—"}
-                        </td>
-                        <td className="px-3 py-2.5 text-slate-600">
-                          {r.location || (
-                            <span className="italic text-slate-300">—</span>
-                          )}
-                        </td>
                       </tr>
                     );
                   })
@@ -613,6 +611,21 @@ export default function PageScannerListFollowers() {
           </div>
         </Card>
       </MasterDetail>
+
+      <CreateCategoryModal
+        open={createOpen}
+        onClose={() => {
+          if (!creating) setCreateOpen(false);
+        }}
+        categoryName={newListName}
+        onCategoryNameChange={setNewListName}
+        onSubmit={handleCreateList}
+        title="Thêm mới danh mục Page"
+        label="Tên danh mục Page"
+        placeholder="Ví dụ: Mỹ phẩm Hà Nội..."
+        maxLength={255}
+        busy={creating}
+      />
     </div>
   );
 }

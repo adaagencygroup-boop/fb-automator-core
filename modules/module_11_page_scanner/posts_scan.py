@@ -29,6 +29,7 @@ from .scanner import (
     _ACTIVE_PAUSE_EVENTS,
     _ACTIVE_SESSIONS_LOCK,
     _ACTIVE_STOP_EVENTS,
+    ScanStopped,
     _wait_if_paused,
     _wait_if_paused_timed,
     append_session_log,
@@ -1145,7 +1146,7 @@ def run_post_scan_flow(
             if total_unique == 0:
                 stop_reason = "NO_NEW_RESULTS"
 
-    except Exception as exc:
+    except (Exception, ScanStopped) as exc:
         if stop_event.is_set():
             # Dừng khẩn cấp đóng Chrome giữa chừng → lỗi WebDriver là hệ quả của việc dừng
             logger.info(f"[POST_SCAN] #{session_id} dừng giữa thao tác trình duyệt: {exc}")
@@ -1156,6 +1157,8 @@ def run_post_scan_flow(
             error_message = str(exc)[:500]
             append_session_log(session_id, f"Lỗi: {error_message}", "error")
     finally:
+        # Nhả trước khi ghi DB để DB lỗi không làm kẹt khóa profile
+        rotation.release(stop_reason, keep_browser)
         duration = int(time.time() - start_time)
         final_status = {
             "USER_STOPPED": "STOPPED",
@@ -1186,7 +1189,6 @@ def run_post_scan_flow(
             ),
             "success" if final_status == "COMPLETED" else "warn",
         )
-        rotation.release(stop_reason, keep_browser)
         with _ACTIVE_SESSIONS_LOCK:
             _ACTIVE_STOP_EVENTS.pop(session_id, None)
             _ACTIVE_PAUSE_EVENTS.pop(session_id, None)

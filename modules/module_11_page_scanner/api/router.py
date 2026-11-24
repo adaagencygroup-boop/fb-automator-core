@@ -8,7 +8,9 @@ quản lý lịch sử phiên quét và xem kết quả Fanpage đã thu thập.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -28,7 +30,9 @@ from ..browser_session import (
     AccountBusyError,
     close_browsers_for_stopped_sessions,
     mark_stale_running_sessions,
+    stop_owner_page_scanner_jobs,
 )
+from ..follower_flags import suspect_by_page
 from ..followers_scan import start_follower_scan_background
 from ..page_detail_scan import start_page_detail_background
 from ..posts_scan import start_post_scan_background
@@ -143,6 +147,7 @@ class SearchHashtagInput(BaseModel):
     min_posts: int = Field(2, ge=1, le=10, description="Điều kiện cứng: tối thiểu số bài viết / Page")
     max_posts_per_hashtag: int = Field(100, ge=10, le=300, description="Số bài viết tối đa mỗi hashtag (giới hạn an toàn)")
     account_uid: Optional[str] = Field(None, description="UID tài khoản Facebook cào (tuỳ chọn)")
+    account_uids: Optional[List[str]] = Field(None, description="Danh sách UID tài khoản Facebook cào (tuỳ chọn)")
     headless: bool = Field(False, description="Chạy Chrome ẩn hay hiện")
     allow_direct_fallback: bool = Field(True, description="Tự động chuyển sang IP trực tiếp nếu proxy lỗi")
     campaign_id: Optional[str] = Field(None, description="Mã đợt chạy gom nhiều phiên con")
@@ -153,6 +158,8 @@ class SearchHashtagInput(BaseModel):
     target_pages: Optional[int] = Field(None, ge=1, le=500, description="Số page mục tiêu đạt lọc để dừng TARGET_REACHED")
     min_followers: int = Field(1000, ge=0, description="Chỉ lưu page có follower_count > ngưỡng này")
     idle_timeout_s: float = Field(90, ge=5, le=600, description="Dừng NO_NEW_RESULTS nếu không có page mới đạt lọc")
+    rotate_every: int = Field(0, ge=0, le=5000, description="Đổi acc sau N Page đạt lọc / tài khoản (0 = không)")
+    pages_on_acc_start: int = Field(0, ge=0, description="Số Page acc đầu đã quét ở các phiên trước trong đợt")
 
 
 class ParseInput(BaseModel):
@@ -270,6 +277,10 @@ async def search_pages_by_hashtag(item: SearchHashtagInput):
     Thu hoạch bài viết chứa hashtag -> Rút tác giả Page -> Chấm điểm liên quan (Relevance Score).
     Trả về ngay session_id để client theo dõi tiến độ realtime và có thể dừng bất cứ lúc nào.
     """
+    target_account = item.account_uid or (item.account_uids[0] if getattr(item, "account_uids", None) else None)
+    if not target_account:
+        raise HTTPException(status_code=422, detail="Chưa chọn tài khoản")
+
     owner = _get_owner()
     try:
         session_id = await asyncio.to_thread(
@@ -278,7 +289,7 @@ async def search_pages_by_hashtag(item: SearchHashtagInput):
             context_keywords=item.context_keywords,
             min_posts=item.min_posts,
             max_posts_per_hashtag=item.max_posts_per_hashtag,
-            account_uid=item.account_uid,
+            account_uid=target_account,
             owner_key=owner,
             headless=item.headless,
             allow_direct_fallback=item.allow_direct_fallback,
@@ -287,6 +298,9 @@ async def search_pages_by_hashtag(item: SearchHashtagInput):
             min_followers=item.min_followers,
             target_pages=item.target_pages,
             idle_timeout_s=item.idle_timeout_s,
+            account_uids=item.account_uids,
+            rotate_every=item.rotate_every,
+            pages_on_acc_start=item.pages_on_acc_start,
         )
         return {
             "session_id": session_id,
@@ -319,6 +333,9 @@ async def search_pages(item: SearchPageInput):
     Khởi động phiên tìm kiếm Fanpage trong background task không chặn HTTP request.
     Nếu từ khóa bắt đầu bằng # hoặc chứa hashtag, tự động chuyển hướng sang hashtag search.
     """
+    if not item.account_uid:
+        raise HTTPException(status_code=422, detail="Chưa chọn tài khoản")
+
     owner = _get_owner()
     try:
         kw = item.keyword.strip()
@@ -437,6 +454,10 @@ async def create_detail_scan_session(item: DetailSessionInput):
     Quét thông tin chi tiết (SĐT / Email / Website / Địa chỉ / followers) cho danh sách Page
     từ Nhập link / Tải tệp. Chạy Selenium nền; poll GET /sessions/{id}, kết quả GET /pages?session_id=.
     """
+    account_uids = [str(u).strip() for u in (item.account_uids or []) if str(u).strip()]
+    if not account_uids:
+        raise HTTPException(status_code=422, detail="Chưa chọn tài khoản")
+
     owner = _get_owner()
     try:
         session_id, total = await asyncio.to_thread(
@@ -554,12 +575,43 @@ async def download_pages_template():
     )
 
 
+def _to_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+def _attach_session_targets(owner: str, rows: List[Dict[str, Any]]) -> None:
+    """Thêm target_pages_count + target_name/target_page_key (page đầu tiên) từ settings.page_keys, bỏ settings."""
+    for r in rows:
+        try:
+            settings = json.loads(r.pop("settings", None) or "{}")
+        except (TypeError, ValueError):
+            settings = {}
+        raw = settings.get("page_keys") if isinstance(settings, dict) else None
+        keys = [str(k) for k in raw if k] if isinstance(raw, list) else []
+        r["target_pages_count"] = len(keys)
+        r["target_page_key"] = keys[0] if keys else None
+        r["target_name"] = None
+    first_keys = sorted({r["target_page_key"] for r in rows if r["target_page_key"]})
+    if not first_keys:
+        return
+    pages = db.fetch_all(
+        "SELECT page_key, page_name FROM scanned_pages WHERE owner_key = %s AND page_key = ANY(%s)",
+        (owner, first_keys),
+    )
+    names = {p["page_key"]: p["page_name"] for p in pages}
+    for r in rows:
+        r["target_name"] = names.get(r["target_page_key"])
+
+
 @router.get("/sessions")
 async def list_scan_sessions(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=500),
     status: Optional[str] = Query(None),
-    keyword: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None, description="Từ khóa, mã phiên, UID tài khoản hoặc tên page"),
+    job_type: Optional[str] = Query(None, description="DISCOVERY,DETAIL | FOLLOW | POST_SCAN (phân tách bằng dấu phẩy)"),
+    date_from: Optional[datetime] = Query(None, description="Bắt đầu từ (ISO, không có múi giờ = UTC)"),
+    date_to: Optional[datetime] = Query(None, description="Trước thời điểm này (không bao gồm)"),
 ):
     """
     GET /api/page-scanner/sessions
@@ -576,8 +628,33 @@ async def list_scan_sessions(
         params.append(status.upper())
 
     if keyword:
-        conditions.append("keyword ILIKE %s")
-        params.append(f"%{keyword.strip()}%")
+        kw = keyword.strip()
+        like = f"%{kw}%"
+        conditions.append(
+            """(
+                keyword ILIKE %s OR account_uid ILIKE %s OR id::text = %s
+                OR EXISTS (
+                    SELECT 1 FROM scanned_pages sp
+                    WHERE sp.owner_key = page_scan_sessions.owner_key
+                      AND (sp.page_name ILIKE %s OR sp.page_key ILIKE %s)
+                      AND position('"' || sp.page_key || '"' in page_scan_sessions.settings) > 0
+                )
+            )"""
+        )
+        params.extend([like, like, kw.lstrip("#"), like, like])
+
+    job_types = [j.strip().upper() for j in (job_type or "").split(",") if j.strip()]
+    if job_types:
+        conditions.append("COALESCE(job_type, 'DISCOVERY') = ANY(%s)")
+        params.append(job_types)
+
+    # Cột lưu TIMESTAMP theo múi giờ của DB → ép qua timestamptz để so đúng thời điểm
+    if date_from:
+        conditions.append("COALESCE(started_at, created_at)::timestamptz >= %s::timestamptz")
+        params.append(_to_utc(date_from))
+    if date_to:
+        conditions.append("COALESCE(started_at, created_at)::timestamptz < %s::timestamptz")
+        params.append(_to_utc(date_to))
 
     where_clause = " AND ".join(conditions)
 
@@ -589,16 +666,20 @@ async def list_scan_sessions(
 
     params.extend([page_size, offset])
     query = f"""
-    SELECT id, owner_key, keyword, account_uid, source_type, status,
+    SELECT id, owner_key, COALESCE(job_type, 'DISCOVERY') AS job_type,
+           keyword, account_uid, source_type, status,
            stop_reason, max_results, total_seen, total_unique, total_duplicates,
-           total_sponsored, batches_count, duration_seconds, error_message,
-           started_at, finished_at, created_at
+           total_sponsored, batches_count, duration_seconds, error_message, settings,
+           COALESCE(started_at, created_at)::timestamptz AS started_at,
+           finished_at::timestamptz AS finished_at,
+           created_at::timestamptz AS created_at
     FROM page_scan_sessions
     WHERE {where_clause}
     ORDER BY id DESC
     LIMIT %s OFFSET %s
     """
     rows = db.fetch_all(query, tuple(params))
+    _attach_session_targets(owner, rows)
 
     return {
         "items": rows,
@@ -689,7 +770,7 @@ async def list_scanned_pages(
     sort_by: str = Query("followers", description="followers | created | default"),
     sort_dir: str = Query("desc", description="asc | desc"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
+    page_size: int = Query(50, ge=1, le=1000),
 ):
     """
     GET /api/page-scanner/pages
@@ -1021,6 +1102,20 @@ async def resume_scan_session(session_id: int):
     }
 
 
+@router.post("/stop")
+async def emergency_stop_all_sessions():
+    """
+    POST /api/page-scanner/stop
+    Dừng khẩn cấp các phiên quét Module 11 của người dùng đang đăng nhập và đóng Chrome của họ.
+    """
+    res = await asyncio.to_thread(stop_owner_page_scanner_jobs, _get_owner())
+    return {
+        "stopped": True,
+        "message": "Đã dừng khẩn cấp các luồng quét Fanpage của bạn và giải phóng tài khoản.",
+        "details": res,
+    }
+
+
 @router.post("/sessions/{session_id}/stop")
 async def stop_scan_session(session_id: int):
     """
@@ -1074,6 +1169,33 @@ async def stop_scan_session(session_id: int):
     except Exception as exc:
         logger.warning(f"[Module 11 API] Đóng Chrome khi dừng phiên #{session_id}: {exc}")
 
+    # Giải phóng khóa acc trong bộ nhớ ngay lập tức
+    from ..browser_session import release_account_job
+    for uid in stopped_uids:
+        if uid:
+            for sid in stopped_ids:
+                try:
+                    release_account_job(uid, sid)
+                except Exception:
+                    pass
+
+    # Chờ nhẹ các worker thread liên quan thoát hoàn toàn (timeout ngắn 1.5s)
+    try:
+        import threading
+        worker_prefixes = (
+            "page_hashtag_worker_",
+            "page_scan_worker_",
+            "page_followers_worker_",
+            "page_detail_worker_",
+            "page_posts_worker_",
+        )
+        target_names = {f"{pref}{sid}" for pref in worker_prefixes for sid in stopped_ids}
+        for t in list(threading.enumerate()):
+            if t.name in target_names:
+                t.join(timeout=1.5)
+    except Exception as exc:
+        logger.warning(f"[Module 11 API] Chờ worker thread kết thúc: {exc}")
+
     return {
         "session_id": session_id,
         "stopped": True,
@@ -1102,6 +1224,11 @@ async def create_follower_scan_session(item: FollowerSessionInput):
     Pause/resume/stop: POST /sessions/{id}/pause|resume|stop.
     409 nếu acc đang chạy job Selenium khác.
     """
+    account_uid = str(item.account_uid or "").strip()
+    account_uids = [str(u).strip() for u in (item.account_uids or []) if str(u).strip()]
+    if not account_uid and not account_uids:
+        raise HTTPException(status_code=422, detail="Chưa chọn tài khoản")
+
     owner = _get_owner()
     page_keys = [str(k).strip() for k in (item.page_keys or []) if str(k).strip()]
     if not page_keys:
@@ -1252,12 +1379,13 @@ async def import_page_followers(item: FollowerImportInput):
 @router.get("/followers")
 async def list_page_followers(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=200),
+    page_size: int = Query(20, ge=1, le=1000),
     page_key: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None),
     session_id: Optional[int] = Query(None),
+    hide_suspect: bool = Query(False),
 ):
-    """Danh sách người theo dõi đã lưu (DS followers)."""
+    """Danh sách người theo dõi đã lưu (DS followers). Mỗi hàng kèm suspect_fake (nghi nick ảo)."""
     owner = _get_owner()
     offset = (page - 1) * page_size
     params: List[Any] = [owner]
@@ -1274,6 +1402,13 @@ async def list_page_followers(
         )
         kw = f"%{keyword.strip()}%"
         params.extend([kw, kw, kw, kw])
+    flags: Optional[Dict[str, Dict[str, Any]]] = None
+    if hide_suspect:
+        flags = suspect_by_page(owner, [page_key.strip()] if page_key else None)
+        for pk, info in flags.items():
+            if info["keys"]:
+                where.append("NOT (f.page_key = %s AND f.follower_key = ANY(%s))")
+                params.extend([pk, sorted(info["keys"])])
     cond = " AND ".join(where)
     count_row = db.fetch_one(
         f"SELECT COUNT(*) AS total FROM scanned_page_followers f WHERE {cond}",
@@ -1291,8 +1426,13 @@ async def list_page_followers(
         """,
         tuple(params + [page_size, offset]),
     )
+    items = [dict(r) for r in rows or []]
+    if flags is None:
+        flags = suspect_by_page(owner, sorted({r["page_key"] for r in items}))
+    for r in items:
+        r["suspect_fake"] = r["follower_key"] in (flags.get(r["page_key"]) or {}).get("keys", ())
     return {
-        "items": rows or [],
+        "items": items,
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -1305,6 +1445,11 @@ async def list_page_followers(
 @router.post("/posts/sessions")
 async def create_post_scan_session(item: PostSessionInput):
     """Tạo phiên quét bài viết Page + Selenium background. 409 nếu acc BUSY."""
+    account_uid = str(item.account_uid or "").strip()
+    account_uids = [str(u).strip() for u in (item.account_uids or []) if str(u).strip()]
+    if not account_uid and not account_uids:
+        raise HTTPException(status_code=422, detail="Chưa chọn tài khoản")
+
     owner = _get_owner()
     page_keys = [str(k).strip() for k in (item.page_keys or []) if str(k).strip()]
     if not page_keys:
@@ -1467,10 +1612,12 @@ async def list_session_post_pages(session_id: int = Query(..., ge=1)):
     owner = _get_owner()
     rows = db.fetch_all(
         """
-        SELECT page_key, COUNT(*)::int AS post_count, MAX(updated_at) AS last_post_at
-        FROM scanned_posts
-        WHERE owner_key = %s AND last_session_id = %s
-        GROUP BY page_key
+        SELECT t.page_key, COUNT(*)::int AS post_count, MAX(t.updated_at) AS last_post_at,
+               (SELECT sp.page_name FROM scanned_pages sp
+                WHERE sp.owner_key = t.owner_key AND sp.page_key = t.page_key LIMIT 1) AS page_name
+        FROM scanned_posts t
+        WHERE t.owner_key = %s AND t.last_session_id = %s
+        GROUP BY t.owner_key, t.page_key
         """,
         (owner, session_id),
     )
@@ -1484,10 +1631,12 @@ async def list_session_follower_pages(session_id: int = Query(..., ge=1)):
     owner = _get_owner()
     rows = db.fetch_all(
         """
-        SELECT page_key, COUNT(*)::int AS uid_count, MAX(updated_at) AS last_follower_at
-        FROM scanned_page_followers
-        WHERE owner_key = %s AND last_session_id = %s
-        GROUP BY page_key
+        SELECT t.page_key, COUNT(*)::int AS uid_count, MAX(t.updated_at) AS last_follower_at,
+               (SELECT sp.page_name FROM scanned_pages sp
+                WHERE sp.owner_key = t.owner_key AND sp.page_key = t.page_key LIMIT 1) AS page_name
+        FROM scanned_page_followers t
+        WHERE t.owner_key = %s AND t.last_session_id = %s
+        GROUP BY t.owner_key, t.page_key
         """,
         (owner, session_id),
     )
@@ -1541,7 +1690,7 @@ async def list_pages_with_posts():
 @router.get("/posts")
 async def list_scanned_posts(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=200),
+    page_size: int = Query(20, ge=1, le=1000),
     page_key: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None),
     session_id: Optional[int] = Query(None),
@@ -1659,6 +1808,7 @@ async def list_pages_with_followers():
         """,
         (owner,),
     )
+    flags = suspect_by_page(owner)
     items = []
     total_uids = 0
     for r in rows or []:
@@ -1672,6 +1822,7 @@ async def list_pages_with_followers():
                 "avatar_url": r.get("avatar_url"),
                 "follower_count": r.get("follower_count"),
                 "scanned_uid_count": cnt,
+                "suspect_count": len((flags.get(r.get("page_key")) or {}).get("keys", ())),
                 "last_follower_at": r.get("last_follower_at"),
             }
         )

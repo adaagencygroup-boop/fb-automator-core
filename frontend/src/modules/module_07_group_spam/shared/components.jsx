@@ -1,6 +1,5 @@
 "use client";
 
-import { motion } from "framer-motion";
 import { Filter, RotateCcw, Search, SlidersHorizontal } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -86,28 +85,20 @@ export function StatCard({
   const finalDesc = desc ?? description;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      whileHover={{ y: -3 }}
-      transition={{ type: "spring", stiffness: 320, damping: 24 }}
-      className="h-full"
-    >
+    <div className={`h-full transition-transform duration-200 hover:-translate-y-1 ${className}`}>
       <Card
-        className={`group h-full border-slate-200 bg-white p-5 shadow-xs transition-shadow duration-200 hover:border-slate-300 hover:shadow-md ${className} hover:cursor-pointer`}
+        className="group h-full border-slate-200 bg-white p-5 shadow-xs transition-all duration-200 hover:border-slate-300 hover:shadow-md hover:cursor-pointer"
       >
         <div className="flex items-center justify-between">
           <p className={`text-base font-semibold uppercase tracking-wider ${palette.title}`}>
             {title}
           </p>
           {icon && (
-            <motion.span
-              whileHover={{ scale: 1.12 }}
-              transition={{ type: "spring", stiffness: 400, damping: 20 }}
-              className={`flex size-12 items-center justify-center rounded-lg ${palette.iconBox}`}
+            <span
+              className={`flex size-12 items-center justify-center rounded-lg transition-transform duration-200 group-hover:scale-110 ${palette.iconBox}`}
             >
               {icon}
-            </motion.span>
+            </span>
           )}
         </div>
         <div className="mt-2 flex items-baseline gap-2">
@@ -116,7 +107,7 @@ export function StatCard({
         </div>
         {finalDesc && <p className="mt-1 text-xs text-slate-400">{finalDesc}</p>}
       </Card>
-    </motion.div>
+    </div>
   );
 }
 

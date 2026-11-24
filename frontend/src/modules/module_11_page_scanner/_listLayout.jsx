@@ -48,8 +48,8 @@ export function ListSidePanel({
   children,
 }) {
   return (
-    <Card className="flex h-full min-h-[520px] w-full flex-col overflow-hidden border-slate-200 shadow-sm lg:w-[280px] lg:shrink-0">
-      <div className="border-b border-slate-100 px-4 py-3">
+    <Card className="flex h-[640px] max-h-[calc(100vh-180px)] min-h-[360px] w-full flex-col overflow-hidden border-slate-200 shadow-sm lg:w-[280px] lg:shrink-0">
+      <div className="shrink-0 border-b border-slate-100 px-4 py-3">
         <div className="flex items-center justify-between gap-2">
           <div>
             <h3 className="text-[11px] font-bold uppercase tracking-wide text-slate-700">{title}</h3>
@@ -67,7 +67,7 @@ export function ListSidePanel({
           />
         </div>
       </div>
-      <div className="flex-1 space-y-1 overflow-y-auto p-2">{children}</div>
+      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-2">{children}</div>
     </Card>
   );
 }
@@ -184,7 +184,7 @@ export function TableEmpty({ colSpan, message }) {
 
 export function MasterDetail({ side, children }) {
   return (
-    <div className="flex flex-col gap-4 lg:flex-row lg:items-stretch">
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
       {side}
       <div className="min-w-0 flex-1">{children}</div>
     </div>

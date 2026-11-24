@@ -29,6 +29,8 @@ from .scanner import (
     _ACTIVE_PAUSE_EVENTS,
     _ACTIVE_SESSIONS_LOCK,
     _ACTIVE_STOP_EVENTS,
+    _PICK_AVATAR_JS,
+    ScanStopped,
     _wait_if_paused,
     append_session_log,
     create_scan_session,
@@ -48,7 +50,7 @@ CONTENT_WAIT_S = 8.0
 
 # ==================== JS đọc DOM ====================
 
-_READ_HEADER_JS = r"""
+_READ_HEADER_JS = _PICK_AVATAR_JS + r"""
 const main = document.querySelector('[role="main"]') || document.body;
 const GENERIC = /^(notifications|thông báo|facebook|trang chủ|home|menu|tin nhắn|messages)$/i;
 const visible = (el) => {
@@ -92,11 +94,100 @@ if (nameEl) {
 }
 const bodyText = ((document.body && document.body.innerText) || '').slice(0, 3000);
 const unavailable = /(this content isn.?t available|nội dung này hiện không khả dụng|bạn hiện không xem được nội dung này|trang này không khả dụng|this page isn.?t available)/i.test(bodyText);
+
+let avatarUrl = _pickAvatar(null);
+if (!avatarUrl) {
+  const ogImg = meta('og:image');
+  if (_isAvatarSrc(ogImg)) {
+    avatarUrl = ogImg;
+  }
+}
+
+const links = Array.from(main.querySelectorAll('a[href]')).slice(0, 400).map((a) => ({
+  href: a.getAttribute('href') || '',
+  text: ((a.innerText || '').trim()).slice(0, 200),
+}));
+
+const panelItems = [];
+let rowSeq = 0;
+const headingDefs = [
+  { key: 'details', regex: /^(chi tiết|details)$/i },
+  { key: 'links', regex: /^(liên kết|links|trang web và liên kết|websites and social links)$/i },
+  { key: 'contact', regex: /^(thông tin liên hệ|contact info|contact)$/i },
+];
+
+try {
+  const headings = Array.from(main.querySelectorAll('h2, h3, [role="heading"], span, div')).filter(el => {
+    const t = (el.innerText || el.textContent || '').trim();
+    return t && t.length <= 40 && headingDefs.some(hd => hd.regex.test(t));
+  });
+
+  for (const h of headings) {
+    const t = (h.innerText || h.textContent || '').trim();
+    const hDef = headingDefs.find(hd => hd.regex.test(t));
+    if (!hDef) continue;
+    let block = h.parentElement;
+    for (let depth = 0; depth < 3 && block; depth++) {
+      const children = Array.from(block.children);
+      if (children.length > 1) {
+        let afterH = false;
+        for (const child of children) {
+          if (child.contains(h) || child === h) {
+            afterH = true;
+            continue;
+          }
+          if (afterH) {
+            const rowText = (child.innerText || '').trim();
+            if (!rowText) continue;
+            const a = child.querySelector('a[href]');
+            const href = a ? (a.getAttribute('href') || '') : '';
+            const svg = child.querySelector('svg, img');
+            const icon = svg ? (svg.getAttribute('aria-label') || svg.getAttribute('title') || '') : '';
+            rowSeq += 1;
+            const rowLines = rowText.split('\n').map((x) => x.trim()).filter(Boolean);
+            if (rowLines.length <= 1) {
+              panelItems.push({
+                section: hDef.key,
+                heading: t,
+                text: rowText,
+                href: href,
+                icon: icon,
+                row: rowSeq,
+              });
+            } else {
+              // Row gom nhiều dòng (vd cả khối Chi tiết: giá / giờ mở cửa / địa chỉ) → mỗi dòng 1 item
+              const anchors = Array.from(child.querySelectorAll('a[href]'));
+              for (const ln of rowLines) {
+                const ax = anchors.find((x) => {
+                  const at = (x.innerText || '').trim();
+                  return at && ln.includes(at);
+                });
+                panelItems.push({
+                  section: hDef.key,
+                  heading: t,
+                  text: ln,
+                  href: ax ? (ax.getAttribute('href') || '') : '',
+                  icon: ax ? icon : '',
+                  row: rowSeq,
+                });
+              }
+            }
+          }
+        }
+        break;
+      }
+      block = block.parentElement;
+    }
+  }
+} catch (e) {}
+
 return {
   page_name: pageName,
   header_text: ((main.innerText || '').slice(0, 4000)),
+  links: links,
+  panel_items: panelItems,
   is_verified: isVerified,
-  avatar_url: meta('og:image') || null,
+  avatar_url: avatarUrl,
   current_url: location.href,
   unavailable: unavailable,
 };
@@ -108,9 +199,84 @@ const links = Array.from(main.querySelectorAll('a[href]')).slice(0, 400).map((a)
   href: a.getAttribute('href') || '',
   text: ((a.innerText || '').trim()).slice(0, 200),
 }));
+
+const panelItems = [];
+let rowSeq = 0;
+const headingDefs = [
+  { key: 'details', regex: /^(chi tiết|details)$/i },
+  { key: 'links', regex: /^(liên kết|links|trang web và liên kết|websites and social links)$/i },
+  { key: 'contact', regex: /^(thông tin liên hệ|contact info|contact)$/i },
+];
+
+try {
+  const headings = Array.from(main.querySelectorAll('h2, h3, [role="heading"], span, div')).filter(el => {
+    const t = (el.innerText || el.textContent || '').trim();
+    return t && t.length <= 40 && headingDefs.some(hd => hd.regex.test(t));
+  });
+
+  for (const h of headings) {
+    const t = (h.innerText || h.textContent || '').trim();
+    const hDef = headingDefs.find(hd => hd.regex.test(t));
+    if (!hDef) continue;
+    let block = h.parentElement;
+    for (let depth = 0; depth < 3 && block; depth++) {
+      const children = Array.from(block.children);
+      if (children.length > 1) {
+        let afterH = false;
+        for (const child of children) {
+          if (child.contains(h) || child === h) {
+            afterH = true;
+            continue;
+          }
+          if (afterH) {
+            const rowText = (child.innerText || '').trim();
+            if (!rowText) continue;
+            const a = child.querySelector('a[href]');
+            const href = a ? (a.getAttribute('href') || '') : '';
+            const svg = child.querySelector('svg, img');
+            const icon = svg ? (svg.getAttribute('aria-label') || svg.getAttribute('title') || '') : '';
+            rowSeq += 1;
+            const rowLines = rowText.split('\n').map((x) => x.trim()).filter(Boolean);
+            if (rowLines.length <= 1) {
+              panelItems.push({
+                section: hDef.key,
+                heading: t,
+                text: rowText,
+                href: href,
+                icon: icon,
+                row: rowSeq,
+              });
+            } else {
+              // Row gom nhiều dòng (vd cả khối Chi tiết: giá / giờ mở cửa / địa chỉ) → mỗi dòng 1 item
+              const anchors = Array.from(child.querySelectorAll('a[href]'));
+              for (const ln of rowLines) {
+                const ax = anchors.find((x) => {
+                  const at = (x.innerText || '').trim();
+                  return at && ln.includes(at);
+                });
+                panelItems.push({
+                  section: hDef.key,
+                  heading: t,
+                  text: ln,
+                  href: ax ? (ax.getAttribute('href') || '') : '',
+                  icon: ax ? icon : '',
+                  row: rowSeq,
+                });
+              }
+            }
+          }
+        }
+        break;
+      }
+      block = block.parentElement;
+    }
+  }
+} catch (e) {}
+
 return {
   about_text: ((main.innerText || '').slice(0, 10000)),
   links: links,
+  panel_items: panelItems,
   current_url: location.href,
 };
 """
@@ -187,29 +353,241 @@ def find_email(text: str) -> Optional[str]:
     return match.group(0).strip(".") if match else None
 
 
-def unwrap_facebook_redirect(href: str) -> str:
-    """l.facebook.com/l.php?u=<url> → url gốc (bỏ fbclid)."""
+def unwrap_clean_url(href: str) -> str:
+    """
+    Giải mã URL redirect l.php?u=... lặp lại tối đa 3 lần cho đến khi ổn định.
+    YouTube handle @antvtruyenhinhcongannhandan được mã hóa 2 lần: %2540 -> %40 -> @.
+    Loại bỏ các tham số tracking fbclid, __cft__, __tn__.
+    """
     href = (href or "").strip()
     if not href:
         return ""
     if href.startswith("/"):
         href = "https://www.facebook.com" + href
-    try:
-        parsed = urlparse(href)
-    except ValueError:
-        return href
-    host = (parsed.netloc or "").lower()
-    if host.endswith("facebook.com") and parsed.path.rstrip("/") == "/l.php":
-        target = (parse_qs(parsed.query).get("u") or [""])[0]
-        href = unquote(target) if target else ""
+
+    for _ in range(3):
         try:
             parsed = urlparse(href)
-        except ValueError:
-            return href
-    if parsed.query and "fbclid" in parsed.query:
-        kept = "&".join(p for p in parsed.query.split("&") if not p.startswith("fbclid="))
-        href = parsed._replace(query=kept).geturl()
+            host = (parsed.netloc or "").lower()
+            if ("facebook.com" in host or "fb.com" in host) and parsed.path.rstrip("/").endswith("/l.php"):
+                qs = parse_qs(parsed.query)
+                u = (qs.get("u") or [""])[0]
+                if u:
+                    unquoted = unquote(u)
+                    if unquoted == href:
+                        break
+                    href = unquoted
+                    continue
+            unquoted = unquote(href)
+            if unquoted == href:
+                break
+            href = unquoted
+        except Exception:
+            break
+
+    try:
+        parsed = urlparse(href)
+        if parsed.query:
+            clean_pairs = []
+            for p in parsed.query.split("&"):
+                k = p.split("=")[0].strip()
+                if k in ("fbclid", "__cft__", "__tn__") or k.startswith("__cft__") or k.startswith("__tn__"):
+                    continue
+                clean_pairs.append(p)
+            clean_query = "&".join(clean_pairs)
+            href = parsed._replace(query=clean_query).geturl()
+        if parsed.path not in ("", "/"):
+            href = href.rstrip("/")
+    except Exception:
+        pass
+
     return href
+
+
+unwrap_facebook_redirect = unwrap_clean_url
+
+
+_RATING_RE = re.compile(
+    r"(\d+)%\s*(?:đề xuất|recommend(?:ed)?)\s*\(([\d,.]+)\s*(?:lượt đánh giá|reviews?)\)",
+    re.IGNORECASE,
+)
+
+
+def parse_rating_info(text: str) -> Tuple[Optional[int], Optional[int]]:
+    """Parse rating: (\d+)% đề xuất ((\d+) lượt đánh giá) -> (rating_percent, rating_count)."""
+    m = _RATING_RE.search(text or "")
+    if m:
+        pct = int(m.group(1))
+        cnt = int(re.sub(r"\D", "", m.group(2)))
+        return pct, cnt
+    return None, None
+
+
+_OPENING_RE = re.compile(
+    r"\b(luôn mở cửa|always open|đang mở cửa|open now|đóng cửa|closed|"
+    r"\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2})\b",
+    re.IGNORECASE,
+)
+
+
+def parse_opening_info(text: str) -> Optional[str]:
+    """Parse trạng thái hoặc giờ mở cửa."""
+    for line in (text or "").splitlines():
+        line = line.strip()
+        m = _OPENING_RE.search(line)
+        if m:
+            val = m.group(1).strip()
+            low = val.lower()
+            if "always open" in low or "luôn mở cửa" in low:
+                return "Luôn mở cửa"
+            if "open now" in low or "đang mở cửa" in low:
+                return "Đang mở cửa"
+            if "closed" in low or "đóng cửa" in low:
+                return "Đóng cửa"
+            return val
+    return None
+
+
+def parse_address_components(address: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Tách (district, city, postal) từ chuỗi địa chỉ."""
+    if not address:
+        return None, None, None
+
+    postal = None
+    m_post = re.search(r"\b(\d{5,6})\b", address)
+    if m_post:
+        postal = m_post.group(1)
+
+    district = None
+    # Ưu tiên tìm quận / huyện / thị xã trước
+    m_dist = re.search(
+        r"\b(quận|huyện|thị xã)\s+([^,]+)",
+        address,
+        re.IGNORECASE,
+    )
+    if not m_dist:
+        m_dist = re.search(
+            r"\b(phường|xã)\s+([^,]+)",
+            address,
+            re.IGNORECASE,
+        )
+    if m_dist:
+        d_val = f"{m_dist.group(1)} {m_dist.group(2).strip()}"
+        if not re.search(r"\b(hà nội|hồ chí minh|đà nẵng|hải phòng|cần thơ)\b", d_val, re.IGNORECASE):
+            district = d_val
+
+    city = None
+    m_city = re.search(
+        r"\b(thành phố|tỉnh|tp\.)\s+([^,]+)",
+        address,
+        re.IGNORECASE,
+    )
+    if m_city:
+        city = f"{m_city.group(1)} {m_city.group(2).strip()}"
+    elif re.search(r"\b(hà nội|hanoi)\b", address, re.IGNORECASE):
+        city = "thành phố Hà Nội"
+    elif re.search(r"\b(hồ chí minh|ho chi minh|sài gòn|saigon)\b", address, re.IGNORECASE):
+        city = "thành phố Hồ Chí Minh"
+    elif re.search(r"\b(đà nẵng|da nang)\b", address, re.IGNORECASE):
+        city = "thành phố Đà Nẵng"
+
+    return district, city, postal
+
+
+def classify_resolved_links(links: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Phân loại liên kết sau khi giải mã domain sạch."""
+    out = {
+        "youtube": None,
+        "email": None,
+        "phone": None,
+        "lat": None,
+        "lng": None,
+        "messenger_handle": None,
+        "website": None,
+    }
+    for link in links or []:
+        raw_href = str((link or {}).get("href") or "").strip()
+        if not raw_href:
+            continue
+        low = raw_href.lower()
+        if low.startswith("mailto:"):
+            em = find_email(unquote(raw_href[7:]))
+            if em and not out["email"]:
+                out["email"] = em
+            continue
+        if low.startswith("tel:"):
+            ph = normalize_phone(unquote(raw_href[4:]))
+            if ph and not out["phone"]:
+                out["phone"] = ph
+            continue
+
+        clean_url = unwrap_clean_url(raw_href)
+        clean_low = clean_url.lower()
+
+        # YouTube: youtube.com/youtu.be
+        if ("youtube.com" in clean_low or "youtu.be" in clean_low) and not out["youtube"]:
+            out["youtube"] = clean_url
+            continue
+
+        # Bing Maps: where1=lat,lng
+        if "bing.com/maps" in clean_low or "where1=" in clean_low:
+            m_coords = re.search(r"where1=([\-+]?\d+(?:\.\d+)?)(?:,|%2c|\s|\+|%20)+([\-+]?\d+(?:\.\d+)?)", clean_url, re.IGNORECASE)
+            if m_coords and out["lat"] is None:
+                try:
+                    out["lat"] = float(m_coords.group(1))
+                    out["lng"] = float(m_coords.group(2))
+                except Exception:
+                    pass
+            continue
+
+        # Messenger handle: chỉ khi có link m.me hoặc messenger.com
+        if "m.me/" in clean_low or "messenger.com/t/" in clean_low:
+            if not out["messenger_handle"]:
+                m_handle = re.search(r"(?:m\.me|messenger\.com/t)/([^/?#]+)", clean_url, re.IGNORECASE)
+                if m_handle:
+                    handle = m_handle.group(1).strip()
+                    if handle and not handle.startswith("profile.php"):
+                        out["messenger_handle"] = handle
+            continue
+
+        # Website khác (bỏ qua social networks)
+        if not out["website"] and _clean_website(clean_url):
+            out["website"] = clean_url
+
+    return out
+
+
+def parse_messenger_text(lines: List[str], links: List[Dict[str, Any]], page_name: Optional[str] = None) -> Optional[str]:
+    """Messenger đọc bằng TEXT/icon (không phải href)."""
+    for link in links or []:
+        href = str(link.get("href") or "").lower()
+        text = str(link.get("text") or "").strip()
+        if ("m.me/" in href or "messenger.com" in href) and text:
+            if not re.search(r"^(gửi tin nhắn|send message|nhắn tin|chat)$", text, re.IGNORECASE):
+                return text
+
+    for line in lines:
+        m_prefix = re.search(r"^(?:messenger|tin nhắn|nhắn tin|gửi tin nhắn)\s*[:·-]?\s*(.+)$", line.strip(), re.IGNORECASE)
+        if m_prefix:
+            cand = m_prefix.group(1).strip()
+            if cand and _norm_label(cand) not in _ALL_LABELS and len(cand) >= 2:
+                return cand
+
+    for idx, line in enumerate(lines):
+        norm = _norm_label(line)
+        if norm in ("messenger", "tin nhắn", "nhắn tin", "send message", "chat"):
+            for j in (idx + 1, idx - 1):
+                if 0 <= j < len(lines):
+                    cand = lines[j].strip()
+                    if cand and _norm_label(cand) not in _ALL_LABELS and len(cand) >= 2:
+                        return cand
+
+    if page_name:
+        for line in lines:
+            if "messenger" in line.lower() and page_name.lower() in line.lower():
+                return page_name
+
+    return None
 
 
 def _is_social_host(url: str) -> bool:
@@ -338,24 +716,156 @@ def extract_followers(text: str) -> Tuple[Optional[int], Optional[str]]:
     return count, match.group(0).strip()
 
 
-def extract_contact_info(about_text: str, links: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Optional[str]]:
+_PRICE_LINE_RE = re.compile(r"^\s*(?:\${1,4}|[£€₫]{1,4})(?:\s*[-–]\s*(?:\${1,4}|[£€₫]{1,4}))?\s*$")
+_PRICE_PREFIX_RE = re.compile(r"^\s*(?:\${1,4}|[£€₫]{1,4})\s*[·•|,\-–]?\s+")
+_OPENING_PREFIX_RE = re.compile(
+    r"^\s*(?:luôn mở cửa|always open|đang mở cửa|open now|đóng cửa|closed(?: now)?)\s*[·•|,\-–:]?\s+",
+    re.IGNORECASE,
+)
+
+
+def _is_price_line(line: str) -> bool:
+    return bool(_PRICE_LINE_RE.match(line or ""))
+
+
+def _clean_address_line(line: str) -> Optional[str]:
+    """Bỏ giá ($$) / trạng thái mở cửa dính đầu dòng, rồi kiểm tra là địa chỉ."""
+    line = (line or "").strip()
+    if not line or _is_price_line(line) or parse_opening_info(line):
+        # dòng chỉ là giá / giờ mở cửa; riêng dòng vừa có giờ vừa có địa chỉ xử lý ở dưới
+        stripped = line
+    else:
+        stripped = line
+    for _ in range(4):
+        new = _PRICE_PREFIX_RE.sub("", stripped, count=1)
+        new = _OPENING_PREFIX_RE.sub("", new, count=1)
+        if new == stripped:
+            break
+        stripped = new
+    stripped = stripped.strip()
+    if not stripped or _is_price_line(stripped):
+        return None
+    # Dòng đánh giá "100% đề xuất" / "(21 lượt đánh giá)" không phải địa chỉ
+    if re.search(r"\d\s*%", stripped) and re.search(r"đề xuất|recommend", stripped, re.IGNORECASE):
+        return None
+    if parse_opening_info(stripped) and not ("," in stripped and len(stripped) > 40):
+        return None
+    addr = _valid_address(stripped)
+    if addr and ("," in addr or re.search(r"\d", addr)):
+        return addr
+    return None
+
+
+def _group_panel_rows(panel_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Gộp các item đã tách dòng về từng row (giữ logic nhận dạng theo row như trước)."""
+    rows: List[Dict[str, Any]] = []
+    index: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
+    for n, p in enumerate(panel_items or []):
+        key = (p.get("section"), p.get("row") if p.get("row") is not None else ("_", n))
+        row = index.get(key)
+        if row is None:
+            row = {"section": p.get("section"), "lines": [], "hrefs": [], "icon": ""}
+            index[key] = row
+            rows.append(row)
+        txt = (p.get("text") or "").strip()
+        if txt:
+            row["lines"].append(txt)
+        href = (p.get("href") or "").strip()
+        if href:
+            row["hrefs"].append((href, txt))
+        if not row["icon"] and p.get("icon"):
+            row["icon"] = p.get("icon")
+    return rows
+
+
+_CONTACT_FIELDS = ("phone", "email", "website", "address")
+_EXTRA_DETAIL_FIELDS = (
+    "rating_percent", "rating_count", "opening", "youtube", "messenger",
+    "messenger_handle", "district", "city", "postal", "lat", "lng"
+)
+_ALL_DETAIL_FIELDS = _CONTACT_FIELDS + _EXTRA_DETAIL_FIELDS
+
+
+def extract_contact_info(
+    about_text: str,
+    links: Optional[List[Dict[str, Any]]] = None,
+    panel_items: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     """
-    Tách SĐT / Email / Website / Địa chỉ từ text trang About + danh sách link.
-    Thứ tự ưu tiên: link tel:/mailto:/redirect → dòng có nhãn → regex toàn văn.
+    Tách SĐT / Email / Website / Địa chỉ + Rating / Giờ mở cửa / YouTube / Messenger / Tọa độ
+    từ text trang About / Giới thiệu + danh sách link đã resolve + các mục đọc theo DOM panel_items.
     """
     lines = [l.strip() for l in (about_text or "").splitlines() if l.strip()]
-    result: Dict[str, Optional[str]] = {"phone": None, "email": None, "website": None, "address": None}
+    result: Dict[str, Any] = {k: None for k in _ALL_DETAIL_FIELDS}
 
-    for link in links or []:
-        href = str((link or {}).get("href") or "").strip()
-        low = href.lower()
-        if low.startswith("tel:") and not result["phone"]:
-            result["phone"] = normalize_phone(unquote(href[4:])) or None
-        elif low.startswith("mailto:") and not result["email"]:
-            result["email"] = find_email(unquote(href[7:]))
-        elif not result["website"] and ("l.facebook.com/l.php" in low or "/l.php?u=" in low):
-            result["website"] = _clean_website(unwrap_facebook_redirect(href))
+    # 0. Nếu có panel_items được trích xuất trực tiếp bằng DOM (scope theo heading)
+    all_links = list(links or [])
+    if panel_items:
+        for p in panel_items:
+            href = (p.get("href") or "").strip()
+            if href:
+                all_links.append({"href": href, "text": (p.get("text") or "").strip()})
 
+        for row in _group_panel_rows(panel_items):
+            sec = row["section"]
+            txt = "\n".join(row["lines"]).strip()
+            icon = (row["icon"] or "").lower()
+
+            # Section: Chi tiết (details)
+            if sec == "details":
+                pct, cnt = parse_rating_info(txt)
+                if pct is not None and not result["rating_percent"]:
+                    result["rating_percent"] = pct
+                    result["rating_count"] = cnt
+                op = parse_opening_info(txt)
+                if op and not result["opening"]:
+                    result["opening"] = op
+                # Địa chỉ: theo từng dòng, bỏ giá ($$) / giờ mở cửa; nhiều cơ sở → nhiều dòng
+                addr_lines = [
+                    ln for ln in (_clean_address_line(x) for x in row["lines"]) if ln
+                ]
+                if addr_lines and not result["address"]:
+                    result["address"] = "\n".join(addr_lines)
+
+            # Section: Thông tin liên hệ (contact)
+            elif sec == "contact":
+                if ("messenger" in icon or "messenger" in txt.lower() or "nhắn tin" in txt.lower()) and not result["messenger"]:
+                    cand_msg = re.sub(r"^(messenger|tin nhắn|nhắn tin|gửi tin nhắn)\s*[:·-]?\s*", "", txt, flags=re.IGNORECASE).strip()
+                    if cand_msg:
+                        result["messenger"] = cand_msg
+                em = find_email(txt)
+                if em and not result["email"]:
+                    result["email"] = em
+                ph = find_phone(txt)
+                if ph and not result["phone"]:
+                    result["phone"] = ph
+                addr = _valid_address(txt)
+                if addr and not result["address"] and ("," in txt or re.search(r"\d", txt)):
+                    result["address"] = addr
+
+    # 1. Phân loại links theo domain đã giải mã (unwrap tối đa 3 lần, bỏ fbclid/__cft__/__tn__)
+    resolved_links = classify_resolved_links(all_links)
+    for k in ("youtube", "email", "phone", "lat", "lng", "messenger_handle", "website"):
+        if resolved_links.get(k) is not None and result.get(k) is None:
+            result[k] = resolved_links[k]
+
+    # 2. Parse Rating
+    pct, cnt = parse_rating_info(about_text)
+    if pct is not None:
+        result["rating_percent"] = pct
+        result["rating_count"] = cnt
+
+    # 3. Parse Opening Hours
+    op = parse_opening_info(about_text)
+    if op:
+        result["opening"] = op
+
+    # 4. Parse Messenger text
+    msg = parse_messenger_text(lines, links or [])
+    if msg:
+        result["messenger"] = msg
+
+    # 5. Dòng có nhãn chuẩn
     validators = {
         "phone": find_phone,
         "email": find_email,
@@ -369,10 +879,12 @@ def extract_contact_info(about_text: str, links: Optional[List[Dict[str, Any]]] 
                 continue
             result[field] = _value_near_label(lines, idx, validators[field])
 
+    # 6. Theo section Chi tiết / Liên kết / Thông tin liên hệ
     for field, value in _section_values(lines).items():
         if value and not result[field]:
             result[field] = value
 
+    # 7. Fallback quét toàn văn
     if not result["email"]:
         result["email"] = find_email(about_text)
     if not result["phone"]:
@@ -390,12 +902,19 @@ def extract_contact_info(about_text: str, links: Optional[List[Dict[str, Any]]] 
                 break
     if not result["address"]:
         for line in lines:
-            # Bắt buộc có dấu phẩy: tên Page kiểu "… Việt Nam …" không bị nhận nhầm là địa chỉ
             if "," in line and _ADDRESS_HINT_RE.search(line):
                 addr = _valid_address(line)
                 if addr and len(addr) >= 8:
                     result["address"] = addr
                     break
+
+    # 8. Tách thành phần địa chỉ (district, city, postal) nếu có address
+    if result.get("address"):
+        dist, city, post = parse_address_components(result["address"])
+        result["district"] = dist
+        result["city"] = city
+        result["postal"] = post
+
     return result
 
 
@@ -498,6 +1017,8 @@ def scan_page_detail(driver, page_url: str, stop_event: threading.Event) -> Dict
     detail: Dict[str, Any] = {
         "ok": True,
         "_header_text": header_text,
+        "_panel_items": header.get("panel_items") or [],
+        "_links": header.get("links") or [],
         "page_name": (header.get("page_name") or "").strip() or first_text_line(header_text),
         "avatar_url": header.get("avatar_url"),
         "is_verified": header.get("is_verified"),
@@ -508,29 +1029,35 @@ def scan_page_detail(driver, page_url: str, stop_event: threading.Event) -> Dict
     return detail
 
 
-_CONTACT_FIELDS = ("phone", "email", "website", "address")
-
-
-def merge_contacts(*parts: Dict[str, Optional[str]]) -> Dict[str, Optional[str]]:
+def merge_contacts(*parts: Dict[str, Any]) -> Dict[str, Any]:
     """Gộp theo thứ tự ưu tiên: nguồn trước có giá trị thì giữ."""
-    merged: Dict[str, Optional[str]] = {k: None for k in _CONTACT_FIELDS}
+    merged: Dict[str, Any] = {k: None for k in _ALL_DETAIL_FIELDS}
     for part in parts:
-        for key in _CONTACT_FIELDS:
-            if not merged[key] and (part or {}).get(key):
+        for key in _ALL_DETAIL_FIELDS:
+            if merged[key] is None and (part or {}).get(key) is not None:
                 merged[key] = part[key]
     return merged
 
 
 def scan_page_contacts(
-    driver, page_url: str, header_text: str, stop_event: threading.Event
+    driver,
+    page_url: str,
+    header_text: str,
+    stop_event: threading.Event,
+    header_panel_items: Optional[List[Dict[str, Any]]] = None,
+    header_links: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Page kiểu mới: /about chỉ có Giới thiệu; liên hệ ở /directory_contact_info, web ở /directory_links,
     địa chỉ + liên kết hiện ở cột Giới thiệu trang chính. Layout cũ: /about_contact_and_basic_info.
     Ưu tiên: tab liên hệ > About > cột Giới thiệu trang chính.
     """
-    def parse(page: Dict[str, Any]) -> Dict[str, Optional[str]]:
-        return extract_contact_info(page.get("about_text") or "", page.get("links") or [])
+    def parse(page: Dict[str, Any]) -> Dict[str, Any]:
+        return extract_contact_info(
+            page.get("about_text") or "",
+            page.get("links") or [],
+            page.get("panel_items") or [],
+        )
 
     raws: List[Dict[str, Any]] = []
     about = _read_about(driver, build_about_url(page_url), stop_event)
@@ -543,7 +1070,12 @@ def scan_page_contacts(
         contact_page = _read_about(driver, contact_href, stop_event)
         raws.append(contact_page)
 
-    contacts = merge_contacts(parse(contact_page), parse(about), extract_contact_info(intro_text(header_text)))
+    contacts = merge_contacts(
+        parse(contact_page),
+        parse(about),
+        extract_contact_info(intro_text(header_text), header_links or about_links, header_panel_items),
+        extract_contact_info(header_text, header_links or about_links, header_panel_items),
+    )
 
     if not contact_href and not any(contacts.get(k) for k in ("phone", "email", "website")) \
             and not stop_event.is_set():
@@ -612,19 +1144,38 @@ def save_page_detail(
     batch_index: int,
 ) -> bool:
     """Upsert scanned_pages (giữ dữ liệu cũ khi lần này không đọc được) + gắn vào phiên."""
+    extra_meta = {
+        "rating_percent": detail.get("rating_percent"),
+        "rating_count": detail.get("rating_count"),
+        "opening": detail.get("opening"),
+        "youtube": detail.get("youtube"),
+        "messenger": detail.get("messenger"),
+        "messenger_handle": detail.get("messenger_handle"),
+        "district": detail.get("district"),
+        "city": detail.get("city"),
+        "postal": detail.get("postal"),
+        "lat": detail.get("lat"),
+        "lng": detail.get("lng"),
+    }
+    desc_val = (
+        json.dumps(extra_meta, ensure_ascii=False)
+        if any(v is not None for v in extra_meta.values())
+        else detail.get("description")
+    )
+
     row = db.fetch_one(
         """
         INSERT INTO scanned_pages (
             owner_key, page_key, page_name, page_url, avatar_url, category,
             follower_count, follower_text, is_verified,
-            phone, email, website, address,
+            phone, email, website, address, description,
             detail_status, detail_scanned_at, detail_session_id,
             first_found_by_account_uid, first_source_type, first_session_id,
             created_at, updated_at
         ) VALUES (
             %s, %s, %s, %s, %s, %s,
             %s, %s, %s,
-            %s, %s, %s, %s,
+            %s, %s, %s, %s, %s,
             %s, NOW(), %s,
             %s, %s, %s,
             NOW(), NOW()
@@ -640,6 +1191,7 @@ def save_page_detail(
             email = COALESCE(EXCLUDED.email, scanned_pages.email),
             website = COALESCE(EXCLUDED.website, scanned_pages.website),
             address = COALESCE(EXCLUDED.address, scanned_pages.address),
+            description = COALESCE(EXCLUDED.description, scanned_pages.description),
             detail_status = CASE
                 WHEN EXCLUDED.detail_status = 'FAILED' AND scanned_pages.detail_status = 'SCANNED'
                 THEN scanned_pages.detail_status
@@ -664,6 +1216,7 @@ def save_page_detail(
             (detail.get("email") or "")[:255] or None,
             detail.get("website"),
             detail.get("address"),
+            desc_val,
             status,
             session_id,
             account_uid,
@@ -850,12 +1403,22 @@ def run_page_detail_flow(
                     "info",
                 )
             else:
-                contacts = scan_page_contacts(driver, page_url, detail.get("_header_text") or "", stop_event)
+                contacts = scan_page_contacts(
+                    driver,
+                    page_url,
+                    detail.get("_header_text") or "",
+                    stop_event,
+                    header_panel_items=detail.get("_panel_items") or [],
+                    header_links=detail.get("_links") or [],
+                )
                 if not detail.get("category"):
                     detail["category"] = contacts.get("category")
-                detail.update({k: contacts.get(k) for k in ("phone", "email", "website", "address")})
+                detail.update({k: contacts.get(k) for k in _ALL_DETAIL_FIELDS if contacts.get(k) is not None})
+                header_raw_text = detail.pop("_header_text", "")
+                detail.pop("_panel_items", None)
+                detail.pop("_links", None)
                 dump_path = dump_debug_text(
-                    page_key, detail.pop("_header_text", ""), contacts.get("_raw") or [], detail
+                    page_key, header_raw_text, contacts.get("_raw") or [], detail
                 )
                 if dump_path:
                     log(f"Text thô đã đọc: {dump_path}", "info")
@@ -892,7 +1455,7 @@ def run_page_detail_flow(
                     break
         else:
             stop_reason = "TARGET_REACHED" if saved >= target else ("NO_NEW_RESULTS" if not saved else "COMPLETED")
-    except Exception as exc:
+    except (Exception, ScanStopped) as exc:
         if stop_event.is_set():
             stop_reason = "USER_STOPPED"
         elif stop_reason != "CHECKPOINT":
@@ -900,6 +1463,8 @@ def run_page_detail_flow(
             stop_reason, error_message = "ERROR", str(exc)[:500]
             log(f"Lỗi: {error_message}", "error")
     finally:
+        # Nhả trước khi ghi DB để DB lỗi không làm kẹt khóa profile
+        rotation.release(stop_reason, keep_browser)
         final_status = {
             "USER_STOPPED": "STOPPED",
             "CHECKPOINT": "PARTIAL",
@@ -915,7 +1480,6 @@ def run_page_detail_flow(
             f" · bỏ qua {skipped} · lỗi {failed}",
             "success" if final_status == "COMPLETED" else "warn",
         )
-        rotation.release(stop_reason, keep_browser)
         with _ACTIVE_SESSIONS_LOCK:
             _ACTIVE_STOP_EVENTS.pop(session_id, None)
             _ACTIVE_PAUSE_EVENTS.pop(session_id, None)

@@ -14,7 +14,7 @@ import re
 import threading
 import time
 import unicodedata
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote_plus
 
@@ -337,6 +337,9 @@ def _wait_dom_settle_after_scroll(
 BLOCKED_ACCOUNT_STATUSES = ("DIE", "CHECKPOINT", "ERROR")
 
 
+PROFILE_LOCK_WAIT_SEC = 30.0
+
+
 def accounts_owner_for(owner_key: Optional[str]) -> Optional[str]:
     """
     owner_key của Module 11 → giá trị accounts.user_id (cùng quy ước Module 02):
@@ -354,49 +357,34 @@ def get_scraping_account(
     Lấy tài khoản quét từ Module 02 — CHỈ trong số acc của đúng owner (như Module 02/07):
     - Có account_uid: đúng nick đó của owner. Không thuộc owner hoặc đang
       DIE/CHECKPOINT/ERROR → ValueError (API trả 422), không âm thầm đổi sang nick khác.
-    - Không có: nick đầu tiên của owner có cookie và không DIE/CHECKPOINT/ERROR.
-    Trả None khi không có nick phù hợp hoặc lỗi truy vấn DB.
+    - Không có account_uid: BẮT BUỘC người dùng phải chọn tài khoản, không tự ý chọn nick đầu tiên.
+      Nếu account_uid rỗng -> raise ValueError("Chưa chọn tài khoản")
     """
     owner = accounts_owner_for(owner_key)
     uid = str(account_uid or "").strip()
 
-    if uid:
-        try:
-            acc = db.fetch_one(
-                """
-                SELECT id, uid, user_id, cookie, proxy, profile_name, status
-                FROM accounts
-                WHERE uid = %s AND user_id IS NOT DISTINCT FROM %s
-                LIMIT 1
-                """,
-                (uid, owner),
-            )
-        except Exception as exc:
-            logger.warning(f"[Scanner] Lỗi truy vấn tài khoản cào {uid}: {exc}")
-            return None
-        if not acc:
-            raise ValueError(f"Tài khoản {uid} không tồn tại hoặc không thuộc về bạn")
-        status = str(acc.get("status") or "").strip().upper()
-        if status in BLOCKED_ACCOUNT_STATUSES:
-            raise ValueError(f"Tài khoản {uid} đang ở trạng thái {status} — không dùng để quét")
-        return acc
+    if not uid:
+        raise ValueError("Chưa chọn tài khoản")
 
     try:
-        return db.fetch_one(
+        acc = db.fetch_one(
             """
             SELECT id, uid, user_id, cookie, proxy, profile_name, status
             FROM accounts
-            WHERE user_id IS NOT DISTINCT FROM %s
-              AND cookie IS NOT NULL
-              AND UPPER(COALESCE(status, '')) NOT IN ('DIE', 'CHECKPOINT', 'ERROR')
-            ORDER BY id ASC
+            WHERE uid = %s AND user_id IS NOT DISTINCT FROM %s
             LIMIT 1
             """,
-            (owner,),
+            (uid, owner),
         )
     except Exception as exc:
-        logger.warning(f"[Scanner] Lỗi truy vấn tài khoản cào: {exc}")
+        logger.warning(f"[Scanner] Lỗi truy vấn tài khoản cào {uid}: {exc}")
         return None
+    if not acc:
+        raise ValueError(f"Tài khoản {uid} không tồn tại hoặc không thuộc về bạn")
+    status = str(acc.get("status") or "").strip().upper()
+    if status in BLOCKED_ACCOUNT_STATUSES:
+        raise ValueError(f"Tài khoản {uid} đang ở trạng thái {status} — không dùng để quét")
+    return acc
 
 
 def resolve_scan_accounts(
@@ -406,9 +394,10 @@ def resolve_scan_accounts(
 ) -> List[Dict[str, Any]]:
     """
     Danh sách acc dùng cho 1 phiên (xoay vòng), theo đúng thứ tự người dùng chọn.
-    - account_uids rỗng → dùng account_uid; cả hai rỗng → tự chọn 1 acc của owner.
+    - Không tự động chọn acc nếu người dùng chưa chọn.
+    - Bắt buộc phải có account_uids hoặc account_uid hợp lệ.
+    - Nếu không có: raise ValueError("Chưa chọn tài khoản")
     - Acc không thuộc owner / DIE / CHECKPOINT bị loại; nếu không còn acc nào → ValueError
-      (lỗi đầu tiên, API trả 422).
     """
     raw = [str(u or "").strip() for u in (account_uids or [])]
     if not any(raw) and account_uid:
@@ -418,8 +407,7 @@ def resolve_scan_accounts(
         if u and u not in uids:
             uids.append(u)
     if not uids:
-        acc = get_scraping_account(None, owner_key=owner_key)
-        return [acc] if acc else []
+        raise ValueError("Chưa chọn tài khoản")
 
     accounts: List[Dict[str, Any]] = []
     errors: List[str] = []
@@ -433,6 +421,8 @@ def resolve_scan_accounts(
             accounts.append(acc)
     if not accounts and errors:
         raise ValueError(errors[0])
+    if not accounts:
+        raise ValueError("Chưa chọn tài khoản")
     return accounts
 
 
@@ -570,25 +560,49 @@ def save_batch_pages(
         latest_post_at = str(page.get("latest_post_at") or "")
 
         # 1. Upsert vào kho tổng scanned_pages
+        detail_scanned = page.get("detail_status") == "SCANNED"
         upsert_query = """
         INSERT INTO scanned_pages (
             owner_key, page_key, page_name, page_url, avatar_url,
-            category, follower_count, follower_text, is_verified,
+            category, phone, follower_count, follower_text, is_verified,
             is_sponsored, identifier_quality, relevance_score, relevance_status,
             matched_hashtags, hashtag_post_count, first_found_by_account_uid,
-            first_source_type, first_session_id, raw_data, created_at, updated_at
+            first_source_type, first_session_id, raw_data,
+            email, website, address, description,
+            detail_status, detail_scanned_at, detail_session_id,
+            created_at, updated_at
         ) VALUES (
             %s, %s, %s, %s, %s,
-            %s, %s, %s, %s,
+            %s, %s, %s, %s, %s,
             %s, %s, %s, %s,
             %s, %s, %s,
-            %s, %s, %s, NOW(), NOW()
+            %s, %s, %s,
+            %s, %s, %s, %s,
+            %s, %s, %s,
+            NOW(), NOW()
         )
         ON CONFLICT (owner_key, page_key) DO UPDATE
         SET page_name = COALESCE(EXCLUDED.page_name, scanned_pages.page_name),
             page_url = EXCLUDED.page_url,
             avatar_url = COALESCE(EXCLUDED.avatar_url, scanned_pages.avatar_url),
             category = COALESCE(EXCLUDED.category, scanned_pages.category),
+            phone = COALESCE(EXCLUDED.phone, scanned_pages.phone),
+            email = COALESCE(EXCLUDED.email, scanned_pages.email),
+            website = COALESCE(EXCLUDED.website, scanned_pages.website),
+            address = COALESCE(EXCLUDED.address, scanned_pages.address),
+            description = COALESCE(EXCLUDED.description, scanned_pages.description),
+            detail_status = CASE
+                WHEN EXCLUDED.detail_status = 'SCANNED' THEN 'SCANNED'
+                ELSE COALESCE(scanned_pages.detail_status, EXCLUDED.detail_status)
+            END,
+            detail_scanned_at = CASE
+                WHEN EXCLUDED.detail_status = 'SCANNED' THEN EXCLUDED.detail_scanned_at
+                ELSE scanned_pages.detail_scanned_at
+            END,
+            detail_session_id = CASE
+                WHEN EXCLUDED.detail_status = 'SCANNED' THEN EXCLUDED.detail_session_id
+                ELSE scanned_pages.detail_session_id
+            END,
             follower_count = COALESCE(EXCLUDED.follower_count, scanned_pages.follower_count),
             follower_text = COALESCE(EXCLUDED.follower_text, scanned_pages.follower_text),
             is_verified = COALESCE(EXCLUDED.is_verified, scanned_pages.is_verified),
@@ -609,6 +623,7 @@ def save_batch_pages(
                     page.get("page_url"),
                     page.get("avatar_url"),
                     page.get("category"),
+                    page.get("phone"),
                     page.get("follower_count"),
                     page.get("follower_text"),
                     is_verified,
@@ -622,6 +637,13 @@ def save_batch_pages(
                     source_type,
                     session_id,
                     raw_data_str,
+                    page.get("email") or None,
+                    page.get("website") or None,
+                    page.get("address") or None,
+                    page.get("description") or None,
+                    "SCANNED" if detail_scanned else "NOT_SCANNED",
+                    page.get("detail_scanned_at") if detail_scanned else None,
+                    session_id if detail_scanned else None,
                 ),
             )
             is_new = bool(res and res.get("is_new"))
@@ -684,7 +706,28 @@ def extract_page_cards_from_driver(driver) -> List[Dict[str, Any]]:
         # Facebook search results thường là các block div[role='article'] hoặc các thẻ a có href chứa fanpage
         script = """
         const results = [];
-        // Lấy tất cả các thẻ a dẫn tới profile/page
+
+        // 1. Thu thập map avatar theo đường dẫn href (thẻ a bọc ảnh/svg avatar)
+        const avatarMap = new Map();
+        const allAvatarImgs = Array.from(document.querySelectorAll('a svg image, a image, a img'));
+        for (const im of allAvatarImgs) {
+            const anchor = im.closest('a');
+            if (!anchor) continue;
+            const h = anchor.getAttribute('href');
+            if (!h || h.includes('/search/') || h.includes('/groups/')) continue;
+            const src = im.getAttribute('xlink:href') || im.getAttribute('href') || im.getAttribute('src') || '';
+            if (!src || src.startsWith('data:') || src.includes('rsrc.php')) continue;
+            if (!/\\/t\\d+\\.\\d+-1\\//.test(src) || /[?&]stp=[^&]*_fb\\d+/.test(src)) continue;
+            try {
+                const u = new URL(h, location.origin);
+                const p = u.pathname.replace(/\\/+$/, '').toLowerCase();
+                if (p && !avatarMap.has(p)) {
+                    avatarMap.set(p, src);
+                }
+            } catch (e) {}
+        }
+
+        // 2. Lấy tất cả các thẻ a dẫn tới profile/page
         const links = Array.from(document.querySelectorAll('a[role="presentation"], a[attributionsrc], div[role="feed"] a, div[role="main"] a'));
         const seenHrefs = new Set();
 
@@ -693,13 +736,47 @@ def extract_page_cards_from_driver(driver) -> List[Dict[str, Any]]:
             if (!href || href.includes('/search/') || href.includes('/groups/') || seenHrefs.has(href)) continue;
 
             // Tìm container thẻ cha bao quanh thẻ a
-            let card = a.closest('div[role="article"]') || a.closest('div[data-virtualized="false"]') || a.parentElement;
+            let card = a.closest('div[role="article"]') || a.closest('div[data-virtualized="false"]');
+            if (!card) {
+                let curr = a.parentElement;
+                for (let i = 0; i < 7 && curr && curr !== document.body; i++) {
+                    if (curr.querySelector('image, img[src*="scontent"], img[src*="fbcdn"]')) {
+                        card = curr;
+                        if ((curr.innerText || '').length > 5) break;
+                    }
+                    curr = curr.parentElement;
+                }
+            }
+            if (!card) card = a.parentElement;
+
             let cardText = card ? card.innerText : a.innerText;
             if (!cardText || cardText.length < 3) continue;
 
-            // Tìm avatar nếu có
-            let img = card ? card.querySelector('image, img') : null;
-            let avatarUrl = img ? (img.getAttribute('xlink:href') || img.getAttribute('src')) : null;
+            // Tìm avatar từ avatarMap hoặc query bên trong card
+            let avatarUrl = null;
+            try {
+                const u = new URL(href, location.origin);
+                const p = u.pathname.replace(/\\/+$/, '').toLowerCase();
+                if (avatarMap.has(p)) {
+                    avatarUrl = avatarMap.get(p);
+                }
+            } catch (e) {}
+
+            if (!avatarUrl && card) {
+                const imgCandidates = Array.from(card.querySelectorAll('svg image, image, img'));
+                for (const im of imgCandidates) {
+                    const src = im.getAttribute('xlink:href') || im.getAttribute('href') || im.getAttribute('src') || '';
+                    if (!src || src.startsWith('data:') || src.includes('rsrc.php')) continue;
+                    if (!/\\/t\\d+\\.\\d+-1\\//.test(src) || /[?&]stp=[^&]*_fb\\d+/.test(src)) continue;
+                    const w = parseFloat(im.getAttribute('width') || im.width || 0);
+                    const h = parseFloat(im.getAttribute('height') || im.height || 0);
+                    if ((w > 0 && w < 24) || (h > 0 && h < 24)) continue;
+                    if (src.includes('scontent') || src.includes('fbcdn')) {
+                        avatarUrl = src;
+                        break;
+                    }
+                }
+            }
 
             // Kiểm tra tích xanh (Verified)
             let isVerified = null;
@@ -868,9 +945,11 @@ def run_page_search_flow(
                 cookie_str=cookie_str,
                 headless=headless,
                 allow_direct_fallback=allow_direct_fallback,
+                session_id=session_id,
             )
         except RuntimeError as lock_err:
-            stop_reason = "CHECKPOINT"
+            is_busy = "bị khóa" in str(lock_err).lower() or "busy" in str(lock_err).lower()
+            stop_reason = "BUSY_LOCKED" if is_busy else "CHECKPOINT"
             error_message = str(lock_err)
             finalize_scan_session(session_id, "PARTIAL", stop_reason, 0, 0, 0, 0, 0, 0, error_message)
             return {"session_id": session_id, "count": 0, "pages": [], "stop_reason": stop_reason}
@@ -1022,7 +1101,7 @@ def run_page_search_flow(
                 "info",
             )
 
-    except Exception as exc:
+    except (Exception, ScanStopped) as exc:
         if stop_event.is_set():
             # Dừng khẩn cấp đóng Chrome giữa chừng → lỗi WebDriver là hệ quả của việc dừng
             logger.info(f"[Scanner] Phiên #{session_id} dừng giữa thao tác trình duyệt: {exc}")
@@ -1043,6 +1122,16 @@ def run_page_search_flow(
         elif stop_reason == "USER_STOPPED":
             final_status = "STOPPED"
 
+        # Nhả trước khi ghi DB: DB lỗi không làm kẹt khóa; không có khóa thì không đóng Chrome của phiên khác
+        if acquired_lock:
+            _release_page_scanner_browser(
+                stop_reason=stop_reason,
+                keep_browser=keep_browser,
+                acquired_lock=acquired_lock,
+                lock=lock,
+                target_uid=target_uid,
+            )
+
         finalize_scan_session(
             session_id=session_id,
             status=final_status,
@@ -1054,14 +1143,6 @@ def run_page_search_flow(
             batches_count=batch_no,
             duration_seconds=duration,
             error_message=error_message,
-        )
-
-        _release_page_scanner_browser(
-            stop_reason=stop_reason,
-            keep_browser=keep_browser,
-            acquired_lock=acquired_lock,
-            lock=lock,
-            target_uid=target_uid,
         )
 
     return {
@@ -1682,9 +1763,47 @@ def extract_hashtag_posts_from_driver(driver, current_tag: str) -> List[Dict[str
     return extracted_posts
 
 
+# Chọn ảnh đại diện Page. CDN Facebook: avatar có path ".../t39.30808-1/..."; ảnh bìa / ảnh bài là "-6",
+# và bản nền mờ của chúng có "fb50" trong tham số stp. Thà để null còn hơn lưu nhầm ảnh bìa / avatar người khác.
+_PICK_AVATAR_JS = r"""
+const _cleanImgSrc = (el) => {
+  if (!el) return '';
+  const s = el.getAttribute('xlink:href') || el.getAttribute('href') || el.getAttribute('src') || '';
+  if (!/^https?:/i.test(s) || s.includes('rsrc.php')) return '';
+  if (!s.includes('scontent') && !s.includes('fbcdn')) return '';
+  return s;
+};
+const _isAvatarSrc = (s) => /\/t\d+\.\d+-1\//.test(s) && !/[?&]stp=[^&]*_fb\d+/.test(s);
+const _pickAvatar = (headerRoot) => {
+  const SEL = 'image, img';
+  // Không lấy avatar của nick đang đăng nhập (banner/nav) hay của người đăng / bình luận
+  const outside = (el) => !!el.closest(
+    '[role="banner"], [role="navigation"], [role="article"], [role="dialog"], [role="feed"]');
+  const scan = (els, minSize) => {
+    for (const im of els) {
+      const src = _cleanImgSrc(im);
+      if (!src || !_isAvatarSrc(src) || outside(im)) continue;
+      const r = im.getBoundingClientRect();
+      if (r.width > 0 && r.width < minSize) continue;  // facepile / icon nhỏ
+      return src;
+    }
+    return null;
+  };
+  // Tầng 1: phần tử có nhãn ảnh đại diện
+  const wraps = Array.from(document.querySelectorAll(
+    '[aria-label*="ảnh đại diện" i], [aria-label*="profile picture" i]'));
+  const labelled = [];
+  for (const w of wraps) labelled.push(...Array.from(w.querySelectorAll(SEL)));
+  const main = document.querySelector('[role="main"]');
+  return scan(labelled, 60)
+    || (headerRoot ? scan(Array.from(headerRoot.querySelectorAll(SEL)), 60) : null)
+    || (main ? scan(Array.from(main.querySelectorAll(SEL)), 90) : null);
+};
+"""
+
 # JS collector: h1 + role=heading + aria-level=1 + text khớp tên trong main.
 # arguments[0] = authorName từ feed
-_VERIFY_EXTRACT_HEADER_JS = r"""
+_VERIFY_EXTRACT_HEADER_JS = _PICK_AVATAR_JS + r"""
 const authorName = (arguments[0] || '').toString().trim();
 const href = (location.href || '');
 const mainRoot = document.querySelector('[role="main"]') || document.body;
@@ -1735,6 +1854,73 @@ function exactLabel(el) {
   const aria = (el.getAttribute('aria-label') || '').trim();
   const txt = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ');
   return { aria, txt };
+}
+
+const CATEGORY_LIST = [
+  // Tiếng Việt
+  "Kênh TV", "TV Channel", "Đài truyền hình", "Tin tức", "Báo chí", "Tạp chí",
+  "Cửa hàng", "Cửa hàng thời trang", "Cửa hàng mỹ phẩm", "Mỹ phẩm", "Làm đẹp", "Spa",
+  "Thẩm mỹ viện", "Nhà hàng", "Quán cà phê", "Quán ăn", "Thời trang", "Giày dép",
+  "Túi xách", "Trang sức", "Đồng hồ", "Điện thoại", "Điện tử", "Nội thất", "Xe cộ",
+  "Bất động sản", "Du lịch", "Khách sạn", "Giáo dục", "Trường học", "Y tế", "Phòng khám",
+  "Nha khoa", "Thể thao", "Gym", "Âm nhạc", "Ca sĩ", "Diễn viên", "Người nổi tiếng",
+  "Blog cá nhân", "Cộng đồng", "Tổ chức", "Dịch vụ", "Vận chuyển", "Siêu thị", "Chợ",
+  "Nông sản", "Thú cưng", "Trẻ em", "Đồ chơi", "Sách", "Phim", "Game",
+  // Tiếng Anh & DB 19/11
+  "Cosmetics store", "Health/beauty", "Beauty Store", "Product/service", "Makeup Artist",
+  "Shopping & retail", "Furniture", "Fashion Accessories", "Personal blog",
+  "Media/news company", "Entertainment website", "Flea Market", "News", "Restaurant",
+  "Beauty", "Fashion", "Shopping", "Community", "Organization", "Music", "Sports",
+  "Education", "Health", "Travel", "Hotel", "Digital creator", "Artist", "Musician/band",
+  "Public figure", "Author", "Entrepreneur", "Doctor", "Lawyer", "Real Estate",
+  "Apparel & clothing", "Clothing store", "Convenience store", "Grocery store", "Bakery",
+  "Cafe", "Coffee shop", "Bar", "Pub", "Night club", "Jewelry/watches", "E-commerce website",
+  "Baby & children's clothing store", "Commercial & industrial", "Consulting agency",
+  "Advertising/marketing", "Science, technology & engineering", "Blogger", "Writer",
+  "Photographer", "Video creator", "Graphic designer", "Web designer", "Software company"
+];
+
+const CATEGORY_NORM_MAP = new Map();
+CATEGORY_LIST.forEach(cat => {
+  const k = cat.toLowerCase().replace(/\s*\/\s*/g, '/').replace(/\s*&\s*/g, ' & ').replace(/\s+/g, ' ').trim();
+  CATEGORY_NORM_MAP.set(k, cat);
+});
+
+function matchCategory(str) {
+  if (!str) return null;
+  const s = str.toString().trim();
+  if (!s || s.length > 50) return null;
+  const k = s.toLowerCase().replace(/\s*\/\s*/g, '/').replace(/\s*&\s*/g, ' & ').replace(/\s+/g, ' ').trim();
+  if (CATEGORY_NORM_MAP.has(k)) {
+    return CATEGORY_NORM_MAP.get(k);
+  }
+  const k2 = k.replace(/[·•]/g, '').trim();
+  if (CATEGORY_NORM_MAP.has(k2)) {
+    return CATEGORY_NORM_MAP.get(k2);
+  }
+  return null;
+}
+function isCategory(str) {
+  return !!matchCategory(str);
+}
+
+function cleanPhoneVN(s) {
+  if (!s) return '';
+  const digits = s.toString().replace(/[^\d]/g, '');
+  if (digits.startsWith('84') && (digits.length === 11 || digits.length === 12)) {
+    return '0' + digits.slice(2);
+  }
+  return digits;
+}
+
+function isPhoneVN(str) {
+  if (!str) return false;
+  const raw = str.toString().trim();
+  if (raw.includes('$') || raw.includes('₫') || raw.includes('%')) return false;
+  const digits = cleanPhoneVN(raw);
+  if (/^0(?:3[2-9]|5[2689]|7[06-9]|8[1-9]|9[0-9])\d{7}$/.test(digits)) return true;
+  if (/^02[0-9]\d{7,8}$/.test(digits)) return true;
+  return false;
 }
 function describeEl(el, source) {
   const text = ((el.innerText || el.textContent || '').trim().split('\n')[0] || '').trim();
@@ -1882,6 +2068,7 @@ let headerText = '';
 let headerButtons = [];
 let headerTabs = [];
 let category = '';
+let phone = '';
 let followerText = '';
 let headerContainerHint = '';
 
@@ -1910,8 +2097,86 @@ if (headerRoot && chosenEl) {
     const lab = (t.innerText || t.getAttribute('aria-label') || '').trim();
     if (lab) headerTabs.push(lab.split('\n')[0].trim());
   });
+
+  // 1. Tầng 1: regex Trang • X (chỉ nhận khi X khớp từ điển danh mục)
   const catMatch = headerText.match(/(?:Trang|Page)\s*[·•]\s*([^\n·•|]{2,80})/i);
-  if (catMatch) category = catMatch[1].trim();
+  if (catMatch) {
+    const matched = matchCategory(catMatch[1]);
+    if (matched) category = matched;
+  }
+
+  // 2. Tìm vị trí "Highlighted details" trong headerButtons
+  const hlIdx = headerButtons.findIndex(b => (b || '').trim().toLowerCase() === 'highlighted details');
+  if (hlIdx !== -1) {
+    const candidates = headerButtons.slice(hlIdx + 1, hlIdx + 12);
+    for (const item of candidates) {
+      const raw = (item || '').trim();
+      if (!raw) continue;
+      const matchedCat = matchCategory(raw);
+      if (matchedCat && !category) {
+        category = matchedCat;
+      } else if (isPhoneVN(raw) && !phone) {
+        phone = cleanPhoneVN(raw);
+      }
+    }
+  }
+
+  // 3. Quét thêm trong các dòng Highlighted details của headerRoot hoặc headerText (dạng "Danh mục · username · $$ · SĐT")
+  if (!category || !phone) {
+    const rawLines = ((headerRoot && headerRoot.innerText) || headerText || '')
+      .split('\n')
+      .map(l => l.trim())
+      .filter(Boolean);
+    for (const line of rawLines) {
+      if (line.includes('·') || line.includes('•')) {
+        const parts = line.split(/[·•]/).map(p => p.trim()).filter(Boolean);
+        for (const part of parts) {
+          const matchedCat = matchCategory(part);
+          if (matchedCat && !category) {
+            category = matchedCat;
+          } else if (isPhoneVN(part) && !phone) {
+            phone = cleanPhoneVN(part);
+          }
+        }
+      }
+    }
+  }
+
+  // 4. Nếu phone vẫn chưa có, quét regex SĐT VN trong headerText
+  if (!phone && headerText) {
+    const phoneMatch = headerText.match(/(?:^|[^\d])(0(?:3[2-9]|5[2689]|7[06-9]|8[1-9]|9[0-9])[\s.-]?\d{3}[\s.-]?\d{4})(?:[^\d]|$)/);
+    if (phoneMatch) {
+      phone = cleanPhoneVN(phoneMatch[1]);
+    } else {
+      const telMatch = headerText.match(/(?:^|[^\d])(02[0-9][\s.-]?\d{3,4}[\s.-]?\d{4})(?:[^\d]|$)/);
+      if (telMatch) {
+        phone = cleanPhoneVN(telMatch[1]);
+      }
+    }
+  }
+
+  // 5. Tầng 2 fallback theo dòng: Tìm dòng chứa "người theo dõi"/"followers", rồi trong 12 dòng sau lấy dòng đầu tiên khớp từ điển danh mục
+  if (!category) {
+    const rawLines = ((headerRoot && headerRoot.innerText) || (mainRoot && mainRoot.innerText) || '')
+      .split('\n')
+      .map(s => s.trim())
+      .filter(Boolean);
+    const flIdx = rawLines.findIndex(l => /người\s*theo\s*dõi|followers?/i.test(l));
+    if (flIdx !== -1) {
+      const windowLines = rawLines.slice(flIdx + 1, flIdx + 13);
+      for (const line of windowLines) {
+        if (line.length > 40 || line.includes('•') || line.includes('·')) continue;
+        if (norm(line) === norm(authorName) || norm(line) === norm(pageName)) continue;
+        if (/^(Nhắn tin|Message|Theo dõi|Follow|Xem ngay|Thích|Like|Chia sẻ|Share|Lưu|Save|Tìm kiếm|Search)$/i.test(line)) continue;
+        const matchedCat = matchCategory(line);
+        if (matchedCat) {
+          category = matchedCat;
+          break;
+        }
+      }
+    }
+  }
+
   const likeFollow = headerText.match(
     /([\d.,]+)\s*(?:nghìn|ngàn|triệu|k|m)?\s*(?:lượt\s*thích|likes?)\s*[·•]\s*([\d.,]+)\s*(?:nghìn|ngàn|triệu|n|k|m)?\s*(?:người\s*theo\s*dõi|followers?)/i
   );
@@ -1929,16 +2194,10 @@ let isVerified = null;
 if (headerRoot && headerRoot.querySelector('[aria-label*="Verified"], [aria-label*="Đã xác minh"], [aria-label*="Xác minh"]')) {
   isVerified = true;
 }
-let avatarUrl = null;
-if (headerRoot) {
-  const img = headerRoot.querySelector('image, img[src*="scontent"], svg image');
-  if (img) {
-    avatarUrl = img.getAttribute('xlink:href') || img.getAttribute('href') || img.getAttribute('src') || null;
-  }
-}
+const avatarUrl = _pickAvatar(headerRoot);
 
 // Có dòng phụ / nút / follower trong container → header "đủ"
-const hasSubtitle = !!(followerText || category ||
+const hasSubtitle = !!(followerText || category || phone ||
   /(?:Trang|Page)\s*[·•]|người theo dõi|followers?|lượt thích|likes?/i.test(headerText));
 const headerReady = h1Matched && (!!hasSubtitle || headerButtons.length > 0);
 
@@ -1950,6 +2209,7 @@ return {
   header_tabs: headerTabs,
   follower_text: followerText,
   category: category,
+  phone: phone || null,
   main_sample: mainSample.slice(0, 2000),
   is_verified: isVerified,
   avatar_url: avatarUrl,
@@ -1975,6 +2235,19 @@ const catMatch = body.match(/(?:Hạng mục|Category)\s*[:\n]\s*([^\n]{2,80})/i
 if (catMatch) category = catMatch[1].trim();
 return { about_text: body.slice(0, 5000), category: category };
 """
+
+_EXTRACT_AVATAR_ONLY_JS = _PICK_AVATAR_JS + "return _pickAvatar(null);"
+
+
+def _wait_late_avatar(driver, wait_s: float = 1.5) -> Optional[str]:
+    """Chờ avatar thật gắn vào DOM (poll 0.25s); không có → None."""
+    end = time.time() + wait_s
+    while True:
+        src = driver.execute_script(_EXTRACT_AVATAR_ONLY_JS)
+        if src or time.time() >= end:
+            return src or None
+        time.sleep(0.25)
+
 
 VERIFY_AUTHOR_DEADLINE_SEC = 15.0
 VERIFY_PAGE_LOAD_TIMEOUT_SEC = 18.0
@@ -2224,11 +2497,14 @@ def _wait_header_ready(
     deadline: float,
     author_name: str = "",
     poll_sec: float = 0.5,
+    stop_load: bool = True,
 ) -> Dict[str, Any]:
     """
     Chỉ chờ tên tác giả + follower trong vùng chính/header (poll 0.5s).
     Không chờ readyState complete, không chờ spinner biến mất, không chờ network idle.
-    Đủ → window.stop() → đọc header đầy đủ.
+    Đủ → (stop_load) window.stop() → đọc header đầy đủ.
+    stop_load=False: KHÔNG window.stop() — để panel trái (Chi tiết / Liên hệ) tiếp tục render,
+    nơi gọi tự stop sau khi đọc panel.
     """
     last_probe: Dict[str, Any] = {}
     while not _deadline_exceeded(deadline):
@@ -2237,14 +2513,15 @@ def _wait_header_ready(
         has_fl = bool(last_probe.get("has_follower"))
         # Đủ tên + follower → dừng load rồi extract
         if has_name and has_fl:
-            _window_stop(driver)
+            if stop_load:
+                _window_stop(driver)
             info = _read_header_signals(driver, author_name)
             info["readyState"] = last_probe.get("readyState")
             info["spinner"] = last_probe.get("spinner")
             info["probed_early"] = True
             logger.info(
                 f"[Scanner] header đủ (name+follower) readyState={last_probe.get('readyState')!r}"
-                f" spinner={last_probe.get('spinner')} — window.stop() rồi đọc"
+                f" spinner={last_probe.get('spinner')} — {'window.stop() rồi ' if stop_load else ''}đọc"
             )
             return info
         # Có tên + nút hành động (profile không follower) — vẫn stop & đọc
@@ -2255,7 +2532,8 @@ def _wait_header_ready(
                 or peek.get("header_buttons")
                 or peek.get("category")
             ):
-                _window_stop(driver)
+                if stop_load:
+                    _window_stop(driver)
                 peek["readyState"] = last_probe.get("readyState")
                 peek["spinner"] = last_probe.get("spinner")
                 peek["probed_early"] = True
@@ -2326,6 +2604,185 @@ def _cdp_block_heavy_resources(driver) -> bool:
         return True
     except Exception:
         return False
+
+
+# ── Đọc panel Chi tiết / Liên kết / Thông tin liên hệ ngay trong tab verify ──
+_PANEL_BUDGET_SEC = 3.0   # tổng thời gian tối đa cho cả bước đọc panel
+_PANEL_WAIT_SEC = 2.0     # chờ mục "Thông tin liên hệ" sau khi bấm "Xem thêm về ..."
+_PANEL_POLL_SEC = 0.25
+
+_PANEL_STATE_JS = r"""
+const doClick = !!arguments[0];
+const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+const main = document.querySelector('[role="main"]') || document.body;
+const seen = new Set();
+for (const el of Array.from(main.querySelectorAll('span, div, h2, h3, [role="heading"]'))) {
+  const t = norm(el.innerText || el.textContent);
+  if (!t || t.length > 40) continue;
+  if (/^(thông tin liên hệ|contact info|contact)$/i.test(t)) seen.add('contact');
+  else if (/^(chi tiết|details)$/i.test(t)) seen.add('details');
+  else if (/^(liên kết|links|trang web và liên kết|websites and social links)$/i.test(t)) seen.add('links');
+}
+const has = seen.has('contact'), any = seen.size > 0, headings = Array.from(seen);
+if (has || !doClick) return { has: has, any: any, headings: headings, clicked: false };
+let best = null, bestLen = 1e9;
+for (const el of Array.from(document.querySelectorAll('span, div, a, [role="button"]'))) {
+  const t = norm(el.innerText || el.textContent);
+  if (!t || t.length > 80 || t.length >= bestLen) continue;
+  if (/^(xem thêm về |see more about )/i.test(t)) { best = el; bestLen = t.length; }
+}
+if (!best) return { has: false, any: any, headings: headings, clicked: false };
+try {
+  (best.closest('[role="button"], a, button') || best).click();
+} catch (e) {
+  try { best.click(); } catch (e2) { return { has: false, any: any, headings: headings, clicked: false }; }
+}
+return { has: false, any: any, headings: headings, clicked: true };
+"""
+
+# Panel coi như ổn định khi chừng này giây liên tiếp không có thêm heading mới
+# (FB render Chi tiết / Liên kết trước, Thông tin liên hệ sau)
+_PANEL_CONTACT_GRACE_SEC = 1.5
+# Đọc lần 2 khi thiếu SĐT + email: tổng chờ thêm so với lần thấy heading đầu + grace không quá chừng này
+_PANEL_RETRY_WAIT_SEC = 1.5
+_PANEL_HEADING_ORDER = ("details", "links", "contact")
+
+
+def _bio_phone(header_text: str) -> Optional[str]:
+    """SĐT trong bio/giới thiệu ở header của chính Page (không quét bài đăng); chỉ gồm số."""
+    try:
+        from .page_detail_scan import find_phone, intro_text
+
+        ph = find_phone(intro_text(header_text or ""))
+        return re.sub(r"[\s.\-]", "", ph) if ph else None
+    except Exception:
+        return None
+
+
+def _format_panel_headings(seen) -> str:
+    return ",".join(h for h in _PANEL_HEADING_ORDER if h in seen)
+
+
+def _read_panel_in_verify_tab(driver, deadline: float) -> Dict[str, Any]:
+    """
+    Đọc panel liên hệ của Page ngay trên tab verify (không mở /about, không thêm tab).
+    Chờ panel render (FB vẽ header trước, panel trái sau) tối đa _PANEL_BUDGET_SEC rồi mới đọc:
+      - bấm "Xem thêm về ..." 1 lần nếu chưa có mục "Thông tin liên hệ" (chờ tối đa _PANEL_WAIT_SEC);
+      - chờ ít nhất 1 heading panel (Chi tiết / Liên kết / Thông tin liên hệ) xuất hiện;
+      - chưa có "Thông tin liên hệ" → chờ tới khi _PANEL_CONTACT_GRACE_SEC liên tiếp không có heading mới.
+    Đọc xong mà thiếu cả SĐT lẫn email, đồng thời chưa có dòng liên hệ nào → chờ thêm rồi đọc lại 1 lần,
+    chỉ bù field còn trống. "panel_headings" trong kết quả chỉ để ghi log.
+    Không bao giờ ném lỗi / không đặt FAILED: đọc được >= 1 mục panel → SCANNED, ngược lại
+    NOT_SCANNED ("panel_not_loaded") để job DETAIL backfill. Không vượt deadline của verify.
+    """
+    result: Dict[str, Any] = {"detail_status": "NOT_SCANNED"}
+    try:
+        # Import trong hàm: page_detail_scan import ngược scanner ở đầu file
+        from .page_detail_scan import _EXTRA_DETAIL_FIELDS, _READ_HEADER_JS, extract_contact_info
+
+        t0 = time.time()
+        t_end = min(t0 + _PANEL_BUDGET_SEC, deadline)
+        if t0 >= t_end:
+            return result
+
+        state = driver.execute_script(_PANEL_STATE_JS, True) or {}
+        clicked = bool(state.get("clicked"))
+        click_end = time.time() + _PANEL_WAIT_SEC if clicked else None
+        seen: set = set()
+        first_seen_at: Optional[float] = None
+        last_new_at: Optional[float] = None
+        while True:
+            now = time.time()
+            new_headings = set(state.get("headings") or []) - seen
+            if new_headings:
+                seen |= new_headings
+                last_new_at = now
+                if first_seen_at is None:
+                    first_seen_at = now
+                result["panel_headings"] = _format_panel_headings(seen)
+            if state.get("has") or now >= t_end:
+                break
+            if clicked and now >= click_end:
+                break
+            if not clicked and last_new_at is not None and now - last_new_at >= _PANEL_CONTACT_GRACE_SEC:
+                break
+            time.sleep(_PANEL_POLL_SEC)
+            state = driver.execute_script(_PANEL_STATE_JS, False) or {}
+        if time.time() >= deadline:
+            return result  # hết deadline verify: bỏ qua panel
+
+        if not state.get("any"):
+            logger.info(f"[Scanner] panel_not_loaded sau {time.time() - t0:.1f}s — giữ NOT_SCANNED")
+            return result
+
+        raw = driver.execute_script(_READ_HEADER_JS) or {}
+        panel_items = raw.get("panel_items") or []
+        info = extract_contact_info("", raw.get("links") or [], panel_items) if panel_items else {}
+        has_contact_rows = any(p.get("section") == "contact" for p in panel_items)
+
+        if not info.get("phone") and not info.get("email") and not has_contact_rows:
+            try:
+                # Phần grace đã chờ dài hơn "heading đầu + grace" được trừ vào lần chờ này
+                now = time.time()
+                waited_extra = 0.0
+                if not clicked and first_seen_at is not None:
+                    waited_extra = max(0.0, now - min(first_seen_at + _PANEL_CONTACT_GRACE_SEC, t_end))
+                retry_end = min(now + max(0.0, _PANEL_RETRY_WAIT_SEC - waited_extra), deadline)
+                had_contact = "contact" in seen
+                while True:
+                    left = retry_end - time.time()
+                    if left <= 0:
+                        break
+                    time.sleep(min(_PANEL_POLL_SEC, left))
+                    if had_contact:
+                        continue  # đã có heading, chỉ chờ các dòng bên dưới render
+                    seen |= set((driver.execute_script(_PANEL_STATE_JS, False) or {}).get("headings") or [])
+                    if "contact" in seen:
+                        # Heading vừa hiện: thêm 1 nhịp cho các dòng bên dưới
+                        time.sleep(max(0.0, min(_PANEL_POLL_SEC, retry_end - time.time())))
+                        break
+                result["panel_headings"] = _format_panel_headings(seen)
+                if time.time() < deadline:
+                    raw2 = driver.execute_script(_READ_HEADER_JS) or {}
+                    items2 = raw2.get("panel_items") or []
+                    if items2:
+                        info2 = extract_contact_info("", raw2.get("links") or [], items2)
+                        for k, v in info2.items():
+                            if v is not None and v != "" and info.get(k) in (None, ""):
+                                info[k] = v
+                        panel_items = panel_items or items2
+            except Exception as exc:
+                logger.debug(f"[Scanner] đọc lại panel lỗi (giữ kết quả lần 1): {exc}")
+
+        if not panel_items:
+            logger.info("[Scanner] panel_not_loaded (không đọc được mục nào) — giữ NOT_SCANNED")
+            return result
+
+        extra = {k: info.get(k) for k in _EXTRA_DETAIL_FIELDS}
+        result.update(
+            {
+                # Cùng định dạng với SĐT từ "Highlighted details": chỉ gồm số (giữ + đầu nếu có)
+                "phone": re.sub(r"[\s.\-]", "", info.get("phone") or "") or None,
+                "email": info.get("email") or None,
+                "website": info.get("website") or None,
+                "address": info.get("address") or None,
+                "description": (
+                    json.dumps(extra, ensure_ascii=False)
+                    if any(v is not None for v in extra.values())
+                    else None
+                ),
+                "detail_status": "SCANNED",
+                "detail_scanned_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=" ", timespec="seconds"),
+            }
+        )
+        logger.debug(
+            f"[Scanner] panel phone={result['phone']!r} email={result['email']!r}"
+            f" website={result['website']!r}"
+        )
+    except Exception as exc:
+        logger.debug(f"[Scanner] đọc panel trong tab verify lỗi (bỏ qua): {exc}")
+        result = {"detail_status": "NOT_SCANNED", "panel_headings": result.get("panel_headings")}
+    return result
 
 
 def _cdp_unblock_resources(driver) -> None:
@@ -2442,11 +2899,22 @@ def verify_and_extract_page_in_new_tab(
     author_cache: Optional[Dict[str, Any]] = None,
     deadline_sec: float = VERIFY_AUTHOR_DEADLINE_SEC,
     dump_fixture: bool = True,
+    stop_event: Optional[threading.Event] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Mở tab verify (window.open), chờ tên+follower rồi classify.
     Không chờ page load complete / spinner. Tab đóng → soft-fail, không ném lên phiên.
     """
+    if stop_event and stop_event.is_set():
+        return {
+            "_verify_rejected": False,
+            "_soft_fail": True,
+            "reason": "stopped",
+            "entity_kind": "UNKNOWN",
+            "follower_count": 0,
+            "category": None,
+            "raw_lines": [],
+        }
     if not author_url:
         return None
     if is_media_facebook_url(author_url):
@@ -2488,6 +2956,7 @@ def verify_and_extract_page_in_new_tab(
     new_handle = None
     cdp_on = False
     curr_url: Optional[str] = None
+    out: Optional[Dict[str, Any]] = None
     try:
         _ensure_scanner_page_load_timeout(driver)
         new_handle, curr_url, switch_meta = _open_and_switch_verify_tab(
@@ -2563,7 +3032,8 @@ def verify_and_extract_page_in_new_tab(
                     "spinner": None,
                 }
         else:
-            info = _wait_header_ready(driver, deadline, author_name=author_name, poll_sec=0.5)
+            # stop_load=False: window.stop() sẽ gọi SAU khi đọc panel (xem bên dưới)
+            info = _wait_header_ready(driver, deadline, author_name=author_name, poll_sec=0.5, stop_load=False)
         # Refresh URL sau khi chờ header (có thể navigate)
         curr2, url_err2 = _safe_current_url(driver)
         if curr2:
@@ -2582,6 +3052,8 @@ def verify_and_extract_page_in_new_tab(
                 "header_tabs": list(info.get("header_tabs") or []),
                 "follower_text": (info.get("follower_text") or "").strip(),
                 "page_name": (info.get("page_name") or "").strip(),
+                "category": info.get("category") or "",
+                "phone": info.get("phone") or None,
                 "current_url": curr_url,
                 "readyState": info.get("readyState"),
                 "spinner": info.get("spinner"),
@@ -2779,12 +3251,79 @@ def verify_and_extract_page_in_new_tab(
                             raise
                         pass
 
+        # B. Tầng 3 danh mục: khi entity == "PAGE" và category vẫn rỗng, mở About để lấy category
+        if entity == "PAGE" and not info.get("category") and not _deadline_exceeded(deadline):
+            try:
+                about = _fetch_about_text(driver, cleaned_author, deadline)
+                if about.get("category") and not info.get("category"):
+                    info["category"] = about["category"]
+            except Exception as about_err:
+                logger.debug(f"[Scanner] Tầng 3 fetch about category error: {about_err}")
+
+        # C. Log chẩn đoán: khi category vẫn rỗng sau mọi tầng
+        if entity == "PAGE" and not info.get("category"):
+            hl_items = []
+            if header_buttons:
+                for idx_b, b in enumerate(header_buttons):
+                    if "highlighted details" in str(b).lower():
+                        hl_items = header_buttons[idx_b + 1: idx_b + 10]
+                        break
+            follower_lines = []
+            if header_text:
+                lines = [l.strip() for l in header_text.splitlines() if l.strip()]
+                for idx_l, l in enumerate(lines):
+                    if re.search(r"followers?|người theo dõi", l, re.IGNORECASE):
+                        follower_lines = lines[idx_l + 1: idx_l + 13]
+                        break
+            logger.info(
+                f"[Scanner Diagnostic] Page {page_name!r} ({author_url}) category vẫn rỗng sau mọi tầng! "
+                f"Items sau 'Highlighted details': {hl_items!r} | "
+                f"12 dòng sau dòng follower: {follower_lines!r}"
+            )
+
+        # Sau classify PAGE, nếu avatar_url vẫn null: unblock CDP, chờ 1.5s, đọc lại avatar trước khi đóng tab
+        if entity == "PAGE" and not info.get("avatar_url"):
+            try:
+                handles_now = list(driver.window_handles or [])
+                if new_handle and new_handle in handles_now:
+                    driver.switch_to.window(new_handle)
+                    if cdp_on:
+                        _cdp_unblock_resources(driver)
+                        cdp_on = False
+                    late_avatar = _wait_late_avatar(driver)
+                    if late_avatar:
+                        info["avatar_url"] = late_avatar
+            except Exception as e:
+                logger.debug(f"[Scanner] late avatar extract error: {e}")
+
+        # Panel Chi tiết / Liên kết / Liên hệ: chỉ PAGE hợp lệ, cùng tab, trước khi đóng tab
+        panel: Dict[str, Any] = {}
+        if entity == "PAGE" and page_name and follower_raw and not _deadline_exceeded(deadline):
+            try:
+                if new_handle and new_handle in list(driver.window_handles or []):
+                    driver.switch_to.window(new_handle)
+            except Exception:
+                pass
+            panel = _read_panel_in_verify_tab(driver, deadline)
+        # Header + panel đã đọc xong → bây giờ mới cắt phần load còn lại (trước đây stop ngay khi đủ header)
+        _window_stop(driver)
+        bio_phone = None
+        if entity == "PAGE" and not panel.get("phone"):
+            bio_phone = _bio_phone(header_text)
+
         if dump_fixture:
             _dump_classify_fixture(info, entity, reason)
 
         elapsed = time.time() - (deadline - max(5.0, float(deadline_sec or VERIFY_AUTHOR_DEADLINE_SEC)))
         logger.info(
             f"[Scanner] classify={entity} reason={reason!r} name={page_name!r}"
+            f" category={info.get('category')!r} phone={info.get('phone')!r}"
+            f" email={'có' if panel.get('email') else 'không'}"
+            f" website={'có' if panel.get('website') else 'không'}"
+            f" address={'có' if panel.get('address') else 'không'}"
+            f" detail={panel.get('detail_status') or 'NOT_SCANNED'}"
+            f" panel_headings={panel.get('panel_headings') or 'không'}"
+            f" avatar={info.get('avatar_url')!r}"
             f" elapsed={elapsed:.1f}s readyState={info.get('readyState')!r}"
             f" spinner={info.get('spinner')!r} buttons={header_buttons[:6]!r}"
             f" follower={follower_raw!r} header_valid={header_ok}"
@@ -2857,6 +3396,13 @@ def verify_and_extract_page_in_new_tab(
             "page_url": page_url,
             "avatar_url": info.get("avatar_url"),
             "category": info.get("category") or "",
+            "phone": panel.get("phone") or bio_phone or info.get("phone") or None,
+            "email": panel.get("email"),
+            "website": panel.get("website"),
+            "address": panel.get("address"),
+            "description": panel.get("description"),
+            "detail_status": panel.get("detail_status") or "NOT_SCANNED",
+            "detail_scanned_at": panel.get("detail_scanned_at"),
             "follower_count": follower_count,
             "follower_text": follower_text or follower_raw,
             "is_verified": info.get("is_verified"),
@@ -2897,14 +3443,26 @@ def verify_and_extract_page_in_new_tab(
         except Exception:
             handles_now = []
         try:
-            if cdp_on and new_handle and new_handle in handles_now:
-                driver.switch_to.window(new_handle)
-                _cdp_unblock_resources(driver)
-        except Exception:
-            pass
-        try:
             if new_handle and new_handle in handles_now:
                 driver.switch_to.window(new_handle)
+                if cdp_on:
+                    _cdp_unblock_resources(driver)
+                    cdp_on = False
+                # Nếu là PAGE nhưng avatar_url vẫn null, đọc lại rồi mới đóng tab
+                if (
+                    out
+                    and isinstance(out, dict)
+                    and not out.get("_verify_rejected")
+                    and not out.get("_soft_fail")
+                    and not out.get("avatar_url")
+                ):
+                    try:
+                        late_av = _wait_late_avatar(driver)
+                        if late_av:
+                            out["avatar_url"] = late_av
+                            logger.info(f"[Scanner] avatar_url captured in finally before close: {late_av!r}")
+                    except Exception:
+                        pass
                 driver.close()
         except Exception:
             pass
@@ -2950,6 +3508,57 @@ def _wait_feed_settle_after_scroll(
             return
 
 
+class ScanStopped(BaseException):
+    """
+    Phiên đã bị bấm dừng. Kế thừa BaseException để các khối `except Exception` / vòng retry
+    trong lúc quét không nuốt mất — worker phải thoát ngay và nhả khóa profile.
+    """
+
+
+def _guard_driver_for_session(driver, stop_event: Optional[threading.Event]) -> None:
+    """
+    Đã bấm dừng thì mọi lệnh Selenium của worker này ném ScanStopped ngay.
+    Không có guard: chromedriver đã bị kill nhưng mỗi lệnh vẫn treo ~16s (urllib3 retry),
+    worker giữ khóa profile nhiều phút → chạy lại bị BUSY_LOCKED.
+    Luồng khác (API dừng, Module 02...) dùng driver này không bị ảnh hưởng.
+    """
+    raw = getattr(driver, "_m11_raw_execute", None)
+    if raw is None:
+        raw = driver.execute
+        driver._m11_raw_execute = raw
+    if stop_event is None:
+        driver.execute = raw
+        return
+    worker_id = threading.get_ident()
+
+    def execute(*args, **kwargs):
+        if threading.get_ident() != worker_id:
+            return raw(*args, **kwargs)
+        if stop_event.is_set():
+            raise ScanStopped("Phiên đã dừng")
+        try:
+            return raw(*args, **kwargs)
+        except Exception as exc:
+            if stop_event.is_set():
+                raise ScanStopped("Phiên đã dừng") from exc
+            raise
+
+    driver.execute = execute
+
+
+def _acquire_profile_lock(lock, stop_event: Optional[threading.Event]) -> bool:
+    """Chờ khóa profile tối đa PROFILE_LOCK_WAIT_SEC; bấm dừng trong lúc chờ thì thoát ngay."""
+    deadline = time.time() + PROFILE_LOCK_WAIT_SEC
+    while True:
+        if stop_event is not None and stop_event.is_set():
+            raise ScanStopped("Dừng khi đang chờ khóa profile")
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return False
+        if lock.acquire(timeout=min(0.5, remaining)):
+            return True
+
+
 def _acquire_page_scanner_browser(
     target_uid: str,
     owner: str,
@@ -2957,10 +3566,11 @@ def _acquire_page_scanner_browser(
     cookie_str: str,
     headless: bool,
     allow_direct_fallback: bool,
+    session_id: Optional[int] = None,
 ) -> Tuple[Any, bool, Any, bool]:
     """
-    1 browser / 1 acc trong scope page_scanner:
-    - Có driver đúng uid → tái sử dụng (không mở thêm).
+    1 browser / 1 acc trong scope page_scanner, luôn giữ khóa profile suốt phiên:
+    - Có driver đúng uid còn sống → tái sử dụng (không mở thêm).
     - Không có → đóng Chrome page_scanner nhàn rỗi (giữ lại từ keep_browser của acc
       không còn job) rồi mở mới cho uid này. Chrome của acc đang chạy job khác được giữ.
     Trả về (driver, created_new_driver, lock, acquired_lock).
@@ -2975,59 +3585,76 @@ def _acquire_page_scanner_browser(
         close_scoped_active_drivers,
     )
 
-    active = get_active_drivers(target_uid, owner=owner, scope="page_scanner")
-    if active:
-        logger.info(f"[{target_uid}] Tái sử dụng Chrome page_scanner đang mở")
-        try:
-            _ensure_scanner_page_load_timeout(active[0])
-        except Exception:
-            pass
-        return active[0], False, None, False
-
-    # Đổi acc hoặc phiên đầu: chỉ dọn Chrome nhàn rỗi, không đụng acc đang chạy job khác
-    try:
-        close_scoped_active_drivers(
-            scope="page_scanner",
-            force=True,
-            exclude_uids=get_busy_account_uids() - {str(target_uid)},
-        )
-    except Exception:
-        pass
+    stop_event = None
+    if session_id is not None:
+        with _ACTIVE_SESSIONS_LOCK:
+            stop_event = _ACTIVE_STOP_EVENTS.get(int(session_id))
 
     lock = get_profile_lock(target_uid, owner=owner)
-    acquired_lock = lock.acquire(timeout=8)
-    if not acquired_lock:
+    # Vừa dừng khẩn cấp: worker cũ có thể mất vài giây mới thoát và nhả khóa → chờ, không cướp khóa
+    # (khóa cũng có thể đang được module khác giữ hợp lệ).
+    if not _acquire_profile_lock(lock, stop_event):
         raise RuntimeError(f"Profile của nick {target_uid} đang bị khóa bởi tiến trình khác")
 
     driver = None
+    created = False
     try:
-        driver = open_browser(
-            uid=target_uid,
-            owner=owner,
-            proxy=proxy,
-            scope="page_scanner",
-            headless=headless,
-            verify_egress=False,
-            allow_direct_fallback=allow_direct_fallback,
-        )
-        if cookie_str:
-            load_cookies(driver, cookie_str)
-    except Exception:
-        # Nơi gọi không nhận được lock khi hàm này ném lỗi → phải tự nhả ở đây,
-        # nếu không profile bị khóa vĩnh viễn (kể cả Module 02) tới khi restart app.
-        if driver is not None:
+        for existing in get_active_drivers(target_uid, owner=owner, scope="page_scanner"):
+            _guard_driver_for_session(existing, stop_event)
             try:
-                close_driver_for_uid(target_uid, owner=owner)
+                alive = bool(existing.window_handles)
+            except Exception:
+                alive = False
+            if alive:
+                driver = existing
+                logger.info(f"[{target_uid}] Tái sử dụng Chrome page_scanner đang mở")
+                break
+
+        if driver is None:
+            # Đổi acc, phiên đầu hoặc Chrome cũ đã chết: chỉ dọn Chrome nhàn rỗi, không đụng acc đang chạy job khác
+            try:
+                close_scoped_active_drivers(
+                    scope="page_scanner",
+                    force=True,
+                    exclude_uids=get_busy_account_uids() - {str(target_uid)},
+                )
             except Exception:
                 pass
-        lock.release()
+            if stop_event is not None and stop_event.is_set():
+                raise ScanStopped("Dừng trước khi mở Chrome")
+            driver = open_browser(
+                uid=target_uid,
+                owner=owner,
+                proxy=proxy,
+                scope="page_scanner",
+                headless=headless,
+                verify_egress=False,
+                allow_direct_fallback=allow_direct_fallback,
+            )
+            created = True
+            _guard_driver_for_session(driver, stop_event)
+            if cookie_str:
+                load_cookies(driver, cookie_str)
+        try:
+            _ensure_scanner_page_load_timeout(driver)
+        except Exception:
+            pass
+    except BaseException as exc:
+        # Nơi gọi không nhận được lock khi hàm này ném lỗi → phải tự nhả ở đây,
+        # nếu không profile bị khóa vĩnh viễn (kể cả Module 02) tới khi restart app.
+        try:
+            if isinstance(exc, ScanStopped):
+                close_scoped_active_drivers(scope="page_scanner", force=True, uids=[str(target_uid)])
+            elif driver is not None:
+                _guard_driver_for_session(driver, None)
+                close_driver_for_uid(target_uid, owner=owner)
+        except Exception:
+            pass
+        finally:
+            lock.release()
         raise
 
-    try:
-        _ensure_scanner_page_load_timeout(driver)
-    except Exception:
-        pass
-    return driver, True, lock, True
+    return driver, created, lock, True
 
 
 def _release_page_scanner_browser(
@@ -3060,6 +3687,19 @@ def _release_page_scanner_browser(
             pass
 
 
+# Giới hạn an toàn số bài/hashtag chỉ để chống chạy vô hạn, KHÔNG phải điểm dừng thực tế:
+# UI không có ô cấu hình này (gửi mặc định 100) nên luôn nâng lên tối thiểu mức này.
+HASHTAG_SAFETY_MAX_POSTS_PER_TAG = 1000
+
+
+def _hashtag_safety_cap(requested: Any) -> int:
+    try:
+        requested_n = int(requested or 0)
+    except (TypeError, ValueError):
+        requested_n = 0
+    return max(HASHTAG_SAFETY_MAX_POSTS_PER_TAG, requested_n)
+
+
 def run_hashtag_search_flow(
     hashtags: List[str],
     context_keywords: Optional[List[str]] = None,
@@ -3075,6 +3715,9 @@ def run_hashtag_search_flow(
     min_followers: int = 1000,
     target_pages: Optional[int] = None,
     idle_timeout_s: float = 90.0,
+    account_uids: Optional[List[str]] = None,
+    rotate_every: int = 0,
+    pages_on_acc_start: int = 0,
 ) -> Dict[str, Any]:
     """
     Quét Fanpage theo Hashtag:
@@ -3082,14 +3725,18 @@ def run_hashtag_search_flow(
     2. exact_match + header_action (chỉ loại Join/Group).
     3. Tab phụ xác minh Page + follower; chỉ lưu follower_count > min_followers.
     4. Dừng TARGET_REACHED khi đủ target_pages; idle_timeout_s không có page mới đạt lọc.
-    max_posts_per_hashtag chỉ là giới hạn an toàn số bài/tag.
+    Không dừng theo số bài: chỉ dừng khi TARGET_REACHED, idle_timeout_s không có Page mới đạt lọc,
+    hết bài thật (NO_NEW_RESULTS) hoặc USER_STOPPED. max_posts_per_hashtag chỉ là giới hạn an toàn
+    rất cao (>= HASHTAG_SAFETY_MAX_POSTS_PER_TAG); chạm giới hạn → stop_reason SAFETY_LIMIT.
+    5. rotate_every > 0 và có nhiều acc: đủ N Page đạt lọc trên acc hiện tại → đổi acc kế tiếp, tìm lại
+       hashtag và quét tiếp. pages_on_acc_start: số Page acc đầu đã quét ở các phiên trước trong đợt.
     """
     clean_tags = parse_hashtags_input(hashtags)
     if not clean_tags:
         raise ValueError("Danh sách hashtag không được để trống")
 
     context_kws = [k.strip() for k in (context_keywords or []) if k.strip()]
-    max_posts = max(10, min(max_posts_per_hashtag, 300))
+    max_posts = _hashtag_safety_cap(max_posts_per_hashtag)
     min_posts = max(1, min(min_posts, 10))
     min_followers = max(0, int(min_followers or 0))
     idle_timeout_s = max(5.0, float(idle_timeout_s or 90.0))
@@ -3097,11 +3744,26 @@ def run_hashtag_search_flow(
         target_pages = max(1, int(target_pages))
 
     # 1. Chọn tài khoản & Preflight check
+    from .browser_session import AccountRotation
+
     account = get_scraping_account(account_uid, owner_key=owner_key)
     if not account:
         raise RuntimeError("Không tìm thấy tài khoản Facebook nào hợp lệ trong Module 02 để quét")
 
     target_uid = str(account.get("uid") or "").strip()
+    rotate_every = max(0, int(rotate_every or 0))
+    accounts = [account]
+    if rotate_every:
+        for u in dict.fromkeys(str(u or "").strip() for u in (account_uids or [])):
+            if not u or u == target_uid:
+                continue
+            try:
+                extra = get_scraping_account(u, owner_key=owner_key)
+            except ValueError as exc:
+                logger.warning(f"[Scanner] Bỏ acc xoay vòng {u}: {exc}")
+                continue
+            if extra:
+                accounts.append(extra)
     owner = account.get("user_id") or owner_key
     cookie_str = account.get("cookie") or ""
     proxy = account.get("proxy")
@@ -3155,6 +3817,7 @@ def run_hashtag_search_flow(
     total_pages_excluded_filter = 0
     pending_verify_count = 0
     stop_reason = "COMPLETED"
+    safety_hit_tags: List[str] = []
     error_message: Optional[str] = None
     start_time = time.time()
     last_qualified_at = start_time
@@ -3165,36 +3828,57 @@ def run_hashtag_search_flow(
     MAX_SCROLL_BATCHES = 200
     NO_NEW_LIMIT = 5
     MAX_DURATION_SEC = 900
+    # Acc mới phải cuộn lại qua bài đã quét: không tính vào idle / thời lượng, tối đa chừng này mỗi lần đổi
+    MAX_CATCHUP_SEC = 300.0
 
     driver = None
     created_new_driver = False
-    lock = None
-    acquired_lock = False
+    rotation = AccountRotation(
+        session_id,
+        "HASHTAG",
+        accounts,
+        owner_key,
+        headless=headless,
+        allow_direct_fallback=allow_direct_fallback,
+        log=lambda message, level="info": append_session_log(session_id, message, level),
+    )
+    acc_seen_posts: Set[str] = set()  # bài đã thấy trên acc hiện tại
+    catchup_left = 0.0  # > 0 khi vừa đổi acc
+    catchup_batches = 0
 
     try:
         from core.browser import human_sleep
 
         try:
-            driver, created_new_driver, lock, acquired_lock = _acquire_page_scanner_browser(
+            driver, created_new_driver, rotation.lock, rotation.acquired_lock = _acquire_page_scanner_browser(
                 target_uid=target_uid,
                 owner=owner,
                 proxy=proxy,
                 cookie_str=cookie_str,
                 headless=headless,
                 allow_direct_fallback=allow_direct_fallback,
+                session_id=session_id,
             )
         except RuntimeError as lock_err:
-            stop_reason = "CHECKPOINT"
+            is_busy = "bị khóa" in str(lock_err).lower() or "busy" in str(lock_err).lower()
+            stop_reason = "BUSY_LOCKED" if is_busy else "CHECKPOINT"
             error_message = str(lock_err)
             finalize_scan_session(session_id, "PARTIAL", stop_reason, 0, 0, 0, 0, 0, 0, error_message)
             return {"session_id": session_id, "count": 0, "pages": [], "stop_reason": stop_reason}
 
+        rotation.driver = driver
+        rotation.count = max(0, int(pages_on_acc_start or 0))
+        # Acc đổi sang phải đăng nhập được mới dùng (không thì thử acc kế tiếp)
+        rotation.require_login = True
+        can_rotate = bool(rotate_every and rotation.can_rotate)
+
         append_session_log(
             session_id,
             (
-                f"Hashtag · tags={clean_tags} · max_posts/tag={max_posts}"
+                f"Hashtag · tags={clean_tags} · giới hạn an toàn={max_posts} bài/tag"
                 f" · min_fl>{min_followers} · target_pages={target_pages or '∞'}"
                 f" · idle={idle_timeout_s}s"
+                f"{f' · đổi acc sau {rotate_every} page (đang {rotation.count})' if can_rotate else ''}"
                 f" · {'mới' if created_new_driver else 'tái sử dụng'} Chrome {target_uid}"
             ),
             "warn",
@@ -3237,8 +3921,17 @@ def run_hashtag_search_flow(
             no_new_streak = 0
             stagnant_scroll_streak = 0
             use_container_scroll = False
+            batch_started: Optional[float] = None
+            batch_is_catchup = False
 
-            while tag_posts_count < max_posts:
+            while True:
+                if batch_is_catchup and batch_started is not None:
+                    spent = time.time() - batch_started
+                    catchup_left -= spent
+                    catchup_batches += 1
+                    paused_total += spent
+                    last_qualified_at += spent
+                batch_is_catchup = False
                 stopped_in_pause, paused_s = _wait_if_paused_timed(session_id, stop_event)
                 if paused_s:
                     # Thời gian tạm dừng không tính là idle / chạy quá lâu
@@ -3247,6 +3940,7 @@ def run_hashtag_search_flow(
                 if stopped_in_pause:
                     stop_reason = "USER_STOPPED"
                     break
+                batch_started = time.time()
                 batch_no += 1
                 if stop_event.is_set():
                     stop_reason = "USER_STOPPED"
@@ -3269,6 +3963,19 @@ def run_hashtag_search_flow(
 
                 if target_pages is not None and len(page_kho) >= target_pages:
                     stop_reason = "TARGET_REACHED"
+                    break
+
+                # Giới hạn an toàn chống chạy vô hạn (không phải điểm dừng thông thường)
+                if tag_posts_count >= max_posts:
+                    safety_hit_tags.append(current_tag)
+                    append_session_log(
+                        session_id,
+                        (
+                            f"#{current_tag}: dừng do giới hạn an toàn {max_posts} bài/tag"
+                            f" (đạt {len(page_kho)}/{target_pages or '∞'} page)"
+                        ),
+                        "warn",
+                    )
                     break
 
                 curr_url = driver.current_url.lower()
@@ -3297,7 +4004,14 @@ def run_hashtag_search_flow(
                 if signature:
                     seen_batch_signatures.add(signature)
 
-                if new_posts_count == 0:
+                # Vừa đổi acc: bài cũ của phiên nhưng mới với acc này = feed vẫn đang chạy, chưa phải hết bài
+                fresh_on_acc = any(k not in acc_seen_posts for k in post_keys)
+                acc_seen_posts.update(post_keys)
+                catching_up = catchup_left > 0 and fresh_on_acc
+
+                if new_posts_count == 0 and catching_up:
+                    no_new_streak = 0
+                elif new_posts_count == 0:
                     no_new_streak += 1
                     if no_new_streak >= NO_NEW_LIMIT:
                         stop_reason = "CYCLE_DETECTED" if seen_before else "NO_NEW_RESULTS"
@@ -3328,8 +4042,20 @@ def run_hashtag_search_flow(
 
                 # Dedupe verify trong cùng batch (kể cả soft-fail)
                 batch_verify_attempted: Set[str] = set()
+                rotate_due = False
 
                 for p in new_posts:
+                    if stop_event.is_set():
+                        stop_reason = "USER_STOPPED"
+                        break
+                    try:
+                        if not driver or not getattr(driver, "session_id", None):
+                            stop_reason = "USER_STOPPED" if stop_event.is_set() else "DRIVER_CLOSED"
+                            break
+                    except Exception:
+                        stop_reason = "USER_STOPPED" if stop_event.is_set() else "DRIVER_CLOSED"
+                        break
+
                     # Idle giữa các tác giả trong batch — không chờ hết batch
                     if time.time() - last_qualified_at >= idle_timeout_s:
                         stop_reason = "NO_NEW_RESULTS"
@@ -3479,11 +4205,13 @@ def run_hashtag_search_flow(
                             author_name=author_name,
                             author_cache=author_verify_cache,
                             deadline_sec=VERIFY_AUTHOR_DEADLINE_SEC,
+                            stop_event=stop_event,
                         )
                         if (
                             verified
                             and verified.get("_soft_fail")
                             and verified.get("reason") == "tab_switch_failed"
+                            and not stop_event.is_set()
                         ):
                             append_session_log(
                                 session_id,
@@ -3496,7 +4224,12 @@ def run_hashtag_search_flow(
                                 author_name=author_name,
                                 author_cache=author_verify_cache,
                                 deadline_sec=VERIFY_AUTHOR_DEADLINE_SEC,
+                                stop_event=stop_event,
                             )
+
+                    if stop_event.is_set():
+                        stop_reason = "USER_STOPPED"
+                        break
 
                     if cand_key not in candidates:
                         candidates[cand_key] = {
@@ -3652,6 +4385,12 @@ def run_hashtag_search_flow(
                             entry["category"] = verified["category"]
                         if verified.get("avatar_url"):
                             entry["avatar_url"] = verified["avatar_url"]
+                        for fld in ("phone", "email", "website", "address", "description"):
+                            if verified.get(fld):
+                                entry[fld] = verified[fld]
+                        if verified.get("detail_status") == "SCANNED":
+                            entry["detail_status"] = "SCANNED"
+                            entry["detail_scanned_at"] = verified.get("detail_scanned_at")
 
                     entry = page_kho[page_key]
                     score, status, reasons = calculate_page_relevance_score(
@@ -3672,10 +4411,13 @@ def run_hashtag_search_flow(
                         f"Xác minh Page OK: {entry.get('page_name')} FL={entry.get('follower_count')}",
                         "success",
                     )
+                    if is_new_qualified:
+                        rotation.count += 1
+                        if can_rotate and rotation.count >= rotate_every:
+                            rotate_due = True
+                            break
 
-                if stop_reason == "TARGET_REACHED":
-                    break
-
+                # Lưu trước khi xét dừng: đủ mục tiêu / bấm dừng giữa batch không được mất page đã xác minh
                 if batch_verified_pages:
                     uniq = {pg["page_key"]: pg for pg in batch_verified_pages}
                     save_batch_pages(
@@ -3686,6 +4428,13 @@ def run_hashtag_search_flow(
                         target_uid,
                         "HASHTAG",
                     )
+
+                batch_is_catchup = catching_up and not batch_verify_attempted
+
+                if stop_reason in ("TARGET_REACHED", "USER_STOPPED", "DRIVER_CLOSED") or stop_event.is_set():
+                    if stop_event.is_set() or stop_reason == "DRIVER_CLOSED":
+                        stop_reason = "USER_STOPPED"
+                    break
 
                 pending_verify_count = sum(
                     1 for c in candidates.values() if c.get("verify_status") == "PENDING"
@@ -3728,9 +4477,52 @@ def run_hashtag_search_flow(
                     stop_reason = "TARGET_REACHED"
                     break
 
-                if batch_no >= MAX_SCROLL_BATCHES:
+                if batch_no - catchup_batches >= MAX_SCROLL_BATCHES:
                     stop_reason = "MAX_SCROLLS"
                     break
+
+                # Đủ page trên acc hiện tại mà phiên còn thiếu mục tiêu → đổi acc, quét tiếp hashtag này
+                if rotate_due and not stop_event.is_set():
+                    switch_started = time.time()
+                    old_driver = driver
+                    rotation.rotate(f"đủ {rotation.count} page / tài khoản")
+                    rotation.count = 0
+                    driver = rotation.driver
+                    target_uid = rotation.uid
+                    if stop_event.is_set():
+                        stop_reason = "USER_STOPPED"
+                        break
+                    if driver is None:
+                        stop_reason = "CHECKPOINT"
+                        error_message = "Không mở được tài khoản nào sau khi đổi tài khoản"
+                        break
+                    if driver is not old_driver:
+                        nav_channel = navigate_hashtag_via_search_box(
+                            driver,
+                            current_tag,
+                            session_id,
+                            reset_home=True,
+                        )
+                        append_session_log(
+                            session_id,
+                            (
+                                f"#{current_tag} quét tiếp bằng {target_uid}"
+                                f" ({len(page_kho)}/{target_pages or '∞'} page, kênh={nav_channel})"
+                            ),
+                            "info",
+                        )
+                        acc_seen_posts.clear()
+                        seen_batch_signatures.clear()
+                        catchup_left = MAX_CATCHUP_SEC
+                        no_new_streak = 0
+                        stagnant_scroll_streak = 0
+                        use_container_scroll = False
+                    # Thời gian đổi acc không tính là idle / chạy quá lâu
+                    switch_spent = time.time() - switch_started
+                    paused_total += switch_spent
+                    last_qualified_at += switch_spent
+                    batch_is_catchup = False
+                    continue
 
                 keys_before, scroll_h_before = _feed_post_keys_and_height(driver, current_tag)
                 try:
@@ -3782,6 +4574,11 @@ def run_hashtag_search_flow(
             ]:
                 break
 
+        # Chạm giới hạn an toàn mà chưa có lý do dừng nào khác → stop_reason riêng,
+        # không ghi COMPLETED khi chưa đạt target
+        if safety_hit_tags and stop_reason == "COMPLETED":
+            stop_reason = "SAFETY_LIMIT"
+
         pending_verify_count = sum(
             1 for c in candidates.values() if c.get("verify_status") == "PENDING"
         )
@@ -3792,7 +4589,7 @@ def run_hashtag_search_flow(
                 "warn",
             )
 
-    except Exception as exc:
+    except (Exception, ScanStopped) as exc:
         if stop_event.is_set() or _is_tab_closed_exc(exc):
             logger.warning(
                 f"[Scanner] Cửa sổ đóng / dừng giữa phiên hashtag #{session_id}: {exc}"
@@ -3829,6 +4626,21 @@ def run_hashtag_search_flow(
         elif stop_reason == "USER_STOPPED":
             final_status = "STOPPED"
 
+        # Trạng thái xoay acc thật để phiên kế tiếp trong đợt đếm tiếp đúng (UI đọc settings.rotation)
+        try:
+            row = db.fetch_one("SELECT settings FROM page_scan_sessions WHERE id = %s", (session_id,)) or {}
+            saved_settings = json.loads(row.get("settings") or "{}")
+            saved_settings["rotation"] = {"account_uid": rotation.uid, "pages_on_acc": rotation.count}
+            db.execute(
+                "UPDATE page_scan_sessions SET settings = %s WHERE id = %s",
+                (_dumps_json(saved_settings), session_id),
+            )
+        except Exception as exc:
+            logger.warning(f"[Scanner] Không lưu được trạng thái xoay acc phiên #{session_id}: {exc}")
+
+        # Nhả trước khi ghi DB kết thúc; không có khóa thì không đóng Chrome của phiên khác
+        rotation.release(stop_reason, keep_browser=keep_browser)
+
         finalize_scan_session(
             session_id=session_id,
             status=final_status,
@@ -3840,14 +4652,6 @@ def run_hashtag_search_flow(
             batches_count=batch_no,
             duration_seconds=duration,
             error_message=error_message,
-        )
-
-        _release_page_scanner_browser(
-            stop_reason=stop_reason,
-            keep_browser=keep_browser,
-            acquired_lock=acquired_lock,
-            lock=lock,
-            target_uid=target_uid,
         )
 
     # Trả về bản sao an toàn JSON: matched_hashtags đang là set trong page_kho,
@@ -3883,6 +4687,9 @@ def start_hashtag_search_background(
     min_followers: int = 1000,
     target_pages: Optional[int] = None,
     idle_timeout_s: float = 90.0,
+    account_uids: Optional[List[str]] = None,
+    rotate_every: int = 0,
+    pages_on_acc_start: int = 0,
 ) -> int:
     """
     Khởi động phiên tìm kiếm Fanpage theo Hashtag trong background daemon thread.
@@ -3893,7 +4700,7 @@ def start_hashtag_search_background(
     if not clean_tags:
         raise ValueError("Vui lòng nhập ít nhất một hashtag hợp lệ")
 
-    max_posts = max(10, min(max_posts_per_hashtag, 300))
+    max_posts = _hashtag_safety_cap(max_posts_per_hashtag)
     min_posts = max(1, min(min_posts, 10))
     min_followers = max(0, int(min_followers or 0))
     idle_timeout_s = max(5.0, float(idle_timeout_s or 90.0))
@@ -3926,6 +4733,8 @@ def start_hashtag_search_background(
             "headless": headless,
             "allow_direct_fallback": allow_direct_fallback,
             "keep_browser": keep_browser,
+            "account_uids": account_uids or [target_uid],
+            "rotate_every": rotate_every,
         },
         campaign_id=campaign_id,
     )
@@ -3993,6 +4802,9 @@ def start_hashtag_search_background(
             "min_followers": min_followers,
             "target_pages": target_pages,
             "idle_timeout_s": idle_timeout_s,
+            "account_uids": account_uids,
+            "rotate_every": rotate_every,
+            "pages_on_acc_start": pages_on_acc_start,
         },
         daemon=True,
         name=f"page_hashtag_worker_{session_id}",

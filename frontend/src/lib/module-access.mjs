@@ -9,6 +9,7 @@ export const NAV_FEATURE_KEYS = Object.freeze({
   seeding: "seeding",
   scan: "scan_group",
   scanner: "scan_page",
+  profile_scan: "scan_profile",
 });
 
 /** Shared by the sidebar and the route guard, including history/placeholder pages. */
