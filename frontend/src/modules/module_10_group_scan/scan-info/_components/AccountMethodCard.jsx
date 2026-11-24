@@ -3,6 +3,7 @@
 import { Users, Trash2, CloudUpload, X, Download } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { downloadLinkTemplate } from "../../utils/exportTable";
+import { keywordPhase } from "../../utils/keywordStats";
 import {
   IconClose,
   IconTags,
@@ -31,52 +32,56 @@ const METHOD_TABS = [
   { id: "file", label: "Tải tệp Link nhóm (.txt / .csv / .xlsx)", Icon: IconUpload },
 ];
 
-export function KeywordStatusBadge({ status }) {
-  if (status === "done") {
-    return (
-      <span className="inline-flex rounded-full bg-[#DCFCE7] px-2 py-0.5 text-[10px] font-semibold text-[#15803D]">
-        Hoàn thành
-      </span>
-    );
-  }
-  if (status === "running") {
-    return (
-      <span className="inline-flex rounded-full bg-[#FFEDD5] px-2 py-0.5 text-[10px] font-semibold text-[#C2410C]">
-        Đang quét
-      </span>
-    );
-  }
-  if (status === "paused") {
-    return (
-      <span className="inline-flex rounded-full bg-[#FEF3C7] px-2 py-0.5 text-[10px] font-semibold text-[#B45309]">
-        Tạm dừng
-      </span>
-    );
-  }
-  if (status === "ready") {
-    return (
-      <span className="inline-flex rounded-full bg-[#DBEAFE] px-2 py-0.5 text-[10px] font-semibold text-[#1D4ED8]">
-        Sẵn sàng
-      </span>
-    );
-  }
-  if (status === "stopped") {
-    return (
-      <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
-        Đã dừng
-      </span>
-    );
-  }
-  if (status === "error") {
-    return (
-      <span className="inline-flex rounded-full bg-[#FEE2E2] px-2 py-0.5 text-[10px] font-semibold text-[#B91C1C]">
-        Lỗi
-      </span>
-    );
+// Trạng thái từ khóa theo trình tự: Chưa kiểm tra → Đã kiểm tra → Đang quét → Hoàn thành.
+const PHASE_BADGES = {
+  unchecked: ["Chưa kiểm tra", "bg-slate-100 text-slate-600", "Từ khóa mới thêm — bấm Kiểm tra trước khi quét"],
+  queued: ["Chờ kiểm tra", "bg-slate-100 text-slate-600", "Đang chờ tới lượt kiểm tra"],
+  checking: ["Đang kiểm tra", "bg-[#E0F2FE] text-[#0369A1]", "Đang đếm số nhóm quét được"],
+  checked: ["Đã kiểm tra", "bg-[#DBEAFE] text-[#1D4ED8]", "Đã kiểm tra, đang chờ thực hiện quét"],
+  scanning: ["Đang quét", "bg-[#FFEDD5] text-[#C2410C]", "Đang quét nhóm theo từ khóa"],
+  scanned: ["Hoàn thành", "bg-[#DCFCE7] text-[#15803D]", "Đã quét xong từ khóa này"],
+  paused: ["Tạm dừng", "bg-[#FEF3C7] text-[#B45309]", null],
+  stopped: ["Đã dừng", "bg-slate-100 text-slate-500", null],
+  error: ["Lỗi", "bg-[#FEE2E2] text-[#B91C1C]", null],
+};
+
+export function KeywordStatusBadge({ cell }) {
+  const [label, tone, hint] = PHASE_BADGES[keywordPhase(cell)] || PHASE_BADGES.unchecked;
+  return (
+    <span
+      title={hint || undefined}
+      className={`inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold ${tone}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+// Trạng thái 1 link nhóm (Nhập link / Tải tệp). Chỉ "Hợp lệ" mới được quét.
+const LINK_BADGES = {
+  valid: ["Hợp lệ", "bg-[#ECFDF5] border-[#A7F3D0] text-[#059669]"],
+  scanned: ["Đã quét", "bg-[#F1F5F9] border-[#CBD5E1] text-[#475569]"],
+  private: ["Riêng tư", "bg-[#FEF3C7] border-[#FDE68A] text-[#B45309]"],
+  duplicate: ["Trùng lặp", "bg-[#FEF3C7] border-[#FDE68A] text-[#D97706]"],
+  invalid: ["Sai định dạng", "bg-[#FEF2F2] border-[#FECACA] text-[#DC2626]"],
+};
+
+function LinkStatusBadge({ item }) {
+  const [label, tone] = LINK_BADGES[item?.status] || LINK_BADGES.invalid;
+  let title;
+  if (item?.status === "scanned" || item?.status === "private") {
+    const k = item.known || {};
+    title = `${k.group_name ? `«${k.group_name}» ` : ""}đã có trong Danh sách nhóm quét`
+      + `${k.last_seen_at ? ` (quét lúc ${k.last_seen_at})` : ""} — bỏ qua, không quét lại.`;
+  } else if (item?.status === "invalid") {
+    title = item.reason || "Không phải link nhóm Facebook";
   }
   return (
-    <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-      Chờ quét
+    <span
+      title={title}
+      className={`inline-flex items-center whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[10px] font-semibold ${tone}`}
+    >
+      {label}
     </span>
   );
 }
@@ -112,6 +117,7 @@ export default function AccountMethodCard({
   onFileUpload,
   onClearFile,
   fileFilter,
+  checkingLinks = false,
   onFileFilterChange,
   validFileRowsCount = 0,
   duplicateFileRowsCount = 0,
@@ -298,18 +304,36 @@ export default function AccountMethodCard({
                         <td className="px-3 py-2.5 font-medium text-[#0F172A]">{word}</td>
                         <td className="px-3 py-2.5 tabular-nums text-[#64748B]">
                           <span className="font-semibold text-[#0F172A]">{stat.count}</span>
-                          {stat.detail && (
-                            <span className="block text-[10px] font-normal text-[#94A3B8]">{stat.detail}</span>
+                          {Array.isArray(stat.lines) && stat.lines.length > 0 ? (
+                            <ul className="mt-1 space-y-0.5 text-[11px] leading-4" title={stat.detail || undefined}>
+                              {stat.lines.map((line) => (
+                                <li key={line.label} className="flex flex-wrap gap-x-1">
+                                  <span className="text-[#64748B]">• {line.label}:</span>
+                                  <span className="font-semibold text-[#334155]">{line.value}</span>
+                                  {line.hint && <span className="text-[#94A3B8]">({line.hint})</span>}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            stat.detail && (
+                              <span className="block text-[10px] font-normal text-[#94A3B8]">{stat.detail}</span>
+                            )
                           )}
                           {stat.scanned != null && (
-                            <span className="mt-0.5 block text-[11px] font-semibold text-[#2563EB]">
-                              Đã quét: {stat.scanned}
-                              {stat.scanLimit ? `/${stat.scanLimit}` : ""} nhóm
+                            <span className="mt-0.5 block text-[11px] text-[#64748B]">
+                              • Số nhóm đã quét:{" "}
+                              <span className="font-semibold text-[#2563EB]">
+                                {stat.scanned}
+                                {stat.scanLimit ? `/${stat.scanLimit}` : ""} nhóm
+                              </span>
                             </span>
+                          )}
+                          {stat.note && (
+                            <span className="mt-0.5 block text-[10px] text-[#94A3B8]">{stat.note}</span>
                           )}
                         </td>
                         <td className="px-3 py-2.5">
-                          <KeywordStatusBadge status={stat.status} />
+                          <KeywordStatusBadge cell={stat} />
                           {onRecheckKeyword && ["done", "stopped", "error"].includes(stat.status) && (
                             <button
                               type="button"
@@ -362,8 +386,11 @@ export default function AccountMethodCard({
             <button
               type="button"
               onClick={onCheckAndDeduplicateLinks}
-              className="inline-flex h-9 items-center rounded-lg bg-[#2563EB] px-4 text-xs font-bold text-white shadow-sm hover:bg-blue-600 transition-colors"
+              disabled={checkingLinks}
+              title="Bỏ link trùng, link nhóm đã quét trước đó (có trong Danh sách nhóm quét) và nhóm riêng tư"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#2563EB] px-4 text-xs font-bold text-white shadow-sm hover:bg-blue-600 transition-colors disabled:opacity-60"
             >
+              {checkingLinks && <span className="size-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />}
               Kiểm tra & Lọc trùng lặp
             </button>
           </div>
@@ -405,15 +432,7 @@ export default function AccountMethodCard({
                           </span>
                         </td>
                         <td className="px-3 py-2 text-center">
-                          {item.status === "valid" ? (
-                            <span className="inline-flex items-center rounded-full bg-[#ECFDF5] border border-[#A7F3D0] px-2.5 py-0.5 text-[10px] font-semibold text-[#059669]">
-                              Hợp lệ
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center rounded-full bg-[#FEE2E2] border border-[#FECACA] px-2.5 py-0.5 text-[10px] font-semibold text-[#B91C1C]">
-                              Sai định dạng
-                            </span>
-                          )}
+                          <LinkStatusBadge item={item} />
                         </td>
                         <td className="px-2 py-2 text-center">
                           <button
@@ -527,7 +546,7 @@ export default function AccountMethodCard({
                       : "bg-[#F1F5F9] text-[#64748B] hover:bg-slate-200"
                   }`}
                 >
-                  Trùng lặp ({duplicateFileRowsCount})
+                  Trùng lặp / Đã quét ({duplicateFileRowsCount})
                 </button>
                 {invalidFileRowsCount > 0 && (
                   <button
@@ -561,22 +580,7 @@ export default function AccountMethodCard({
                           {r.url || r.raw}
                         </td>
                         <td className="px-3 py-2 text-center">
-                          {r.status === "valid" ? (
-                            <span className="inline-flex items-center rounded-full bg-[#ECFDF5] border border-[#A7F3D0] px-2.5 py-0.5 text-[10px] font-semibold text-[#059669]">
-                              Hợp lệ
-                            </span>
-                          ) : r.status === "duplicate" ? (
-                            <span className="inline-flex items-center rounded-full bg-[#FEF3C7] border border-[#FDE68A] px-2.5 py-0.5 text-[10px] font-semibold text-[#D97706]">
-                              Trùng lặp
-                            </span>
-                          ) : (
-                            <span
-                              className="inline-flex items-center rounded-full bg-[#FEF2F2] border border-[#FECACA] px-2.5 py-0.5 text-[10px] font-semibold text-[#DC2626]"
-                              title={r.reason || "Không phải link nhóm Facebook"}
-                            >
-                              Sai định dạng
-                            </span>
-                          )}
+                          <LinkStatusBadge item={r} />
                         </td>
                       </tr>
                     ))}

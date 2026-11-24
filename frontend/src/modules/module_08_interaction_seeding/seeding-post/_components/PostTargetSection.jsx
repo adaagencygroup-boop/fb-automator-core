@@ -1,19 +1,16 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
-import { FileSpreadsheet, RotateCcw, CheckCircle2, Trash2, ExternalLink, Copy, AlertCircle, Link2, Newspaper } from "lucide-react";
+import { FileSpreadsheet, RotateCcw, CheckCircle2, Trash2, ExternalLink, Copy, AlertCircle, Link2 } from "lucide-react";
 import ConfirmDialog from "@/components/ui/confirm-dialog";
 import Pagination from "@/components/ui/pagination";
 import { toast } from "@/components/ui/toast";
 import ExcelImportModal from "../../_components/ExcelImportModal";
 import { seedingApi } from "../../service";
+import PostFetchModal from "./PostFetchModal";
 import PostSourceFetcher from "./PostSourceFetcher";
+import StepCard from "./StepCard";
 
-const SOURCE_TABS = [
-  { id: "paste", label: "Nhập link bài viết", Icon: Link2 },
-  { id: "excel", label: "Import từ file (Excel)", Icon: FileSpreadsheet },
-  { id: "fetch", label: "Lấy bài viết từ page / trang cá nhân", Icon: Newspaper },
-];
 const TARGETS_PAGE_SIZE = 10;
 import {
   normalizeTargetUrl,
@@ -32,11 +29,11 @@ export default function PostTargetSection({
   successMessage,
   isRunning = false,
   accounts = [],
-  defaultAccountUid = "",
+  selectedUids = [],
   onTargetsReload,
   onFetchRunningChange,
 }) {
-  const [mode, setMode] = useState("paste");
+  const [isFetchOpen, setIsFetchOpen] = useState(false);
   const [textInput, setTextInput] = useState("");
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
   const [dbHistoryTargets, setDbHistoryTargets] = useState([]);
@@ -304,78 +301,55 @@ export default function PostTargetSection({
   const targetsOffset = (targetsPage - 1) * TARGETS_PAGE_SIZE;
   const visibleTargets = targets.slice(targetsOffset, targetsOffset + TARGETS_PAGE_SIZE);
 
+  const openExcel = () => {
+    if (isRunning) return;
+    setIsExcelModalOpen(true);
+  };
+
   return (
-    <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm p-6 space-y-5">
-      {/* Step Header */}
-      <div className="flex items-center gap-3">
-        <span className="w-6 h-6 rounded-full bg-rose-500 text-white text-xs font-bold flex items-center justify-center shrink-0">
-          1
-        </span>
-        <h2 className="text-base font-bold text-gray-900">
-          Thêm bài viết cần seeding
-        </h2>
-      </div>
-
-      {/* Cách thêm bài */}
-      <div className="flex flex-wrap gap-2" role="group" aria-label="Cách thêm bài viết">
-        {SOURCE_TABS.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            aria-pressed={mode === tab.id}
-            onClick={() => setMode(tab.id)}
-            className={`flex items-center gap-2 h-9 px-3.5 rounded-xl text-xs font-semibold border transition-all ${
-              mode === tab.id
-                ? "bg-[#2563EB] border-[#2563EB] text-white shadow-sm shadow-blue-500/30"
-                : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
-            }`}
-          >
-            <tab.Icon className="w-3.5 h-3.5" />
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {mode === "excel" && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-emerald-300 bg-emerald-50/40 p-4">
-          <div className="text-xs text-gray-700">
-            <div className="font-semibold text-gray-900">Import danh sách link bài viết từ file Excel</div>
-            <div className="mt-0.5 text-gray-500">Link trùng hoặc không hợp lệ sẽ được lọc trước khi thêm.</div>
-          </div>
+    <StepCard
+      step={1}
+      title="Thêm bài viết cần seeding"
+      actions={
+        <>
           <button
             type="button"
-            onClick={() => {
-              if (isRunning) return;
-              setIsExcelModalOpen(true);
-            }}
+            onClick={openExcel}
             disabled={isRunning}
             title={isRunning ? "Đang chạy seeding, không thể import từ file" : "Import danh sách link từ tệp Excel"}
-            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all shadow-sm shrink-0 ${
-              isRunning
-                ? "bg-gray-100 text-gray-400 border-gray-200 opacity-60 cursor-not-allowed select-none"
-                : "bg-emerald-50 hover:bg-emerald-100/80 text-emerald-700 border-emerald-200/70 active:scale-95 cursor-pointer"
-            }`}
+            className="flex items-center gap-2 rounded-xl border border-emerald-200/70 bg-emerald-50 px-3.5 py-2 text-xs font-semibold text-emerald-700 shadow-sm hover:bg-emerald-100/80 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <FileSpreadsheet className={`w-3.5 h-3.5 ${isRunning ? "text-gray-400" : "text-emerald-600"}`} />
-            Chọn file Excel
+            <FileSpreadsheet className="size-3.5" aria-hidden="true" />
+            Import từ file (Excel)
           </button>
-        </div>
-      )}
-
-      {/* Giữ component luôn mount (ẩn khi đổi tab) để không mất lượt lấy bài đang theo dõi */}
-      <div className={mode === "fetch" ? "" : "hidden"}>
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            onClick={() => !isRunning && setIsFetchOpen(true)}
+            disabled={isRunning}
+            title={isRunning ? "Đang chạy seeding, không thể lấy bài viết từ page" : undefined}
+            className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3.5 py-2 text-left text-xs font-semibold text-blue-700 shadow-sm hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Link2 className="size-3.5 shrink-0" aria-hidden="true" />
+            Lấy bài viết từ page/ trang cá nhân
+          </button>
+        </>
+      }
+    >
+      {/* Popup lấy bài: luôn mount để lượt lấy bài chạy nền vẫn được theo dõi khi đóng popup */}
+      <PostFetchModal open={isFetchOpen} onClose={() => setIsFetchOpen(false)}>
         <PostSourceFetcher
           accounts={accounts}
-          defaultAccountUid={defaultAccountUid}
+          selectedUids={selectedUids}
           disabled={isRunning}
           targetsVersion={targetsVersion}
           onTargetsAdded={onTargetsReload}
           onFetchRunningChange={onFetchRunningChange}
+          onAdded={() => setIsFetchOpen(false)}
         />
-      </div>
+      </PostFetchModal>
 
-      {/* Input Textarea Area */}
-      {mode === "paste" && (
+      {/* Ô dán link bài viết */}
       <div className="space-y-3">
         <textarea
           rows={4}
@@ -493,14 +467,13 @@ export default function PostTargetSection({
           </div>
         </div>
       </div>
-      )}
 
       {/* Targets Table */}
       {targets.length > 0 && (
-        <div className="space-y-2 mt-2 rounded-xl border border-blue-200 bg-blue-50/30 p-3">
+        <div className="space-y-2 pt-1">
           <div className="flex items-center justify-between px-1">
-            <span className="text-xs font-bold text-gray-800">
-              Bài viết sẽ seeding{" "}
+            <span className="text-xs font-bold text-slate-900">
+              Danh sách bài viết đã thêm:{" "}
               <span className="text-blue-600 font-semibold">({targets.length.toLocaleString("vi-VN")})</span>
             </span>
             <button
@@ -522,10 +495,10 @@ export default function PostTargetSection({
             </button>
           </div>
 
-          <div className="border border-gray-100 rounded-xl overflow-hidden bg-white">
+          <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
-                <thead className="bg-gray-50/80 sticky top-0 z-10 text-gray-500 font-semibold border-b border-gray-100">
+                <thead className="bg-slate-50 sticky top-0 z-10 text-slate-600 font-semibold border-b border-slate-200">
                   <tr>
                     <th className="py-2.5 px-4 w-14 text-center whitespace-nowrap">STT</th>
                     <th className="py-2.5 px-4 whitespace-nowrap">Tên hiển thị</th>
@@ -648,6 +621,6 @@ export default function PostTargetSection({
         variant="danger"
         loading={isClearing}
       />
-    </div>
+    </StepCard>
   );
 }

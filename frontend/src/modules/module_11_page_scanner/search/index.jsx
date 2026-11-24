@@ -323,6 +323,50 @@ export default function PageScannerSearch() {
   const isPaused = runPhase === "paused";
   const isBusy = isRunning || isPaused;
 
+  // "Kiểm tra & Lọc trùng lặp": khóa nút tạm thời trong lúc xử lý để bấm liên tục không bắn ra nhiều thông báo.
+  // Ref chặn cú bấm thứ 2 trong cùng nhịp render (trước khi state isDeduping kịp cập nhật).
+  const DEDUPE_LOCK_MS = 1500;
+  const [isDeduping, setIsDeduping] = useState(false);
+  const dedupeLockRef = useRef(false);
+  const dedupeTimerRef = useRef(null);
+  useEffect(() => () => clearTimeout(dedupeTimerRef.current), []);
+
+  const handleCheckAndDedupe = () => {
+    if (dedupeLockRef.current) return;
+    dedupeLockRef.current = true;
+    setIsDeduping(true);
+    try {
+      const uniqueLines = [];
+      const seen = new Set();
+      pasteContent
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .forEach((l) => {
+          const k = l.toLowerCase().replace(/\/+$/, "");
+          if (!seen.has(k)) {
+            seen.add(k);
+            uniqueLines.push(l);
+          }
+        });
+      const removed = pastePreviewRows.length - uniqueLines.length;
+      setPasteContent(uniqueLines.join("\n"));
+      // Cùng key: nếu vẫn có thông báo cũ thì thay thế, không xếp chồng thêm
+      toast.success(
+        removed > 0
+          ? `Đã lọc bỏ ${removed} link trùng lặp, còn ${uniqueLines.length} link hợp lệ.`
+          : `Tất cả ${uniqueLines.length} link đều không trùng lặp.`,
+        { key: "m11-paste-dedupe" },
+      );
+    } finally {
+      clearTimeout(dedupeTimerRef.current);
+      dedupeTimerRef.current = setTimeout(() => {
+        dedupeLockRef.current = false;
+        setIsDeduping(false);
+      }, DEDUPE_LOCK_MS);
+    }
+  };
+
   const pushLog = useCallback((message, type = "info") => {
     setLogs((prev) => {
       const next = [...prev, { id: `${Date.now()}_${prev.length}`, timestamp: nowStamp(), message, type }];
@@ -1523,32 +1567,13 @@ export default function PageScannerSearch() {
                 </button>
                 <button
                   type="button"
-                  disabled={isBusy || !pasteContent.trim()}
-                  onClick={() => {
-                    const uniqueLines = [];
-                    const seen = new Set();
-                    pasteContent
-                      .split(/\r?\n/)
-                      .map((l) => l.trim())
-                      .filter(Boolean)
-                      .forEach((l) => {
-                        const k = l.toLowerCase().replace(/\/+$/, "");
-                        if (!seen.has(k)) {
-                          seen.add(k);
-                          uniqueLines.push(l);
-                        }
-                      });
-                    const removed = pastePreviewRows.length - uniqueLines.length;
-                    setPasteContent(uniqueLines.join("\n"));
-                    toast.success(
-                      removed > 0
-                        ? `Đã lọc bỏ ${removed} link trùng lặp, còn ${uniqueLines.length} link hợp lệ.`
-                        : `Tất cả ${uniqueLines.length} link đều không trùng lặp.`,
-                    );
-                  }}
-                  className="inline-flex h-8 items-center rounded-lg bg-[#1877F2] px-3.5 text-xs font-bold text-white shadow-sm hover:bg-[#166FE5] disabled:opacity-50"
+                  disabled={isBusy || isDeduping || !pasteContent.trim()}
+                  aria-busy={isDeduping}
+                  onClick={handleCheckAndDedupe}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#1877F2] px-3.5 text-xs font-bold text-white shadow-sm hover:bg-[#166FE5] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Kiểm tra & Lọc trùng lặp
+                  {isDeduping && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
+                  {isDeduping ? "Đang kiểm tra..." : "Kiểm tra & Lọc trùng lặp"}
                 </button>
               </div>
 

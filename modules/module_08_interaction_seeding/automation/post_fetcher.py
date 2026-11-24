@@ -5,7 +5,8 @@ TOÀN BỘ bài viết (không giới hạn số bài) cho tới khi hết bài 
 
 - Đọc bài bằng hàm của Module 11 (extract_posts_batch) nhưng chỉ đọc nhóm bài MỚI mỗi vòng
   (đánh dấu data-m8-batch / data-m8-done) → không kẹt ở 40 bài đầu và không chậm dần khi trang dài.
-- Lưu vào bảng riêng của Module 8 (seeding_fetched_posts), không đụng bảng của Module 11.
+- Bài lấy về chỉ lưu TẠM (RAM + file tạm trên máy, xem fetched_posts_store.py) — không ghi lên DB chung;
+  chỉ khi người dùng bấm "Thêm bài viết đã chọn" thì các bài đã chọn mới được lưu vào seeding_targets.
 - Mở Chrome + đăng nhập giống hệt lúc chạy seeding (cùng Chrome profile của nick).
 
 Các import nặng (Module 11, Selenium, seeding_routes) để trong hàm: file này được seeding_routes import lúc khởi động.
@@ -24,8 +25,8 @@ from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
 
 from sqlalchemy import text
 
+from modules.module_08_interaction_seeding.automation import fetched_posts_store
 from modules.module_08_interaction_seeding.models.seeding_models import (
-    SeedingFetchedPost,
     SeedingPostFetchJob,
     SeedingTemplate,
     vn_now,
@@ -212,7 +213,6 @@ def init_post_fetch_schema() -> None:
         if engine is None:
             raise RuntimeError("Engine tài khoản chưa sẵn sàng")
         SeedingPostFetchJob.__table__.create(bind=engine, checkfirst=True)
-        SeedingFetchedPost.__table__.create(bind=engine, checkfirst=True)
         SeedingTemplate.__table__.create(bind=engine, checkfirst=True)
         with engine.begin() as conn:
             conn.execute(
@@ -242,62 +242,8 @@ def _session():
         s.close()
 
 
-_UPSERT_COLUMNS = (
-    "created_by, source_key, post_key, post_url, target_url, target_fb_id, content, post_type, published_at,"
-    " published_text, reaction_count, comment_count, share_count, is_pinned, first_job_id, last_job_id,"
-    " created_at, updated_at"
-)
-_UPSERT_CONFLICT = """
-ON CONFLICT (created_by, source_key, post_key) DO UPDATE SET
-  post_url = EXCLUDED.post_url,
-  content = CASE WHEN EXCLUDED.content IS NOT NULL
-                  AND LENGTH(EXCLUDED.content) > LENGTH(COALESCE(seeding_fetched_posts.content, ''))
-                 THEN EXCLUDED.content ELSE seeding_fetched_posts.content END,
-  post_type = COALESCE(EXCLUDED.post_type, seeding_fetched_posts.post_type),
-  published_at = COALESCE(EXCLUDED.published_at, seeding_fetched_posts.published_at),
-  published_text = COALESCE(EXCLUDED.published_text, seeding_fetched_posts.published_text),
-  reaction_count = GREATEST(EXCLUDED.reaction_count, seeding_fetched_posts.reaction_count),
-  comment_count = GREATEST(EXCLUDED.comment_count, seeding_fetched_posts.comment_count),
-  share_count = GREATEST(EXCLUDED.share_count, seeding_fetched_posts.share_count),
-  is_pinned = EXCLUDED.is_pinned,
-  last_job_id = EXCLUDED.last_job_id,
-  updated_at = EXCLUDED.updated_at
-RETURNING (xmax = 0) AS inserted
-"""
-
-
-def upsert_fetched_posts(db, owner_id: int, source_key: str, job_id: int, rows: List[Dict[str, Any]]) -> int:
-    """Lưu 1 nhóm bài (đã khử trùng post_key). Trả về số bài MỚI (lần đầu thấy)."""
-    if not rows:
-        return 0
-    params: Dict[str, Any] = {"owner": owner_id, "source_key": source_key, "job": job_id, "now": vn_now()}
-    values = []
-    for i, r in enumerate(rows):
-        values.append(
-            f"(:owner, :source_key, :k{i}, :u{i}, :tu{i}, :tf{i}, :c{i}, :t{i}, :pa{i}, :pt{i},"
-            f" :rc{i}, :cc{i}, :sc{i}, :pin{i}, :job, :job, :now, :now)"
-        )
-        params.update({
-            f"k{i}": r["post_key"],
-            f"u{i}": r["post_url"],
-            f"tu{i}": r["target_url"],
-            f"tf{i}": r["target_fb_id"],
-            f"c{i}": r.get("content") or None,
-            f"t{i}": r.get("post_type") or None,
-            f"pa{i}": r.get("published_at") or None,
-            f"pt{i}": r.get("published_text") or None,
-            f"rc{i}": int(r.get("reaction_count") or 0),
-            f"cc{i}": int(r.get("comment_count") or 0),
-            f"sc{i}": int(r.get("share_count") or 0),
-            f"pin{i}": bool(r.get("is_pinned")),
-        })
-    sql = f"INSERT INTO seeding_fetched_posts ({_UPSERT_COLUMNS}) VALUES {', '.join(values)} {_UPSERT_CONFLICT}"
-    result = db.execute(text(sql), params).fetchall()
-    return sum(1 for row in result if row[0])
-
-
 def prepare_rows(posts: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Bài đọc từ feed → dòng lưu DB (khoá pfbid-safe, link chuẩn hoá, bỏ trùng trong cùng nhóm)."""
+    """Bài đọc từ feed → dòng lưu kho tạm (khoá pfbid-safe, link chuẩn hoá, bỏ trùng trong cùng nhóm)."""
     out: Dict[str, Dict[str, Any]] = {}
     for p in posts:
         url = (p.get("post_url") or "").strip()
@@ -414,6 +360,7 @@ def _run_fetch_job(
         return is_checkpoint_url(current) or path == "/login" or path.startswith("/login/") or path.startswith("/login.php")
 
     try:
+        fetched_posts_store.begin(owner_id, source_key, job_id)
         with _session() as s:
             account = (
                 s.query(Account)
@@ -477,8 +424,8 @@ def _run_fetch_job(
                     fresh = sum(1 for r in rows if r["post_key"] not in found_keys)
                     found_keys.update(r["post_key"] for r in rows)
                     if rows:
-                        with _session() as s:
-                            new_total += upsert_fetched_posts(s, owner_id, source_key, job_id, rows)
+                        # Chỉ lưu tạm (RAM + file trên máy) — DB chỉ ghi khi người dùng bấm thêm bài đã chọn
+                        new_total += fetched_posts_store.upsert(owner_id, source_key, job_id, rows)
                     driver.execute_script(_FINISH_BATCH_JS, batch, TRIM_MEDIA)
                 errors = 0
             except Exception as exc:
@@ -556,6 +503,7 @@ def _run_fetch_job(
             finished_at=vn_now(),
             heartbeat_at=vn_now(),
         )
+        fetched_posts_store.finish(owner_id)
         _unregister_job(job_id)
         total = f"{len(found_keys):,}".replace(",", ".")
         if status == "COMPLETED":

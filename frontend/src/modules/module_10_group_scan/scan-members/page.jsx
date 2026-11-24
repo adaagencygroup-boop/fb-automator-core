@@ -26,6 +26,7 @@ import LiveLogConsole from "./_components/LiveLogConsole";
 import { downloadTable, memberExportTable, safeFileName } from "../utils/exportTable";
 import ModulePageHeader from "../components/ModulePageHeader";
 import ResumeSessionBanner from "../components/ResumeSessionBanner";
+import { normalizeDelayRange } from "../components/DelayRangeInput";
 import { getSessionUserId } from "@/services/sessionIdentity.mjs";
 import { loadInputDraft, saveInputDraft } from "../scan-info/inputDraft.mjs";
 
@@ -325,14 +326,10 @@ export default function GroupScanMembersPage() {
         toast.warning("Số lượng nhóm mục tiêu trong một phiên quét không được vượt quá 20 nhóm để bảo đảm an toàn tài khoản!");
         return;
       }
-      if (minDelay > maxDelay) {
-        toast.error("Thời gian trễ tối đa phải lớn hơn hoặc bằng thời gian tối thiểu!");
-        return;
-      }
-      if (maxDelay > 3600) {
-        toast.error("Thời gian trễ tối đa không được vượt quá 3600 giây!");
-        return;
-      }
+      // Delay nhập ngược (Min > Max) → tự hoán đổi; ép trong 3–3600 giây (nhanh hơn 3s dễ bị Facebook chặn).
+      const delay = normalizeDelayRange(minDelay, maxDelay, { ceil: 3600 });
+      if (delay.min !== minDelay) setMinDelay(delay.min);
+      if (delay.max !== maxDelay) setMaxDelay(delay.max);
 
       try {
         setIsExecuting(true);
@@ -347,15 +344,15 @@ export default function GroupScanMembersPage() {
             time: new Date().toLocaleTimeString("vi-VN", { hour12: false }),
             thread: "Thread-01",
             color: "text-slate-300",
-            message: `Cấu hình: Delay ${minDelay}-${maxDelay}s, ${selectedUids.length} nick quét song song, Giới hạn ${membersLimit} TV/nhóm.`,
+            message: `Cấu hình: Delay ${delay.min}-${delay.max}s, ${selectedUids.length} nick quét song song, Giới hạn ${membersLimit} TV/nhóm.`,
           },
         ]);
 
         const res = await startMemberScan({
           uids: selectedUids,
           groups: selectedGroups,
-          delay_min: minDelay,
-          delay_max: maxDelay,
+          delay_min: delay.min,
+          delay_max: delay.max,
           members_limit: membersLimit,
           skip_admin: skipAdmin,
           auto_dedupe: autoDedupe,

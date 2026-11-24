@@ -1,7 +1,8 @@
 "use client";
 
 import React from "react";
-import { ThumbsUp, MessageCircle, Share2, Info, Check } from "lucide-react";
+import { ThumbsUp, MessageCircle, Send, Info, Check } from "lucide-react";
+import StepCard from "./StepCard";
 
 // ────────────────────────────────────────────────────────────
 // 7 REACTION ICONS CHUẨN FACEBOOK (SVG)
@@ -228,37 +229,38 @@ function FbAngryIcon({ className = "w-9 h-9" }) {
   );
 }
 
+// Màu từng cảm xúc khi được chọn (viền ô, chữ, dấu ✓ ở góc) — theo Figma
 const REACTIONS = [
-  { id: "LIKE", label: "Thích", Icon: FbLikeIcon },
-  { id: "LOVE", label: "Yêu thích", Icon: FbLoveIcon },
-  { id: "CARE", label: "Thương thương", Icon: FbCareIcon },
-  { id: "HAHA", label: "Haha", Icon: FbHahaIcon },
-  { id: "WOW", label: "Wow", Icon: FbWowIcon },
-  { id: "SAD", label: "Buồn", Icon: FbSadIcon },
-  { id: "ANGRY", label: "Phẫn nộ", Icon: FbAngryIcon },
+  { id: "LIKE", label: "Thích", Icon: FbLikeIcon, on: "border-blue-500 text-blue-600", dot: "bg-blue-500" },
+  { id: "LOVE", label: "Yêu thích", Icon: FbLoveIcon, on: "border-rose-500 text-rose-600", dot: "bg-rose-500" },
+  { id: "CARE", label: "Thương", Icon: FbCareIcon, on: "border-amber-400 text-amber-600", dot: "bg-amber-400" },
+  { id: "HAHA", label: "Haha", Icon: FbHahaIcon, on: "border-amber-400 text-amber-600", dot: "bg-amber-400" },
+  { id: "WOW", label: "Wow", Icon: FbWowIcon, on: "border-amber-400 text-amber-600", dot: "bg-amber-400" },
+  { id: "SAD", label: "Buồn", Icon: FbSadIcon, on: "border-amber-400 text-amber-600", dot: "bg-amber-400" },
+  { id: "ANGRY", label: "Phẫn nộ", Icon: FbAngryIcon, on: "border-orange-500 text-orange-600", dot: "bg-orange-500" },
 ];
 
 /** Thẻ 1 loại tương tác (bật / tắt). */
 function InteractionCard({ Icon, title, desc, checked, onChecked, disabled }) {
   return (
     <label
-      className={`relative flex items-center gap-3.5 p-4 rounded-xl border cursor-pointer transition-all ${
-        checked ? "border-blue-500 bg-blue-50/50 shadow-sm shadow-blue-500/10" : "border-gray-200 hover:border-gray-300 bg-gray-50/30"
-      }`}
+      className={`flex items-center gap-3.5 rounded-xl border-2 bg-white p-4 transition-colors ${
+        disabled ? "cursor-not-allowed opacity-70" : "cursor-pointer"
+      } ${checked ? "border-blue-500" : "border-slate-200 hover:border-slate-300"}`}
     >
-      <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center text-white shrink-0">
-        <Icon className="w-4 h-4" />
-      </div>
-      <div className="flex-1">
-        <h4 className="text-xs font-bold text-gray-900">{title}</h4>
-        <p className="text-[11px] text-gray-500">{desc}</p>
-      </div>
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white">
+        <Icon className="size-[18px]" aria-hidden="true" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-xs font-bold text-slate-900">{title}</span>
+        <span className="block text-xs text-slate-500">{desc}</span>
+      </span>
       <input
         type="checkbox"
         checked={checked}
         disabled={disabled}
         onChange={(e) => onChecked(e.target.checked)}
-        className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+        className="size-5 shrink-0 cursor-pointer rounded accent-[#2563EB] disabled:cursor-not-allowed"
       />
     </label>
   );
@@ -276,23 +278,12 @@ export default function PostReactionSelector({
   disabled = false,
 }) {
   return (
-    <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm p-6 space-y-5">
-      {/* Step Header */}
-      <div className="flex items-center gap-3">
-        <span className="w-6 h-6 rounded-full bg-rose-500 text-white text-xs font-bold flex items-center justify-center shrink-0">
-          2
-        </span>
-        <h2 className="text-base font-bold text-gray-900">
-          Chọn loại tương tác &amp; Cảm xúc
-        </h2>
-      </div>
-
-      {/* 3 Interaction Mode Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+    <StepCard step={2} title="Chọn loại tương tác & Cảm xúc">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <InteractionCard
           Icon={ThumbsUp}
-          title="Thả cảm xúc"
-          desc="Thích, Yêu thích, Haha… cho bài viết"
+          title="Like bài viết"
+          desc="Tăng lượt thích trực tiếp"
           checked={doLike}
           onChecked={onDoLikeChange}
           disabled={disabled}
@@ -300,13 +291,13 @@ export default function PostReactionSelector({
         <InteractionCard
           Icon={MessageCircle}
           title="Bình luận"
-          desc="Tự động bình luận bài viết"
+          desc="Đăng bình luận tự động"
           checked={doComment}
           onChecked={onDoCommentChange}
           disabled={disabled}
         />
         <InteractionCard
-          Icon={Share2}
+          Icon={Send}
           title="Chia sẻ"
           desc="Chia sẻ về trang cá nhân"
           checked={doShare}
@@ -315,60 +306,64 @@ export default function PostReactionSelector({
         />
       </div>
 
-      {/* Facebook Reactions Picker */}
       {doLike && (
-        <div className="space-y-2.5 pt-2 border-t border-gray-100">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-gray-800">
-              Cảm xúc Facebook (Reactions)
-            </label>
-            <span className="text-[11px] text-blue-600 font-semibold">
-              Đã chọn {selectedReactions.length} cảm xúc
-            </span>
-          </div>
+        <>
+          <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-800">Cảm xúc Facebook (Reactions):</span>
+                <span className="rounded-md border border-blue-100 bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-600">
+                  Đã chọn {selectedReactions.length} cảm xúc
+                </span>
+              </div>
+              <span className="text-xs text-slate-400">Nhấn để bật / tắt cảm xúc mong muốn</span>
+            </div>
 
-          <div className="grid grid-cols-4 sm:grid-cols-7 gap-2.5">
-            {REACTIONS.map((r) => {
-              const isSelected = selectedReactions.includes(r.id);
-              const IconComp = r.Icon;
-              return (
-                <button
-                  key={r.id}
-                  type="button"
-                  disabled={disabled}
-                  aria-pressed={isSelected}
-                  onClick={() => onToggleReaction(r.id)}
-                  className={`group relative flex flex-col items-center justify-center py-3.5 px-2 rounded-2xl border transition-all select-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${
-                    isSelected
-                      ? "border-blue-500 bg-blue-50/40 shadow-sm ring-2 ring-blue-500/20 enabled:hover:bg-blue-50/70"
-                      : "border-gray-200 bg-white enabled:hover:border-blue-300 enabled:hover:bg-blue-50/30"
-                  }`}
-                >
-                  {isSelected && (
-                    <span className="pointer-events-none absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-xs">
-                      <Check className="w-2.5 h-2.5 stroke-[3]" />
+            <div className="grid grid-cols-4 gap-3 sm:grid-cols-7">
+              {REACTIONS.map((r) => {
+                const isSelected = selectedReactions.includes(r.id);
+                const IconComp = r.Icon;
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    disabled={disabled}
+                    aria-pressed={isSelected}
+                    onClick={() => onToggleReaction(r.id)}
+                    className={`group relative flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 bg-white px-2 py-3 transition-all select-none disabled:cursor-not-allowed disabled:opacity-60 ${
+                      isSelected ? r.on : "border-slate-100 text-slate-400 hover:border-slate-200"
+                    }`}
+                  >
+                    {isSelected && (
+                      <span
+                        className={`pointer-events-none absolute -right-1.5 -top-1.5 flex size-4 items-center justify-center rounded-full text-white ring-2 ring-white ${r.dot}`}
+                      >
+                        <Check className="size-2.5 stroke-[3]" aria-hidden="true" />
+                      </span>
+                    )}
+                    <span
+                      className={`pointer-events-none transition-transform duration-150 group-hover:scale-110 ${
+                        isSelected ? "" : "opacity-50 grayscale"
+                      }`}
+                    >
+                      <IconComp className="size-9" />
                     </span>
-                  )}
-                  {/* Hiệu ứng phóng to theo cả khung (group-hover), không chỉ khi trỏ đúng vào icon */}
-                  <div className="pointer-events-none mb-2 transition-transform duration-150 group-hover:scale-110">
-                    <IconComp className="w-9 h-9" />
-                  </div>
-                  <span className="text-[11px] font-semibold text-gray-700 text-center select-none">
-                    {r.label}
-                  </span>
-                </button>
-              );
-            })}
+                    <span className="text-xs font-semibold">{r.label}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
-          <div className="flex items-center gap-2 p-2.5 rounded-lg bg-blue-50/60 text-blue-800 text-[11px] mt-2">
-            <Info className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+          <div className="flex items-start gap-2 rounded-xl border border-blue-100 bg-blue-50/60 px-3.5 py-2.5 text-xs text-slate-700">
+            <Info className="mt-0.5 size-4 shrink-0 text-blue-600" aria-hidden="true" />
             <span>
-              <strong>Chọn nhiều cảm xúc:</strong> Hệ thống sẽ tự động random phân bổ đều các reaction này cho các lượt tương tác của tài khoản.
+              <strong className="text-slate-900">Chọn nhiều cảm xúc:</strong> Hệ thống sẽ tự động random phân bổ đều hoặc
+              ngẫu nhiên giữa các cảm xúc đã chọn cho các bài viết và tài khoản thực thi.
             </span>
           </div>
-        </div>
+        </>
       )}
-    </div>
+    </StepCard>
   );
 }

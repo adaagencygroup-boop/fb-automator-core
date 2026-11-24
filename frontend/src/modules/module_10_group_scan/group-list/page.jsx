@@ -18,6 +18,7 @@ import GroupDataTable from "./_components/GroupDataTable";
 import GroupListModals from "./_components/GroupListModals";
 import { downloadTable, groupExportTable, safeFileName } from "../utils/exportTable";
 import ModulePageHeader from "../components/ModulePageHeader";
+import { groupInCategory, groupMembersCount, matchesGroupSearch, matchesMembersFilter } from "../utils/groupCategory";
 
 export default function GroupScanListPage() {
   const [mounted, setMounted] = useState(false);
@@ -145,29 +146,35 @@ export default function GroupScanListPage() {
   // Các nhóm thuộc danh mục đang chọn
   const categoryGroups = useMemo(() => {
     if (activeCategoryId === "cat-all") return groups;
-    return groups.filter((g) => {
-      const cname = activeCategory?.name;
-      if (cname) {
-        if ((g.category_name || "").toLowerCase() === cname.toLowerCase()) return true;
-        if ((g.keyword || "").toLowerCase() === cname.toLowerCase()) return true;
-      }
-      if (g.categoryId === activeCategoryId) return true;
-      if (String(g.categoryId) === `cat-${activeCategoryId}`) return true;
-      if (`cat-${g.categoryId}` === String(activeCategoryId)) return true;
-      return false;
-    });
-  }, [groups, activeCategoryId, activeCategory]);
+    // Thư mục chưa có trong danh sách (vừa xoá / đổi tên) → không hiện nhầm nhóm của thư mục khác.
+    if (!categories.some((c) => c.id === activeCategoryId)) return [];
+    return groups.filter((g) => groupInCategory(g, activeCategory));
+  }, [groups, categories, activeCategoryId, activeCategory]);
 
-  // Thống kê 4 thẻ Summary Cards
+  // Thư mục đang chọn bị xoá / không còn → quay về "Tất cả" để tiêu đề và bảng khớp nhau.
+  useEffect(() => {
+    if (!loading && activeCategoryId !== "cat-all" && !categories.some((c) => c.id === activeCategoryId)) {
+      setActiveCategoryId("cat-all");
+    }
+  }, [loading, categories, activeCategoryId]);
+
+  // Lọc nhóm trong bảng theo ô tìm kiếm (không phân biệt dấu / hoa thường) & bộ lọc số thành viên
+  const filteredGroups = useMemo(
+    () => categoryGroups.filter((g) => matchesGroupSearch(g, tableSearch) && matchesMembersFilter(g, membersFilter)),
+    [categoryGroups, tableSearch, membersFilter],
+  );
+
+  // Thống kê 4 thẻ Summary Cards — theo đúng danh sách đang hiển thị (sau tìm kiếm / lọc)
   const stats = useMemo(() => {
-    const totalGroups = categoryGroups.length;
+    const totalGroups = filteredGroups.length;
     let totalMembersCount = 0;
     let largestGroup = 0;
 
-    categoryGroups.forEach((g) => {
-      if (g.membersCount) {
-        totalMembersCount += g.membersCount;
-        largestGroup = Math.max(largestGroup, g.membersCount);
+    filteredGroups.forEach((g) => {
+      const count = groupMembersCount(g);
+      if (count) {
+        totalMembersCount += count;
+        largestGroup = Math.max(largestGroup, count);
       }
     });
 
@@ -179,33 +186,7 @@ export default function GroupScanListPage() {
       averageMembersFormatted: formatNumber(totalGroups ? Math.round(totalMembersCount / totalGroups) : 0),
       largestGroupFormatted: formatNumber(largestGroup),
     };
-  }, [categoryGroups]);
-
-  // Lọc nhóm trong bảng theo Toolbar tìm kiếm & dropdowns
-  const filteredGroups = useMemo(() => {
-    return categoryGroups.filter((g) => {
-      // 1. Text search
-      if (tableSearch.trim()) {
-        const term = tableSearch.toLowerCase().trim();
-        const matchName = (g.name || "").toLowerCase().includes(term);
-        const matchKey = (g.keyword || "").toLowerCase().includes(term);
-        const matchUrl = (g.url || "").toLowerCase().includes(term);
-        const matchGid = (g.group_id || "").toLowerCase().includes(term);
-        if (!matchName && !matchKey && !matchUrl && !matchGid) return false;
-      }
-
-      // 3. Filter Thành viên
-      if (membersFilter !== "all") {
-        const count = g.membersCount || 0;
-        if (membersFilter === "under50k" && count >= 50000) return false;
-        if (membersFilter === "50k_200k" && (count < 50000 || count > 200000))
-          return false;
-        if (membersFilter === "over200k" && count <= 200000) return false;
-      }
-
-      return true;
-    });
-  }, [categoryGroups, tableSearch, membersFilter]);
+  }, [filteredGroups]);
 
   // Pagination calculation
   const totalItems = filteredGroups.length;
@@ -216,21 +197,27 @@ export default function GroupScanListPage() {
     return filteredGroups.slice(startIndex, startIndex + pageSize);
   }, [filteredGroups, startIndex, pageSize]);
 
-  // Select all checkbox handler
-  const allCurrentPageSelected = useMemo(() => {
-    if (paginatedGroups.length === 0) return false;
-    return paginatedGroups.every((g) => selectedIds.has(g.id));
-  }, [paginatedGroups, selectedIds]);
+  // "Chọn tất cả": tick → chọn TẤT CẢ nhóm trong danh sách (mọi trang, theo tìm kiếm / bộ lọc hiện tại);
+  // bỏ tick → bỏ chọn toàn bộ.
+  const allFilteredSelected = useMemo(
+    () => filteredGroups.length > 0 && filteredGroups.every((g) => selectedIds.has(g.id)),
+    [filteredGroups, selectedIds],
+  );
+  const someSelected = selectedIds.size > 0 && !allFilteredSelected;
 
   const toggleSelectAll = () => {
-    const next = new Set(selectedIds);
-    if (allCurrentPageSelected) {
-      paginatedGroups.forEach((g) => next.delete(g.id));
-    } else {
-      paginatedGroups.forEach((g) => next.add(g.id));
-    }
-    setSelectedIds(next);
+    setSelectedIds(allFilteredSelected ? new Set() : new Set(filteredGroups.map((g) => g.id)));
   };
+
+  // Tìm kiếm / lọc lại → chỉ giữ lựa chọn của các nhóm còn hiển thị (tránh xoá / chuyển nhầm nhóm bị ẩn).
+  useEffect(() => {
+    setSelectedIds((current) => {
+      if (!current.size) return current;
+      const visible = new Set(filteredGroups.map((g) => g.id));
+      const next = new Set([...current].filter((id) => visible.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [filteredGroups]);
 
   const toggleSelectRow = (id) => {
     const next = new Set(selectedIds);
@@ -250,7 +237,11 @@ export default function GroupScanListPage() {
     }
     const catName = newCatName.trim();
     try {
-      await createScanCategory(catName);
+      const created = await createScanCategory(catName);
+      if (created?.existed) {
+        toast.warning(`Danh mục «${created.category?.name || catName}» đã tồn tại — không tạo trùng.`);
+        return;
+      }
       await loadGroups();
       setNewCatName("");
       setShowAddCatModal(false);
@@ -276,7 +267,7 @@ export default function GroupScanListPage() {
       toast.success("Đã cập nhật danh mục thành công trong Database!");
     } catch (err) {
       console.error(err);
-      toast.error("Không thể cập nhật danh mục trong Database");
+      toast.error(err?.message || "Không thể cập nhật danh mục trong Database");
     }
   };
 
@@ -424,6 +415,8 @@ export default function GroupScanListPage() {
           onSelectCategory={(id) => {
             setActiveCategoryId(id);
             setPage(1);
+            // Bỏ chọn nhóm của thư mục cũ — tránh xoá / chuyển nhầm nhóm không còn nhìn thấy.
+            if (id !== activeCategoryId) setSelectedIds(new Set());
           }}
           categorySearch={categorySearch}
           onCategorySearchChange={setCategorySearch}
@@ -455,6 +448,7 @@ export default function GroupScanListPage() {
               setPage(1);
             }}
             selectedCount={selectedIds.size}
+            allSelected={allFilteredSelected}
             totalFilteredCount={filteredGroups.length}
             onToggleSelectAll={toggleSelectAll}
             onOpenMoveModal={() => {
@@ -477,10 +471,19 @@ export default function GroupScanListPage() {
           <GroupDataTable
             loading={loading}
             paginatedGroups={paginatedGroups}
-            allCurrentPageSelected={allCurrentPageSelected}
+            allCurrentPageSelected={allFilteredSelected}
+            someSelected={someSelected}
+            hasFilter={Boolean(tableSearch.trim()) || membersFilter !== "all"}
+            onClearFilters={() => {
+              setTableSearch("");
+              setMembersFilter("all");
+              setPage(1);
+            }}
             onToggleSelectAll={toggleSelectAll}
             selectedIds={selectedIds}
             onToggleSelectRow={toggleSelectRow}
+            allGroups={filteredGroups}
+            onSelectRows={setSelectedIds}
             startIndex={startIndex}
             totalFilteredCount={filteredGroups.length}
             pageSize={pageSize}

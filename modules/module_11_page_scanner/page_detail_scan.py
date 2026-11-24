@@ -61,7 +61,10 @@ const visible = (el) => {
     return st.display !== 'none' && st.visibility !== 'hidden';
   } catch (e) { return false; }
 };
-const firstLine = (el) => ((el.innerText || el.textContent || '').trim().split('\n')[0] || '').trim();
+// Chấm xanh "đang hoạt động" trên avatar có nhãn ẩn ("Active status indicator") nằm trước tên Page → bỏ qua
+const STATUS_NOISE = /^((active|online)\s+status\s+indicator|active( now)?|online|đang hoạt động|chỉ báo trạng thái.*|trạng thái (hoạt động|trực tuyến))$/i;
+const firstLine = (el) => ((el.innerText || el.textContent || '').split('\n')
+  .map((s) => s.trim()).find((s) => s && !STATUS_NOISE.test(s)) || '');
 const pickHeading = (root) => {
   for (const h of Array.from(root.querySelectorAll('h1, [role="heading"][aria-level="1"]'))) {
     const t = firstLine(h);
@@ -316,7 +319,8 @@ _COMMON_TLDS = {
 }
 _SOCIAL_HOSTS = (
     "facebook.com", "fb.com", "fb.me", "fb.watch", "messenger.com", "m.me", "instagram.com",
-    "threads.net", "tiktok.com", "youtube.com", "youtu.be", "twitter.com", "x.com",
+    # Threads đã chuyển từ threads.net sang threads.com — cả hai là mạng xã hội, không phải website
+    "threads.net", "threads.com", "tiktok.com", "youtube.com", "youtu.be", "twitter.com", "x.com",
     "wa.me", "whatsapp.com", "linkedin.com", "zalo.me", "t.me", "pinterest.com",
 )
 _ADDRESS_HINT_RE = re.compile(
@@ -658,16 +662,52 @@ def intro_text(header_text: str) -> str:
     return "\n".join(out)
 
 
+# Nhãn ẩn của chấm xanh "đang hoạt động" trên avatar Page — FB đặt trước tên Page trong text trang
+_STATUS_NOISE_RE = re.compile(
+    r"^((active|online)\s+status\s+indicator|active( now)?|online|đang hoạt động|chỉ báo trạng thái.*"
+    r"|trạng thái (hoạt động|trực tuyến))$",
+    re.IGNORECASE,
+)
+
+
+def is_status_noise(line: str) -> bool:
+    return bool(_STATUS_NOISE_RE.match((line or "").strip()))
+
+
 def first_text_line(text: str) -> Optional[str]:
-    """Dòng đầu text trang = tên Page (dự phòng khi không thấy h1)."""
+    """Dòng đầu text trang = tên Page (dự phòng khi không thấy h1). Bỏ qua nhãn chấm trạng thái hoạt động."""
     for line in (text or "").splitlines():
         line = line.strip()
-        if not line:
+        if not line or is_status_noise(line):
             continue
         if len(line) <= 120 and not _NOISE_RE.search(line) and _norm_label(line) not in _TAB_LABELS:
             return line
         return None
     return None
+
+
+def name_before_followers(text: str) -> Optional[str]:
+    """Tên Page nằm ngay trên dòng '… followers / người theo dõi' của phần đầu trang."""
+    lines = [l.strip() for l in (text or "").splitlines()]
+    for idx, line in enumerate(lines):
+        if not re.search(r"(followers?|người\s*theo\s*dõi)", line, re.IGNORECASE):
+            continue
+        for prev in reversed(lines[:idx]):
+            if not prev or is_status_noise(prev):
+                continue
+            if len(prev) <= 120 and not _NOISE_RE.search(prev) and _norm_label(prev) not in _TAB_LABELS:
+                return prev
+            return None
+        return None
+    return None
+
+
+def pick_page_name(heading_name: Optional[str], header_text: str) -> Optional[str]:
+    """Tên từ h1 nếu hợp lệ; không thì dòng ngay trên số follower, cuối cùng là dòng đầu text trang."""
+    name = (heading_name or "").strip()
+    if name and not is_status_noise(name):
+        return name
+    return name_before_followers(header_text) or first_text_line(header_text)
 
 
 def _section_values(lines: List[str]) -> Dict[str, Optional[str]]:
@@ -1019,7 +1059,7 @@ def scan_page_detail(driver, page_url: str, stop_event: threading.Event) -> Dict
         "_header_text": header_text,
         "_panel_items": header.get("panel_items") or [],
         "_links": header.get("links") or [],
-        "page_name": (header.get("page_name") or "").strip() or first_text_line(header_text),
+        "page_name": pick_page_name(header.get("page_name"), header_text),
         "avatar_url": header.get("avatar_url"),
         "is_verified": header.get("is_verified"),
         "category": clean_category(extract_category(header_text)),
@@ -1265,6 +1305,22 @@ def _normalize_pages(pages: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     return out
 
 
+def _existing_page_keys(owner_key: str, page_keys: List[str]) -> set:
+    """page_key đã có trong kho scanned_pages của owner.
+    Page đã có trong DB thì quét lại luôn cập nhật dữ liệu mới (không áp ngưỡng follower như page mới)."""
+    if not page_keys:
+        return set()
+    try:
+        rows = db.fetch_all(
+            "SELECT page_key FROM scanned_pages WHERE owner_key = %s AND page_key = ANY(%s)",
+            (owner_key, list(page_keys)),
+        )
+        return {r["page_key"] for r in (rows or [])}
+    except Exception as exc:
+        logger.warning(f"[DETAIL] Không đọc được page đã có trong DB: {exc}")
+        return set()
+
+
 def run_page_detail_flow(
     pages: List[Dict[str, Any]],
     owner_key: str,
@@ -1290,6 +1346,7 @@ def run_page_detail_flow(
     target = int(target_pages) if target_pages else len(pages)
     min_followers = max(0, int(min_followers or 0))
     rotate_every = max(0, int(rotate_every or 0))
+    existing_keys = _existing_page_keys(owner_key, [p["page_key"] for p in pages])
 
     with _ACTIVE_SESSIONS_LOCK:
         _ACTIVE_STOP_EVENTS.setdefault(session_id, threading.Event())
@@ -1394,8 +1451,9 @@ def run_page_detail_flow(
                     owner_key, session_id, page_key, page_url, {}, "FAILED",
                     source_type, rotation.uid, idx + 1,
                 )
-            elif min_followers and detail.get("follower_count") is not None \
+            elif min_followers and page_key not in existing_keys and detail.get("follower_count") is not None \
                     and detail["follower_count"] < min_followers:
+                # Chỉ page MỚI mới bị bỏ qua khi dưới ngưỡng; page đã có trong DB vẫn quét tiếp để cập nhật dữ liệu
                 skipped += 1
                 log(
                     f"{detail.get('page_name') or page_key}: {detail['follower_count']} followers"
@@ -1432,7 +1490,8 @@ def run_page_detail_flow(
                     (("phone", "SĐT"), ("email", "Email"), ("website", "Web")) if detail.get(k)
                 ]
                 log(
-                    f"Quét xong {detail.get('page_name') or page_key}"
+                    f"{'Cập nhật page đã có trong DB' if page_key in existing_keys else 'Quét xong'}"
+                    f" {detail.get('page_name') or page_key}"
                     f" · FL {detail.get('follower_text') or '—'}"
                     f" · {' · '.join(found) if found else 'không có thông tin liên hệ công khai'}",
                     "success",

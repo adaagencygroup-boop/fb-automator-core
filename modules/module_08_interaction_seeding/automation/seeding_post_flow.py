@@ -557,6 +557,16 @@ class PostSeedingFlow:
             ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
             time.sleep(0.8)
 
+    def _identity_confirmation_required(self) -> bool:
+        """Detect Facebook's identity confirmation gate after a share attempt."""
+        try:
+            return bool(self.driver.execute_script("""
+                const text = (document.body?.innerText || '').replace(/\\s+/g, ' ').toLowerCase();
+                return text.includes('open facebook on your mobile device to confirm your identity');
+            """))
+        except Exception:
+            return False
+
     def _click_until(self, find_js: str, ok_js: str,
                      methods=("chuột thật", "JS click", "click mạnh")) -> tuple[bool, str]:
         """Bấm phần tử do find_js tìm được rồi đợi ok_js trả về true (tối đa 3 giây).
@@ -835,6 +845,8 @@ class PostSeedingFlow:
             share_completed = False
             for w in range(10):
                 time.sleep(1.0)
+                if self._identity_confirmation_required():
+                    return False, "Facebook yêu cầu mở ứng dụng trên điện thoại để xác nhận danh tính; lượt chia sẻ thất bại"
                 is_open = self.driver.execute_script("""
                     const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
                     const shareDialog = dialogs.find(d => {
@@ -858,6 +870,8 @@ class PostSeedingFlow:
                 return False, "Không thể hoàn tất chia sẻ (hộp thoại Share now không đóng sau khi bấm)"
 
             self.bot.random_sleep(2.5, 4.0)
+            if self._identity_confirmation_required():
+                return False, "Facebook yêu cầu mở ứng dụng trên điện thoại để xác nhận danh tính; lượt chia sẻ thất bại"
             if callback:
                 callback("✓ Đã chia sẻ bài viết ở chế độ Công khai (Public) thành công!")
             return True, "Thành công (Chia sẻ Public)"

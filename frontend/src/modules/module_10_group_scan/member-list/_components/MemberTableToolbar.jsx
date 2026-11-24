@@ -19,7 +19,7 @@ export default function MemberTableToolbar({
         <div className="flex flex-col gap-0.5">
           <div className="flex items-center gap-2">
             <span className="size-2 rounded-full bg-[#10B981] shrink-0" />
-            <h3 className="text-sm font-bold text-[#0F172A]">
+            <h3 className="text-xl font-bold tracking-tight text-[#0F172A]">
               {currentCategory ? (currentCategory.fullName || currentCategory.name) : "Chưa chọn danh mục"}
             </h3>
           </div>
@@ -42,13 +42,13 @@ export default function MemberTableToolbar({
       <div className="flex flex-wrap items-center gap-2.5 w-full">
         {/* Keyword Search */}
         <div className="relative flex-1 min-w-[200px]">
-          <Search className="size-3.5 absolute left-2.5 top-2 text-[#94A3B8]" />
+          <Search className="size-3.5 absolute left-2.5 top-2.5 text-[#94A3B8]" />
           <input
             type="text"
             placeholder="Tìm UID, Tên thành viên..."
             value={memberSearch}
             onChange={(e) => onMemberSearchChange(e.target.value)}
-            className="w-full h-7 pl-8 pr-3 text-xs text-slate-800 border border-[#E2E8F0] bg-white rounded-lg outline-none focus:border-[#2563EB]"
+            className="w-full h-[34px] pl-8 pr-3 text-xs text-slate-800 border border-[#E2E8F0] bg-white rounded-lg outline-none focus:border-[#2563EB]"
           />
         </div>
       </div>

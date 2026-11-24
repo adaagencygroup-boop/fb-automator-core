@@ -14,13 +14,8 @@ import {
   FileText,
 } from "lucide-react";
 import CustomSelect from "@/components/ui/custom-select";
+import { MEMBERS_FILTER_OPTIONS } from "../../utils/groupCategory";
 
-const MEMBERS_FILTER_OPTIONS = [
-  { value: "all", label: "Thành viên: Tất cả" },
-  { value: "under50k", label: "Dưới 50.000" },
-  { value: "50k_200k", label: "50.000 - 200.000" },
-  { value: "over200k", label: "Trên 200.000" },
-];
 
 export default function GroupTableToolbar({
   activeCategory,
@@ -32,6 +27,7 @@ export default function GroupTableToolbar({
   membersFilter,
   onMembersFilterChange,
   selectedCount = 0,
+  allSelected = false,
   totalFilteredCount = 0,
   onToggleSelectAll,
   onOpenMoveModal,
@@ -142,7 +138,7 @@ export default function GroupTableToolbar({
             type="text"
             value={tableSearch}
             onChange={(e) => onTableSearchChange(e.target.value)}
-            placeholder="Tìm theo tên nhóm, UID, từ khóa hoặc URL..."
+            placeholder="Tìm theo tên nhóm, UID, từ khóa, thư mục hoặc URL (gõ không dấu cũng được)..."
             className="w-full h-[34px] rounded-lg border border-[#E2E8F0] bg-white pl-8 pr-3 text-xs text-[#1E293B] placeholder:text-[#6B7280] focus:outline-none focus:border-blue-500 transition-colors"
           />
         </div>
@@ -166,8 +162,12 @@ export default function GroupTableToolbar({
           <div className="flex items-center gap-2">
             <input
               type="checkbox"
-              checked={selectedCount > 0}
+              checked={allSelected}
+              ref={(el) => {
+                if (el) el.indeterminate = selectedCount > 0 && !allSelected;
+              }}
               onChange={onToggleSelectAll}
+              title={allSelected ? "Bỏ chọn tất cả" : `Chọn tất cả ${totalFilteredCount} nhóm`}
               className="w-4 h-4 rounded border-blue-500 text-blue-600 focus:ring-blue-500 cursor-pointer accent-[#2563EB]"
             />
             <span className="text-xs font-semibold text-[#1E3A8A]">

@@ -92,6 +92,15 @@ export function capacityCell(row) {
   const inDb = Math.max(0, ok - fresh); // qua bộ lọc nhưng đã quét trước đó
   return {
     count: `${fmtNum(ok)} nhóm`,
+    // Hiển thị từng dòng "nhãn: giá trị" (detail bên dưới chỉ còn làm tooltip).
+    lines: [
+      { label: "Tổng số nhóm tìm thấy", value: `${fmtNum(total)} nhóm` },
+      filtered
+        ? { label: "Đã loại bỏ", value: `${fmtNum(filtered)} nhóm`, hint: "riêng tư hoặc ít thành viên" }
+        : null,
+      inDb ? { label: "Đã có trong danh sách", value: `${fmtNum(inDb)} nhóm` } : null,
+    ].filter(Boolean),
+    note: [row.reason || null, row.checked_at ? `Kiểm tra lúc ${row.checked_at}` : null].filter(Boolean).join(" · "),
     detail: [
       `Facebook tìm thấy ${fmtNum(total)} nhóm`,
       filtered ? `loại ${fmtNum(filtered)} nhóm riêng tư hoặc ít thành viên` : null,
@@ -106,6 +115,25 @@ export function capacityCell(row) {
     status: row.status || "done",
     cached: Boolean(row.cached),
   };
+}
+
+/**
+ * Giai đoạn hiển thị ở cột Trạng thái, theo đúng trình tự xử lý của 1 từ khóa:
+ *   unchecked (Chưa kiểm tra) → checking (Đang kiểm tra) → checked (Đã kiểm tra, chờ quét)
+ *   → scanning (Đang quét) → scanned (Hoàn thành).
+ * Ngoài luồng: paused / stopped / error. `scanned != null` nghĩa là từ khóa đã vào phiên Bắt đầu thực thi.
+ */
+export function keywordPhase(cell) {
+  const status = cell?.status || "idle";
+  if (status === "paused" || status === "stopped" || status === "error") return status;
+  if (cell?.scanned != null) {
+    if (status === "running") return "scanning";
+    if (status === "done") return "scanned";
+    return "checked"; // đã kiểm tra, đang chờ tới lượt quét
+  }
+  if (status === "running") return "checking";
+  if (cell?.count === "…") return "queued"; // vừa bấm Kiểm tra, chờ tới lượt
+  return isKeywordChecked(cell) ? "checked" : "unchecked";
 }
 
 /**

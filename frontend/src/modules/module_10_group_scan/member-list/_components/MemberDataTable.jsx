@@ -3,6 +3,7 @@
 import React from "react";
 import { ExternalLink, Loader2, Trash2 } from "lucide-react";
 import Pagination from "@/components/ui/pagination";
+import useRowMultiSelect from "../../components/useRowMultiSelect";
 
 export default function MemberDataTable({
   members = [],
@@ -18,20 +19,34 @@ export default function MemberDataTable({
   totalPages = 1,
   pageSize = 10,
   onPageChange,
+  onSelectRows,
 }) {
+  // Giữ chuột kéo = chọn nhiều thành viên liên tiếp · Ctrl + click = chọn riêng lẻ · Shift + click = cả khoảng.
+  const { setContainer, rowProps } = useRowMultiSelect({
+    rows: members,
+    selected: selectedMemberIds,
+    onChange: onSelectRows || (() => {}),
+  });
+
   return (
     <>
+      {!loading && members.length > 0 && onSelectRows && (
+        <p className="mb-2 text-[11px] text-[#94A3B8]">
+          Mẹo: giữ chuột trái và kéo để chọn nhiều thành viên liên tiếp · Ctrl + click chọn từng người riêng lẻ ·
+          Shift + click chọn cả khoảng.
+        </p>
+      )}
       {/* Member Data Table */}
-      <div className="w-full border border-[#E2E8F0] rounded-lg overflow-x-auto">
+      <div ref={onSelectRows ? setContainer : undefined} className="w-full border border-[#E2E8F0] rounded-lg overflow-x-auto">
         <table className="w-full min-w-[650px] text-left text-xs">
-          <thead className="bg-[#F8FAFC] text-[10px] font-bold uppercase tracking-wide text-[#64748B] border-b border-[#E2E8F0]">
+          <thead className="bg-[#F8FAFC]/80 text-[11px] font-bold uppercase text-[#475569] border-b border-[#E2E8F0]">
             <tr>
               <th className="py-2.5 px-3 text-center w-10">
                 <input
                   type="checkbox"
                   checked={allFilteredSelected}
                   onChange={onToggleSelectAll}
-                  className="size-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
+                  className="size-4 rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer accent-[#2563EB]"
                 />
               </th>
               <th className="py-2.5 px-2 text-center w-12">STT</th>
@@ -44,7 +59,7 @@ export default function MemberDataTable({
           <tbody className="divide-y divide-[#F1F5F9]">
             {loading ? (
               <tr>
-                <td colSpan={6} className="text-center py-12 text-slate-400">
+                <td colSpan={6} className="text-center py-12 text-xs text-slate-500">
                   <div className="flex flex-col items-center justify-center gap-2">
                     <Loader2 className="size-5 animate-spin text-blue-600" />
                     <span>Đang nạp thành viên từ CSDL...</span>
@@ -53,7 +68,7 @@ export default function MemberDataTable({
               </tr>
             ) : members.length === 0 ? (
               <tr>
-                <td colSpan={6} className="text-center py-10 text-slate-400">
+                <td colSpan={6} className="text-center py-12 text-xs text-slate-400">
                   Chưa có thành viên nào phù hợp tiêu chí lọc.
                 </td>
               </tr>
@@ -63,46 +78,47 @@ export default function MemberDataTable({
                 return (
                   <tr
                     key={member.id}
-                    className={`hover:bg-[#F8FAFC]/80 transition-colors ${
-                      isSelected ? "bg-[#EFF6FF]/40" : ""
+                    {...(onSelectRows ? rowProps(member, idx) : {})}
+                    className={`transition-colors ${onSelectRows ? "cursor-pointer select-none" : ""} ${
+                      isSelected ? "bg-[#EFF6FF] hover:bg-[#DBEAFE]" : "hover:bg-[#F8FAFC]/80"
                     }`}
                   >
-                    <td className="py-2 px-3 text-center">
+                    <td className="py-3.5 px-3 text-center" data-no-row-selection>
                       <input
                         type="checkbox"
                         checked={isSelected}
                         onChange={() => onToggleSelectRow(member.id)}
-                        className="size-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
+                        className="size-4 rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer accent-[#2563EB]"
                       />
                     </td>
-                    <td className="py-2 px-2 text-center text-[#64748B] font-medium text-[11px]">
+                    <td className="py-3.5 px-2 text-center text-[#94A3B8] font-medium text-xs">
                       {(currentPage - 1) * pageSize + idx + 1}
                     </td>
-                    <td className="py-2 px-3">
+                    <td className="py-3.5 px-3">
                       <div className="flex items-center gap-2">
-                        <div className="size-6 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-[10px] text-slate-600 uppercase shrink-0">
+                        <div className="size-7 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-[11px] text-slate-600 uppercase shrink-0">
                           {member.name.charAt(0)}
                         </div>
-                        <span className="font-semibold text-xs text-[#0F172A] line-clamp-1">
+                        <span className="font-semibold text-sm text-[#0F172A] line-clamp-1">
                           {member.name}
                         </span>
                       </div>
                     </td>
-                    <td className="py-2 px-3">
+                    <td className="py-3.5 px-3">
                       <a
                         href={`https://facebook.com/${member.uid}`}
                         target="_blank"
                         rel="noreferrer"
-                        className="inline-flex items-center gap-1 font-mono text-[11px] text-[#2563EB] hover:underline"
+                        className="inline-flex items-center gap-1 font-mono text-xs text-[#2563EB] hover:underline"
                       >
                         <span title={member.uid || undefined}>{member.shortUid}</span>
                         <ExternalLink className="size-3 text-[#2563EB]" />
                       </a>
                     </td>
-                    <td className="py-2 px-3 font-mono text-[11px] text-[#64748B] whitespace-nowrap">
+                    <td className="py-3.5 px-3 font-mono text-xs text-[#64748B] whitespace-nowrap">
                       {member.time}
                     </td>
-                    <td className="py-2 px-3 text-right">
+                    <td className="py-3.5 px-3 text-right">
                       <button
                         type="button"
                         onClick={() => onRemoveMember(member.id)}

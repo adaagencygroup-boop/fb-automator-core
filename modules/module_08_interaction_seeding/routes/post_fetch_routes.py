@@ -15,13 +15,12 @@ from sqlalchemy.orm import Session
 
 from modules.module_02_account_manager.database.connection import get_db
 from modules.module_02_account_manager.database.models import Account
-from modules.module_08_interaction_seeding.automation import post_fetcher
+from modules.module_08_interaction_seeding.automation import fetched_posts_store, post_fetcher
 from modules.module_08_interaction_seeding.models.seeding_models import SeedingPostFetchJob, vn_now
 from modules.module_08_interaction_seeding.routes.seeding_routes import (
     _find_running_campaign,
     _running_conflict_detail,
     get_current_user_info,
-    to_vn_iso,
 )
 
 router = APIRouter(prefix="/post-fetch", tags=["Seeding"])
@@ -72,19 +71,30 @@ def _get_owned_job(db: Session, job_id: int, user_id: int) -> SeedingPostFetchJo
     return job
 
 
-def _filter_sql(q: Optional[str], post_type: str, params: Dict[str, Any], with_type: bool = True) -> str:
-    """Điều kiện WHERE chung cho danh sách / thêm vào seeding (theo nguồn + tìm kiếm + loại bài)."""
-    where = ["fp.created_by = :u", "fp.source_key = :sk"]
-    if q and q.strip():
-        where.append("(fp.content ILIKE :q OR fp.post_url ILIKE :q)")
-        params["q"] = f"%{q.strip()}%"
-    if with_type and post_type == "text":
-        # Bài không rõ loại cũng tính là "Bài viết" (khớp số đếm)
-        where.append("COALESCE(fp.post_type, 'text') NOT IN ('photo', 'video')")
-    elif with_type and post_type in POST_TYPES:
-        where.append("fp.post_type = :pt")
-        params["pt"] = post_type
-    return " AND ".join(where)
+_CHECK_CHUNK = 1000
+
+
+def _added_flags(db: Session, user_id: int, rows: List[Dict[str, Any]]) -> List[bool]:
+    """Bài nào (trong kho tạm) đã có trong danh sách seeding của user — so theo fb_id hoặc link bài đích."""
+    if not rows:
+        return []
+    fb_ids = sorted({str(r.get("target_fb_id") or "") for r in rows} - {""})
+    urls = sorted({str(r.get("target_url") or "") for r in rows} - {""})
+    if not fb_ids and not urls:
+        return [False] * len(rows)
+    found = db.execute(
+        text(
+            "SELECT fb_id, url FROM seeding_targets WHERE target_type = 'POST' AND created_by = :u"
+            " AND (fb_id = ANY(CAST(:fbids AS text[])) OR url = ANY(CAST(:urls AS text[])))"
+        ),
+        {"u": user_id, "fbids": fb_ids, "urls": urls},
+    ).all()
+    have_ids = {f for f, _ in found if f}
+    have_urls = {u for _, u in found if u}
+    return [
+        (r.get("target_fb_id") in have_ids) or (r.get("target_url") in have_urls)
+        for r in rows
+    ]
 
 
 @router.post("/jobs")
@@ -223,66 +233,38 @@ def list_fetched_posts(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    """Bài đã lấy của 1 nguồn (theo thứ tự trên feed), có tìm kiếm / lọc loại bài / phân trang."""
-    post_fetcher.init_post_fetch_schema()
+    """Bài đã lấy của 1 nguồn (theo thứ tự trên feed) từ kho TẠM, có tìm kiếm / lọc loại bài / phân trang.
+    available = kho tạm còn bài của nguồn này (False khi đã hết hạn hoặc đã lấy page khác)."""
     user_id = int(_require_user(request, authorization)["id"])
-
-    count_params: Dict[str, Any] = {"u": user_id, "sk": source_key}
-    count_where = _filter_sql(q, type, count_params, with_type=False)
-    counts_row = db.execute(
-        text(
-            "SELECT COUNT(*) AS all_count,"
-            " COUNT(*) FILTER (WHERE fp.post_type = 'photo') AS photo,"
-            " COUNT(*) FILTER (WHERE fp.post_type = 'video') AS video,"
-            " COUNT(*) FILTER (WHERE COALESCE(fp.post_type, 'text') NOT IN ('photo', 'video')) AS text"
-            f" FROM seeding_fetched_posts fp WHERE {count_where}"
-        ),
-        count_params,
-    ).mappings().first() or {}
-    counts = {
-        "all": int(counts_row.get("all_count") or 0),
-        "photo": int(counts_row.get("photo") or 0),
-        "video": int(counts_row.get("video") or 0),
-        "text": int(counts_row.get("text") or 0),
-    }
-
-    params: Dict[str, Any] = {"u": user_id, "sk": source_key, "lim": page_size, "off": (page - 1) * page_size}
-    where = _filter_sql(q, type, params)
-    rows = db.execute(
-        text(
-            "SELECT fp.id, fp.post_url, fp.target_url, fp.content, fp.post_type, fp.published_at, fp.published_text,"
-            " fp.reaction_count, fp.comment_count, fp.share_count, fp.is_pinned, fp.created_at,"
-            " EXISTS (SELECT 1 FROM seeding_targets t WHERE t.target_type = 'POST' AND t.created_by = :u"
-            "         AND (t.fb_id = fp.target_fb_id OR t.url = fp.target_url)) AS added"
-            f" FROM seeding_fetched_posts fp WHERE {where}"
-            " ORDER BY fp.id ASC LIMIT :lim OFFSET :off"
-        ),
-        params,
-    ).mappings().all()
-    total = counts["all"] if type not in POST_TYPES else counts[type]
+    counts = fetched_posts_store.counts(user_id, source_key, q)
+    rows = fetched_posts_store.filtered(user_id, source_key, q, type)
+    start = (page - 1) * page_size
+    items = rows[start:start + page_size]
+    added = _added_flags(db, user_id, items)
     return {
         "items": [
             {
                 "id": r["id"],
-                "post_url": r["post_url"],
-                "target_url": r["target_url"],
-                "content": r["content"] or "",
-                "post_type": r["post_type"] or "text",
-                "published_at": r["published_at"].isoformat() if r["published_at"] else None,
-                "published_text": r["published_text"],
-                "reaction_count": r["reaction_count"] or 0,
-                "comment_count": r["comment_count"] or 0,
-                "share_count": r["share_count"] or 0,
-                "is_pinned": bool(r["is_pinned"]),
-                "added": bool(r["added"]),
-                "created_at": to_vn_iso(r["created_at"]),
+                "post_url": r.get("post_url"),
+                "target_url": r.get("target_url"),
+                "content": r.get("content") or "",
+                "post_type": r.get("post_type") or "text",
+                "published_at": r.get("published_at"),
+                "published_text": r.get("published_text"),
+                "reaction_count": r.get("reaction_count") or 0,
+                "comment_count": r.get("comment_count") or 0,
+                "share_count": r.get("share_count") or 0,
+                "is_pinned": bool(r.get("is_pinned")),
+                "added": flag,
+                "created_at": r.get("created_at"),
             }
-            for r in rows
+            for r, flag in zip(items, added)
         ],
-        "total": total,
+        "total": len(rows),
         "counts": counts,
         "page": page,
         "page_size": page_size,
+        "available": fetched_posts_store.available(user_id, source_key),
     }
 
 
@@ -296,21 +278,18 @@ def list_fetched_post_ids(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    """Id của N bài đầu (theo thứ tự feed) khớp bộ lọc mà CHƯA có trong danh sách seeding — cho nút "Chọn N bài đầu"."""
-    post_fetcher.init_post_fetch_schema()
+    """Id của N bài đầu (theo thứ tự feed) khớp bộ lọc mà CHƯA có trong danh sách seeding — cho nút "Chọn N bài"."""
     user_id = int(_require_user(request, authorization)["id"])
-    params: Dict[str, Any] = {"u": user_id, "sk": source_key, "lim": limit}
-    where = _filter_sql(q, type, params)
-    rows = db.execute(
-        text(
-            f"SELECT fp.id FROM seeding_fetched_posts fp WHERE {where}"
-            " AND NOT EXISTS (SELECT 1 FROM seeding_targets t WHERE t.target_type = 'POST' AND t.created_by = :u"
-            "                 AND (t.fb_id = fp.target_fb_id OR t.url = fp.target_url))"
-            " ORDER BY fp.id ASC LIMIT :lim"
-        ),
-        params,
-    ).all()
-    return {"ids": [r[0] for r in rows]}
+    rows = fetched_posts_store.filtered(user_id, source_key, q, type)
+    ids: List[int] = []
+    for start in range(0, len(rows), _CHECK_CHUNK):
+        chunk = rows[start:start + _CHECK_CHUNK]
+        for r, is_added in zip(chunk, _added_flags(db, user_id, chunk)):
+            if not is_added:
+                ids.append(int(r["id"]))
+                if len(ids) >= limit:
+                    return {"ids": ids}
+    return {"ids": ids}
 
 
 @router.post("/posts/add-to-targets")
@@ -320,57 +299,69 @@ def add_fetched_posts_to_targets(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    """Thêm bài đã chọn vào danh sách seeding (1 câu SQL — chịu được rất nhiều bài).
+    """Bước XÁC NHẬN — lúc duy nhất bài lấy từ page được ghi vào DB: chèn các bài đã chọn trong kho tạm
+    vào danh sách seeding (seeding_targets), bỏ bài đã có.
     mode: ids = các bài đã tích; all = mọi bài khớp bộ lọc trừ exclude_ids; first = N bài đầu khớp bộ lọc."""
-    post_fetcher.init_post_fetch_schema()
     user_id = int(_require_user(request, authorization)["id"])
-    params: Dict[str, Any] = {"u": user_id, "sk": body.source_key, "now": vn_now()}
+    if not fetched_posts_store.available(user_id, body.source_key):
+        raise HTTPException(
+            status_code=410,
+            detail="Danh sách bài tạm đã hết hạn — bấm \"Lấy danh sách bài viết\" để lấy lại.",
+        )
 
     if body.mode == "ids":
-        ids = sorted({int(x) for x in body.ids})
-        if not ids:
+        if not body.ids:
             raise HTTPException(status_code=422, detail="Chưa chọn bài viết nào.")
-        params["ids"] = ids
-        picked_sql = "SELECT fp.target_fb_id, fp.target_url FROM seeding_fetched_posts fp" \
-                     " WHERE fp.created_by = :u AND fp.source_key = :sk AND fp.id = ANY(:ids)"
+        picked = fetched_posts_store.by_ids(user_id, body.source_key, body.ids)
     else:
-        where = _filter_sql(body.q, body.type, params)
+        rows = fetched_posts_store.filtered(user_id, body.source_key, body.q, body.type)
         if body.mode == "all":
-            if body.exclude_ids:
-                where += " AND NOT (fp.id = ANY(:ex))"
-                params["ex"] = sorted({int(x) for x in body.exclude_ids})
-            picked_sql = f"SELECT fp.target_fb_id, fp.target_url FROM seeding_fetched_posts fp WHERE {where}"
+            excluded = {int(x) for x in body.exclude_ids}
+            picked = [r for r in rows if int(r["id"]) not in excluded]
         else:
             if not body.first_n:
                 raise HTTPException(status_code=422, detail="Thiếu số bài cần chọn.")
-            params["n"] = int(body.first_n)
-            picked_sql = (
-                f"SELECT fp.target_fb_id, fp.target_url FROM seeding_fetched_posts fp WHERE {where}"
-                " ORDER BY fp.id ASC LIMIT :n"
-            )
+            picked = rows[: int(body.first_n)]
 
-    row = db.execute(
-        text(
-            f"WITH picked AS ({picked_sql}),"
-            " uniq AS (SELECT DISTINCT ON (target_fb_id) target_fb_id, target_url FROM picked),"
-            " ins AS ("
-            "   INSERT INTO seeding_targets (target_type, fb_id, url, display_name, created_by, created_at, updated_at)"
-            "   SELECT 'POST', u.target_fb_id, u.target_url, 'Bài viết ' || u.target_fb_id, :u, :now, :now"
-            "   FROM uniq u"
-            "   WHERE NOT EXISTS (SELECT 1 FROM seeding_targets t WHERE t.target_type = 'POST' AND t.created_by = :u"
-            "                     AND (t.fb_id = u.target_fb_id OR t.url = u.target_url))"
-            "   ON CONFLICT DO NOTHING"
-            "   RETURNING 1"
-            " )"
-            " SELECT (SELECT COUNT(*) FROM picked) AS picked, (SELECT COUNT(*) FROM ins) AS added"
-        ),
-        params,
-    ).mappings().first()
-    db.commit()
-    picked = int(row["picked"] or 0)
-    added = int(row["added"] or 0)
-    skipped = max(0, picked - added)
+    # Bỏ trùng theo bài đích (2 link khác nhau của cùng 1 bài), giữ thứ tự trên feed
+    fb_ids: List[str] = []
+    urls: List[str] = []
+    seen: set = set()
+    for r in picked:
+        fb_id = str(r.get("target_fb_id") or "").strip()
+        url = str(r.get("target_url") or "").strip()
+        if not fb_id or not url or fb_id in seen:
+            continue
+        seen.add(fb_id)
+        fb_ids.append(fb_id)
+        urls.append(url)
+
+    added = 0
+    if fb_ids:
+        row = db.execute(
+            text(
+                "WITH uniq AS ("
+                "   SELECT * FROM unnest(CAST(:fbids AS text[]), CAST(:urls AS text[])) AS u(target_fb_id, target_url)"
+                " ),"
+                " ins AS ("
+                "   INSERT INTO seeding_targets (target_type, fb_id, url, display_name, created_by, created_at, updated_at)"
+                "   SELECT 'POST', u.target_fb_id, u.target_url, 'Bài viết ' || u.target_fb_id, :u, :now, :now"
+                "   FROM uniq u"
+                "   WHERE NOT EXISTS (SELECT 1 FROM seeding_targets t WHERE t.target_type = 'POST' AND t.created_by = :u"
+                "                     AND (t.fb_id = u.target_fb_id OR t.url = u.target_url))"
+                "   ON CONFLICT DO NOTHING"
+                "   RETURNING 1"
+                " )"
+                " SELECT COUNT(*) AS added FROM ins"
+            ),
+            {"fbids": fb_ids, "urls": urls, "u": user_id, "now": vn_now()},
+        ).mappings().first()
+        db.commit()
+        added = int((row or {}).get("added") or 0)
+
+    total_picked = len(picked)
+    skipped = max(0, total_picked - added)
     msg = f"Đã thêm {added:,} bài vào danh sách seeding".replace(",", ".")
     if skipped:
         msg += f" · bỏ qua {skipped:,} bài đã có".replace(",", ".")
-    return {"picked": picked, "added": added, "skipped": skipped, "message": msg + "."}
+    return {"picked": total_picked, "added": added, "skipped": skipped, "message": msg + "."}

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, FileSpreadsheet, FileText } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import CustomSelect from "@/components/ui/custom-select";
+import { attachDragSelection } from "@/modules/module_02_account_manager/utils/drag-selection.mjs";
 import {
   IconDownload,
   IconExternal,
@@ -50,9 +51,66 @@ export default function ScanResultSection({
   allVisibleSelected,
   onToggleAllRows,
   onToggleRow,
+  onSelectRows,
 }) {
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const exportRef = useRef(null);
+
+  // Chọn nhiều nhóm bằng chuột / bàn phím:
+  // - Giữ chuột trái trên 1 dòng rồi kéo: bôi đen các dòng liên tiếp (giữ Ctrl khi kéo để cộng thêm).
+  // - Click 1 dòng: chỉ chọn dòng đó · Ctrl + click: thêm / bỏ từng dòng riêng lẻ · Shift + click: chọn cả khoảng.
+  const [tableBox, setTableBox] = useState(null);
+  const rowsRef = useRef(filteredResults);
+  const resultsRef = useRef(results);
+  const selectedRef = useRef(selectedRows);
+  const anchorRef = useRef(null);
+  rowsRef.current = filteredResults;
+  resultsRef.current = results;
+  selectedRef.current = selectedRows;
+
+  useEffect(() => {
+    if (!tableBox || !onSelectRows) return undefined;
+    const idOf = new Map();
+    const key = (row) => {
+      const k = String(row.id);
+      idOf.set(k, row.id);
+      return k;
+    };
+    return attachDragSelection(tableBox, {
+      getVisibleUids: () => rowsRef.current.map(key),
+      getAvailableUids: () => resultsRef.current.map(key),
+      getSelectedUids: () => [...selectedRef.current].map(String),
+      onSelectionChange: (keys) => {
+        const next = new Set(keys.map((k) => (idOf.has(k) ? idOf.get(k) : k)));
+        selectedRef.current = next;
+        onSelectRows(next);
+      },
+    });
+  }, [tableBox, onSelectRows]);
+
+  const handleRowClick = (event, row, index) => {
+    if (!onSelectRows || event.target.closest("a, button, input, [role='checkbox'], [data-no-row-selection]")) return;
+    const current = selectedRef.current;
+    let next;
+    if (event.shiftKey && anchorRef.current != null) {
+      const ids = rowsRef.current.map((r) => r.id);
+      const from = ids.indexOf(anchorRef.current);
+      const [lo, hi] = from < 0 ? [index, index] : [Math.min(from, index), Math.max(from, index)];
+      next = new Set(event.ctrlKey || event.metaKey ? current : []);
+      ids.slice(lo, hi + 1).forEach((id) => next.add(id));
+    } else if (event.ctrlKey || event.metaKey) {
+      next = new Set(current);
+      if (next.has(row.id)) next.delete(row.id);
+      else next.add(row.id);
+      anchorRef.current = row.id;
+    } else {
+      next = current.size === 1 && current.has(row.id) ? new Set() : new Set([row.id]);
+      anchorRef.current = row.id;
+    }
+    if (event.shiftKey) window.getSelection?.()?.removeAllRanges?.();
+    selectedRef.current = next;
+    onSelectRows(next);
+  };
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -171,7 +229,13 @@ export default function ScanResultSection({
         </div>
       </div>
 
-      <div className="overflow-x-auto">
+      {filteredResults.length > 0 && onSelectRows && (
+        <p className="mb-2 text-[11px] text-[#94A3B8]">
+          Mẹo: giữ chuột trái và kéo để chọn nhiều nhóm liên tiếp · Ctrl + click chọn từng nhóm riêng lẻ · Shift + click
+          chọn cả khoảng.
+        </p>
+      )}
+      <div ref={setTableBox} className="overflow-x-auto">
         <table className="w-full min-w-[960px] text-left text-xs">
           <thead className="bg-[#F8FAFC] text-[10px] font-bold uppercase tracking-wide text-[#64748B]">
             <tr>
@@ -195,8 +259,16 @@ export default function ScanResultSection({
               </tr>
             ) : (
               filteredResults.map((row, index) => (
-                <tr key={row.id || index} className="border-t border-[#F1F5F9] hover:bg-[#F8FAFC]/60">
-                  <td className="px-4 py-2.5">
+                <tr
+                  key={row.id || index}
+                  data-account-uid={String(row.id)}
+                  onClick={(event) => handleRowClick(event, row, index)}
+                  className={`border-t border-[#F1F5F9] select-none ${
+                    selectedRows.has(row.id) ? "bg-[#EFF6FF] hover:bg-[#DBEAFE]" : "hover:bg-[#F8FAFC]/60"
+                  } ${onSelectRows ? "cursor-pointer" : ""}`}
+                >
+                  {/* Ô checkbox: bấm để thêm / bỏ đúng dòng này (không bỏ chọn các dòng khác) */}
+                  <td className="px-4 py-2.5" data-no-row-selection>
                     <Checkbox
                       checked={selectedRows.has(row.id)}
                       onCheckedChange={(value) => onToggleRow(row.id, Boolean(value))}

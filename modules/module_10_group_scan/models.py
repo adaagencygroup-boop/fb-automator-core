@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from typing import Any, Optional
 
@@ -218,32 +219,31 @@ def init_models() -> None:
 
 
 def _sync_keywords_to_categories() -> None:
-    """Tự động đồng bộ các từ khóa hiện có trong scanned_groups vào bảng scanned_group_categories và liên kết nhóm."""
+    """Mỗi từ khóa đã quét có 1 DANH MỤC (thư mục) — chỉ tạo khi chưa có thư mục nào trùng tên.
+
+    - So tên không phân biệt hoa/thường: đã có "Phenikaa" thì từ khóa "phenikaa" KHÔNG tạo thêm "phenikaa"
+      (trước đây mỗi lần Engine khởi động lại sinh thư mục trùng).
+    - KHÔNG gắn lại nhóm vào thư mục từ khóa: nhóm chưa lưu / chuyển mục tự thuộc thư mục trùng từ khóa
+      (xem _group_category_keys); gắn lại ở đây làm nhóm đã "Chuyển mục" hiện lại ở thư mục cũ.
+    """
     try:
         db.execute(
             """
             INSERT INTO scanned_group_categories (owner_username, name, description)
-            SELECT DISTINCT owner_username, keyword, 'Danh mục từ khóa: ' || keyword
-            FROM scanned_groups
-            WHERE keyword IS NOT NULL AND TRIM(keyword) != ''
-              AND lower(keyword) != 'directlink'
-              AND keyword NOT LIKE 'http%%'
-              AND keyword NOT LIKE '%%facebook.com%%'
-              AND keyword NOT LIKE '%%fb.com%%'
+            SELECT DISTINCT ON (g.owner_username, lower(g.keyword))
+                   g.owner_username, g.keyword, 'Danh mục từ khóa: ' || g.keyword
+            FROM scanned_groups g
+            WHERE g.keyword IS NOT NULL AND TRIM(g.keyword) != ''
+              AND lower(g.keyword) != 'directlink'
+              AND g.keyword NOT LIKE 'http%%'
+              AND g.keyword NOT LIKE '%%facebook.com%%'
+              AND g.keyword NOT LIKE '%%fb.com%%'
+              AND NOT EXISTS (
+                  SELECT 1 FROM scanned_group_categories c
+                  WHERE c.owner_username = g.owner_username AND lower(c.name) = lower(g.keyword)
+              )
+            ORDER BY g.owner_username, lower(g.keyword), g.keyword
             ON CONFLICT (owner_username, name) DO NOTHING;
-            """
-        )
-        db.execute(
-            """
-            INSERT INTO scanned_group_category_groups (owner_username, category_name, group_id)
-            SELECT DISTINCT owner_username, keyword, group_id
-            FROM scanned_groups
-            WHERE keyword IS NOT NULL AND TRIM(keyword) != ''
-              AND lower(keyword) != 'directlink'
-              AND keyword NOT LIKE 'http%%'
-              AND keyword NOT LIKE '%%facebook.com%%'
-              AND keyword NOT LIKE '%%fb.com%%'
-            ON CONFLICT (owner_username, category_name, group_id) DO NOTHING;
             """
         )
     except Exception as exc:
@@ -308,6 +308,89 @@ def list_known_group_ids(owner: Optional[str]) -> set[str]:
     return {str(r.get("group_id") or "").lower() for r in rows if r.get("group_id")}
 
 
+def lookup_scanned_groups(owner: Optional[str], links: list[str]) -> dict[str, dict[str, Any]]:
+    """Tra các link nhóm đã có trong Danh sách nhóm quét của owner (nút Kiểm tra & Lọc trùng lặp).
+
+    Trả {link_gốc: {group_id, group_name, privacy, last_seen_at}} — chỉ những link đã quét trước đó.
+    Khớp theo group_id (số hoặc slug) và theo group_url đã chuẩn hoá.
+    """
+    owner = (owner or "").strip()
+    wanted: dict[str, str] = {}
+    for link in links or []:
+        gid = normalize_group_id(normalize_group_url(str(link or "")))
+        if gid:
+            wanted[str(link)] = gid
+    if not owner or not wanted:
+        return {}
+    ids = sorted(set(wanted.values()))
+    urls = sorted({f"https://www.facebook.com/groups/{gid}" for gid in ids})
+    found: dict[str, dict[str, Any]] = {}
+    chunk = 500
+    for start in range(0, len(ids), chunk):
+        part_ids = ids[start:start + chunk]
+        part_urls = urls[start:start + chunk]
+        rows = db.fetch_all(
+            f"""
+            SELECT group_id, group_url, group_name, privacy, last_seen_at
+            FROM scanned_groups
+            WHERE owner_username = ?
+              AND (lower(group_id) IN ({",".join("?" * len(part_ids))})
+                   OR lower(rtrim(group_url, '/')) IN ({",".join("?" * len(part_urls))}))
+            """,
+            (owner, *part_ids, *[u.lower() for u in part_urls]),
+        )
+        for r in rows:
+            for key in {str(r.get("group_id") or "").lower(),
+                        normalize_group_id(str(r.get("group_url") or ""))}:
+                if key:
+                    found[key] = r
+    out: dict[str, dict[str, Any]] = {}
+    for link, gid in wanted.items():
+        r = found.get(gid)
+        if not r:
+            continue
+        seen = r.get("last_seen_at")
+        out[link] = {
+            "group_id": r.get("group_id"),
+            "group_name": r.get("group_name") or "",
+            "privacy": (r.get("privacy") or "unknown").lower(),
+            "last_seen_at": _fmt_dt(seen, "%H:%M %d/%m/%Y"),
+        }
+    return out
+
+
+def _category_key(name: Any) -> str:
+    """Tên thư mục so khớp không phân biệt hoa/thường (giống bộ lọc trên giao diện)."""
+    return " ".join(str(name or "").split()).lower()
+
+
+def _group_category_keys(owner: str) -> dict[str, set[str]]:
+    """group_id → các thư mục chứa nhóm đó.
+
+    - Nhóm đã được LƯU / CHUYỂN vào thư mục (bảng liên kết) → chỉ nằm ở các thư mục đó. "Chuyển mục" xoá
+      liên kết cũ nên nhóm rời thư mục cũ (kể cả thư mục trùng từ khóa đã quét ra nhóm).
+    - Nhóm chưa từng lưu / chuyển → nằm ở thư mục trùng từ khóa quét ra nó.
+    1 nhóm có thể được lưu vào nhiều thư mục — trước đây chỉ lấy 1 (MAX) nên thư mục kia không thấy nhóm.
+    """
+    by_keyword: dict[str, set[str]] = {}
+    for r in db.fetch_all(
+        "SELECT group_id, keyword FROM scanned_groups WHERE owner_username = ?", (owner,)
+    ):
+        gid = str(r.get("group_id") or "").lower()
+        if gid:
+            kw = _category_key(r.get("keyword"))
+            by_keyword[gid] = {kw} if kw else set()
+    linked: dict[str, set[str]] = {}
+    for r in db.fetch_all(
+        "SELECT group_id, category_name FROM scanned_group_category_groups WHERE owner_username = ?", (owner,)
+    ):
+        gid = str(r.get("group_id") or "").lower()
+        name = _category_key(r.get("category_name"))
+        if gid in by_keyword and name:  # bỏ liên kết tới nhóm đã xoá
+            linked.setdefault(gid, set()).add(name)
+    return {gid: linked.get(gid) or kws for gid, kws in by_keyword.items()}
+
+
 def list_all_scanned_groups(
     owner: Optional[str],
     *,
@@ -361,13 +444,18 @@ def list_all_scanned_groups(
             WHERE owner_username = ?
             GROUP BY group_id
         ) cg ON cg.group_id = g.group_id
-        LEFT JOIN scanned_group_categories c
-            ON c.owner_username = g.owner_username AND lower(c.name) = lower(COALESCE(NULLIF(cg.category_name, ''), g.keyword))
+        -- 1 dòng / tên thư mục (không phân biệt hoa/thường): "Phenikaa" + "phenikaa" từng làm mỗi nhóm hiện 2 lần.
+        LEFT JOIN (
+            SELECT lower(name) AS lname, MIN(id) AS id
+            FROM scanned_group_categories
+            WHERE owner_username = ?
+            GROUP BY lower(name)
+        ) c ON c.lname = lower(COALESCE(NULLIF(cg.category_name, ''), g.keyword))
         WHERE {where_clause}
         ORDER BY g.created_at DESC
         LIMIT ? OFFSET ?
         """,
-        tuple([owner] + params + [max(1, int(limit)), max(0, int(offset))]),
+        tuple([owner, owner] + params + [max(1, int(limit)), max(0, int(offset))]),
     )
 
     kw_rows = db.fetch_all(
@@ -380,6 +468,12 @@ def list_all_scanned_groups(
         """,
         (owner,),
     )
+
+    try:
+        member_of = _group_category_keys(owner)
+    except Exception as exc:
+        print(f"[Module 10 DB] group category keys error: {exc}")
+        member_of = {}
 
     out_groups = []
     for idx, r in enumerate(rows, start=offset + 1):
@@ -403,6 +497,8 @@ def list_all_scanned_groups(
             "group_id": gid,
             "categoryId": f"cat-{cat_db_id}" if cat_db_id else (f"cat-{cat_name}" if cat_name else ""),
             "category_name": cat_name,
+            # Mọi thư mục chứa nhóm (chữ thường) — giao diện lọc theo đây khi chọn thư mục.
+            "category_keys": sorted(member_of.get(gid.lower()) or {_category_key(r.get("keyword"))} - {""}),
             "keyword": r.get("keyword") or "",
             "name": r.get("group_name") or gid,
             "type": privacy_val,
@@ -587,17 +683,20 @@ def upsert_scanned_group(
         (owner, keyword, gid),
     )
 
-    # Đảm bảo từ khóa tạo thành 1 DANH MỤC trong scanned_group_categories và liên kết nhóm
+    # Từ khóa có 1 DANH MỤC (dùng thư mục trùng tên đã có, không tạo trùng). Chỉ gắn nhóm MỚI vào thư mục:
+    # nhóm đã có (người dùng có thể đã "Chuyển mục") quét lại thì giữ nguyên thư mục hiện tại.
     try:
-        create_scan_category(owner, keyword, f"Danh mục từ khóa: {keyword}")
-        db.execute(
-            """
-            INSERT INTO scanned_group_category_groups (owner_username, category_name, group_id)
-            VALUES (?, ?, ?)
-            ON CONFLICT (owner_username, category_name, group_id) DO NOTHING
-            """,
-            (owner, keyword, gid),
-        )
+        cat = create_scan_category(owner, keyword, f"Danh mục từ khóa: {keyword}")
+        cat_name = ((cat or {}).get("category") or {}).get("name") or keyword
+        if is_new:
+            db.execute(
+                """
+                INSERT INTO scanned_group_category_groups (owner_username, category_name, group_id)
+                VALUES (?, ?, ?)
+                ON CONFLICT (owner_username, category_name, group_id) DO NOTHING
+                """,
+                (owner, cat_name, gid),
+            )
     except Exception as exc:
         print(f"[Module 10 DB] link category error: {exc}")
 
@@ -1102,11 +1201,13 @@ def delete_scan_session(owner: Optional[str], session_id: str) -> bool:
     owner = (owner or "").strip()
     if not owner or not session_id:
         return False
-    db.execute(
+    cur = db.execute(
         "DELETE FROM scanned_group_sessions WHERE owner_username = ? AND session_id = ?",
         (owner, session_id),
     )
-    return True
+    # Chỉ báo "đã xoá" khi thật sự có dòng bị xoá (phiên của người khác / không tồn tại → False).
+    rowcount = getattr(cur, "rowcount", None)
+    return rowcount is None or rowcount < 0 or rowcount > 0
 
 
 def delete_scan_sessions_bulk(owner: Optional[str], session_ids: list[str]) -> int:
@@ -1137,26 +1238,16 @@ def list_scan_categories(owner: Optional[str]) -> list[dict[str, Any]]:
         if not existing:
             return []
 
-        cat_counts_rows = db.fetch_all(
-            """
-            SELECT c.name, COUNT(DISTINCT COALESCE(cg.group_id, g.group_id)) as count
-            FROM scanned_group_categories c
-            LEFT JOIN scanned_group_category_groups cg
-                ON cg.owner_username = c.owner_username AND lower(cg.category_name) = lower(c.name)
-            LEFT JOIN scanned_groups g
-                ON g.owner_username = c.owner_username AND lower(g.keyword) = lower(c.name)
-            WHERE c.owner_username = ?
-            GROUP BY c.id, c.name
-            ORDER BY c.id ASC
-            """,
-            (owner,),
-        )
-        counts_map = {str(r["name"]).lower(): int(r.get("count") or 0) for r in cat_counts_rows if r.get("name")}
+        # Đếm đúng như bộ lọc trên giao diện: nhóm thuộc thư mục nếu đã lưu / chuyển vào, hoặc từ khóa trùng tên.
+        counts_map: dict[str, int] = {}
+        for keys in _group_category_keys(owner).values():
+            for k in keys:
+                counts_map[k] = counts_map.get(k, 0) + 1
 
         result = []
         for c in existing:
             cname = c.get("name") or ""
-            count = counts_map.get(cname.lower(), 0)
+            count = counts_map.get(_category_key(cname), 0)
             result.append({
                 "id": f"cat-{c.get('id')}",
                 "name": cname,
@@ -1171,7 +1262,7 @@ def list_scan_categories(owner: Optional[str]) -> list[dict[str, Any]]:
 
 def update_scan_category(owner: Optional[str], cat_id_or_name: Any, new_name: str) -> dict[str, Any]:
     owner = (owner or "").strip()
-    new_name = (new_name or "").strip()
+    new_name = re.sub(r"\s+", " ", (new_name or "").strip())
     if not owner or not new_name:
         return {"ok": False, "error": "Thiếu thông tin cập nhật"}
     try:
@@ -1192,6 +1283,9 @@ def update_scan_category(owner: Optional[str], cat_id_or_name: Any, new_name: st
 
         old_name = old_cat["name"]
         cat_id = old_cat["id"]
+        clash = _find_category(owner, new_name, exclude_id=cat_id)
+        if clash:
+            return {"ok": False, "error": f"Danh mục «{clash['name']}» đã tồn tại — chọn tên khác."}
 
         db.execute(
             "UPDATE scanned_group_categories SET name = ? WHERE owner_username = ? AND id = ?",
@@ -1254,7 +1348,8 @@ def move_groups_to_category(owner: Optional[str], target_category_name: str, gro
     if not owner or not target_category_name or not group_ids:
         return 0
 
-    create_scan_category(owner, target_category_name)
+    created = create_scan_category(owner, target_category_name)
+    target_category_name = ((created or {}).get("category") or {}).get("name") or target_category_name
 
     moved_count = 0
     for gid_raw in group_ids:
@@ -1282,6 +1377,31 @@ def move_groups_to_category(owner: Optional[str], target_category_name: str, gro
     return moved_count
 
 
+_category_lock = threading.Lock()
+
+
+def _find_category(owner: str, name: str, *, exclude_id: Any = None) -> Optional[dict[str, Any]]:
+    """Thư mục của owner trùng tên (không phân biệt hoa/thường, gộp khoảng trắng) — cũ nhất nếu có nhiều."""
+    key = _category_key(name)
+    if not key:
+        return None
+    for row in db.fetch_all(
+        "SELECT id, name, description FROM scanned_group_categories WHERE owner_username = ? ORDER BY id ASC",
+        (owner,),
+    ):
+        if _category_key(row.get("name")) == key and (exclude_id is None or str(row.get("id")) != str(exclude_id)):
+            return row
+    return None
+
+
+def canonical_category_name(owner: Optional[str], name: str) -> str:
+    """Tên thư mục đang có trùng `name` (khác hoa/thường) — để Lưu / Chuyển mục vào đúng thư mục cũ."""
+    owner = (owner or "").strip()
+    clean = re.sub(r"\s+", " ", (name or "").strip())
+    row = _find_category(owner, clean) if owner and clean else None
+    return (row or {}).get("name") or clean
+
+
 def create_scan_category(owner: Optional[str], name: str, description: str = "") -> dict[str, Any]:
     owner = (owner or "").strip()
     name = re.sub(r"\s+", " ", (name or "").strip())
@@ -1297,32 +1417,29 @@ def create_scan_category(owner: Optional[str], name: str, description: str = "")
     ):
         return {"ok": False, "error": "Không tạo danh mục cho liên kết URL hoặc directlink"}
     try:
-        row = db.fetch_one(
-            "SELECT id, name, description FROM scanned_group_categories WHERE owner_username = ? AND lower(name) = lower(?)",
-            (owner, name),
-        )
-        if not row:
-            db.execute(
-                """
-                INSERT INTO scanned_group_categories (owner_username, name, description)
-                VALUES (?, ?, ?)
-                ON CONFLICT (owner_username, name) DO NOTHING
-                """,
-                (owner, name, description or "Danh mục nhóm tự tạo"),
-            )
-            row = db.fetch_one(
-                "SELECT id, name, description FROM scanned_group_categories WHERE owner_username = ? AND lower(name) = lower(?)",
-                (owner, name),
-            )
-        return {
-            "ok": True,
-            "category": {
-                "id": f"cat-{row['id']}" if row else f"cat-{abs(hash(name)) % 10000}",
-                "name": row["name"] if row else name,
-                "count": 0,
-                "description": (row["description"] if row else description) or "",
-            },
-        }
+        with _category_lock:
+            row = _find_category(owner, name)
+            existed = bool(row)
+            if not row:
+                db.execute(
+                    """
+                    INSERT INTO scanned_group_categories (owner_username, name, description)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT (owner_username, name) DO NOTHING
+                    """,
+                    (owner, name, description or "Danh mục nhóm tự tạo"),
+                )
+                row = _find_category(owner, name)
+            return {
+                "ok": True,
+                "existed": existed,  # đã có thư mục trùng tên (khác hoa/thường) → dùng thư mục đó, không tạo mới
+                "category": {
+                    "id": f"cat-{row['id']}" if row else f"cat-{abs(hash(name)) % 10000}",
+                    "name": row["name"] if row else name,
+                    "count": 0,
+                    "description": (row["description"] if row else description) or "",
+                },
+            }
     except Exception as exc:
         print(f"[Module 10 DB] create_scan_category error: {exc}")
         return {"ok": False, "error": str(exc)}
@@ -1339,7 +1456,8 @@ def save_groups_to_category(
     if not owner or not category_name:
         return {"ok": False, "saved_count": 0, "error": "Thiếu danh mục hoặc tài khoản"}
 
-    create_scan_category(owner, category_name)
+    created = create_scan_category(owner, category_name)
+    category_name = ((created or {}).get("category") or {}).get("name") or category_name
 
     saved_count = 0
     new_inserted = 0

@@ -3,6 +3,7 @@
 import { Copy, ExternalLink, Loader2, Trash2 } from "lucide-react";
 import Pagination from "@/components/ui/pagination";
 import CustomSelect from "@/components/ui/custom-select";
+import useRowMultiSelect from "../../components/useRowMultiSelect";
 
 const PAGE_SIZE_OPTIONS = [
   { value: 8, label: "8" },
@@ -14,6 +15,9 @@ export default function GroupDataTable({
   loading = false,
   paginatedGroups,
   allCurrentPageSelected,
+  someSelected = false,
+  hasFilter = false,
+  onClearFilters,
   onToggleSelectAll,
   selectedIds,
   onToggleSelectRow,
@@ -26,11 +30,27 @@ export default function GroupDataTable({
   onPageChange,
   onDeleteSingle,
   onCopyLink,
+  allGroups,
+  onSelectRows,
 }) {
+  // Giữ chuột kéo = chọn nhiều nhóm liên tiếp · Ctrl + click = chọn riêng lẻ · Shift + click = chọn cả khoảng.
+  const { setContainer, rowProps } = useRowMultiSelect({
+    rows: paginatedGroups,
+    allRows: allGroups || paginatedGroups,
+    selected: selectedIds,
+    onChange: onSelectRows || (() => {}),
+  });
+
   return (
     <>
+      {!loading && paginatedGroups.length > 0 && onSelectRows && (
+        <p className="-mb-2 text-[11px] text-[#94A3B8]">
+          Mẹo: giữ chuột trái và kéo để chọn nhiều nhóm liên tiếp · Ctrl + click chọn từng nhóm riêng lẻ · Shift + click
+          chọn cả khoảng.
+        </p>
+      )}
       {/* Data Table */}
-      <div className="border border-[#E2E8F0] rounded-lg overflow-x-auto">
+      <div ref={onSelectRows ? setContainer : undefined} className="border border-[#E2E8F0] rounded-lg overflow-x-auto">
         <table className="w-full text-left border-collapse min-w-[760px]">
           <thead>
             <tr className="bg-[#F8FAFC]/80 border-b border-[#E2E8F0] h-[48px]">
@@ -38,7 +58,11 @@ export default function GroupDataTable({
                 <input
                   type="checkbox"
                   checked={allCurrentPageSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someSelected;
+                  }}
                   onChange={onToggleSelectAll}
+                  title={allCurrentPageSelected ? "Bỏ chọn tất cả" : `Chọn tất cả ${totalFilteredCount} nhóm trong danh sách`}
                   className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer accent-[#2563EB]"
                 />
               </th>
@@ -81,7 +105,18 @@ export default function GroupDataTable({
                   colSpan={8}
                   className="py-12 text-center text-xs text-slate-400"
                 >
-                  Không tìm thấy nhóm nào phù hợp trong danh mục này.
+                  {hasFilter ? (
+                    <span>
+                      Không có nhóm nào khớp tìm kiếm / bộ lọc.{" "}
+                      {onClearFilters && (
+                        <button type="button" onClick={onClearFilters} className="font-semibold text-blue-600 hover:underline">
+                          Xóa bộ lọc
+                        </button>
+                      )}
+                    </span>
+                  ) : (
+                    "Danh mục này chưa có nhóm nào."
+                  )}
                 </td>
               </tr>
             ) : (
@@ -90,12 +125,13 @@ export default function GroupDataTable({
                 return (
                   <tr
                     key={g.id}
-                    className={`hover:bg-slate-50/60 transition-colors ${
-                      isChecked ? "bg-blue-50/20" : ""
+                    {...(onSelectRows ? rowProps(g, index) : {})}
+                    className={`transition-colors ${onSelectRows ? "cursor-pointer select-none" : ""} ${
+                      isChecked ? "bg-[#EFF6FF] hover:bg-[#DBEAFE]" : "hover:bg-slate-50/60"
                     }`}
                   >
-                    {/* Checkbox */}
-                    <td className="w-10 px-3 py-4 text-center">
+                    {/* Checkbox — bấm để thêm / bỏ đúng dòng này */}
+                    <td className="w-10 px-3 py-4 text-center" data-no-row-selection>
                       <input
                         type="checkbox"
                         checked={isChecked}
