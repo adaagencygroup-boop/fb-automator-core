@@ -237,7 +237,11 @@ export default function GroupScanListPage() {
     }
     const catName = newCatName.trim();
     try {
-      await createScanCategory(catName);
+      const created = await createScanCategory(catName);
+      if (created?.existed) {
+        toast.warning(`Danh mục «${created.category?.name || catName}» đã tồn tại — không tạo trùng.`);
+        return;
+      }
       await loadGroups();
       setNewCatName("");
       setShowAddCatModal(false);
@@ -263,7 +267,7 @@ export default function GroupScanListPage() {
       toast.success("Đã cập nhật danh mục thành công trong Database!");
     } catch (err) {
       console.error(err);
-      toast.error("Không thể cập nhật danh mục trong Database");
+      toast.error(err?.message || "Không thể cập nhật danh mục trong Database");
     }
   };
 

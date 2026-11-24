@@ -16,7 +16,7 @@ export default function MemberCategorySidebar({
       {/* Header & Search */}
       <div className="flex flex-col gap-2 w-full">
         <div className="flex items-center justify-between">
-          <span className="text-xs font-bold text-[#1E293B]">
+          <span className="text-sm font-bold text-[#1E293B]">
             Danh mục nhóm ({categories.length})
           </span>
           <button
@@ -37,7 +37,7 @@ export default function MemberCategorySidebar({
             placeholder="Tìm nhóm..."
             value={categorySearch}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="w-full h-7 pl-8 pr-3 text-xs text-slate-800 border border-[#E2E8F0] bg-white rounded-lg outline-none focus:border-[#2563EB]"
+            className="w-full h-[30px] pl-8 pr-3 text-xs text-slate-800 border border-[#E2E8F0] bg-white rounded-lg outline-none focus:border-[#2563EB]"
           />
         </div>
       </div>
@@ -64,7 +64,7 @@ export default function MemberCategorySidebar({
               >
                 <div className="flex items-center justify-between w-full">
                   <span
-                    className={`text-xs leading-4 ${
+                    className={`text-sm leading-5 ${
                       isSelected ? "font-bold text-[#1E3A8A]" : "font-semibold text-[#1E293B]"
                     } line-clamp-1`}
                   >
@@ -81,7 +81,7 @@ export default function MemberCategorySidebar({
                     }`}
                   />
                   <span
-                    className={`text-[11px] leading-4 ${
+                    className={`text-xs leading-4 ${
                       isSelected ? "text-[#2563EB]/90 font-medium" : "text-[#94A3B8]"
                     }`}
                   >

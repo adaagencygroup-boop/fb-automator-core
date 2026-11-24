@@ -314,10 +314,18 @@ export default function GroupPickerModal({
   }, [filteredGroups, startIndex, pageSize]);
 
   // Selection handlers
+  // "Chọn tất cả" coi là đã tích khi: chọn hết nhóm đang hiển thị, HOẶC đã chạm giới hạn 20 nhóm / phiên
+  // (danh mục > 20 nhóm thì không bao giờ chọn hết được — trước đây bấm lại không bỏ chọn được).
+  const MAX_PICK = 20;
+  const selectedInView = useMemo(
+    () => filteredGroups.filter((g) => selectedIds.has(g.id)).length,
+    [filteredGroups, selectedIds],
+  );
   const allCurrentViewSelected = useMemo(() => {
-    if (filteredGroups.length === 0) return false;
-    return filteredGroups.every((g) => selectedIds.has(g.id));
-  }, [filteredGroups, selectedIds]);
+    if (filteredGroups.length === 0 || selectedInView === 0) return false;
+    return selectedInView === filteredGroups.length || selectedIds.size >= MAX_PICK;
+  }, [filteredGroups, selectedIds, selectedInView]);
+  const someCurrentViewSelected = selectedInView > 0 && !allCurrentViewSelected;
 
   const selectedInCurrentCategoryCount = useMemo(() => {
     return categoryGroups.filter((g) => selectedIds.has(g.id)).length;
@@ -326,12 +334,13 @@ export default function GroupPickerModal({
   const toggleSelectAllCurrentView = () => {
     const next = new Set(selectedIds);
     if (allCurrentViewSelected) {
+      // Bỏ tích → bỏ chọn toàn bộ nhóm đang hiển thị
       filteredGroups.forEach((g) => next.delete(g.id));
     } else {
       let reachedLimit = false;
       for (const g of filteredGroups) {
         if (!next.has(g.id)) {
-          if (next.size >= 20) {
+          if (next.size >= MAX_PICK) {
             reachedLimit = true;
             break;
           }
@@ -371,7 +380,11 @@ export default function GroupPickerModal({
     }
     const catName = newCatName.trim();
     try {
-      await createScanCategory(catName);
+      const created = await createScanCategory(catName);
+      if (created?.existed) {
+        toast.warning(`Danh mục «${created.category?.name || catName}» đã tồn tại — không tạo trùng.`);
+        return;
+      }
       await loadData();
       setNewCatName("");
       setShowAddCatModal(false);
@@ -398,8 +411,8 @@ export default function GroupPickerModal({
       await loadData();
       setShowEditCatModal(false);
       toast.success("Đã cập nhật tên danh mục thành công!");
-    } catch {
-      toast.error("Không thể cập nhật danh mục!");
+    } catch (err) {
+      toast.error(err?.message || "Không thể cập nhật danh mục!");
     }
   };
 
@@ -721,7 +734,11 @@ export default function GroupPickerModal({
                       <input
                         type="checkbox"
                         checked={allCurrentViewSelected}
+                        ref={(el) => {
+                          if (el) el.indeterminate = someCurrentViewSelected;
+                        }}
                         onChange={toggleSelectAllCurrentView}
+                        title={allCurrentViewSelected ? "Bỏ chọn tất cả" : "Chọn tất cả (tối đa 20 nhóm)"}
                         className="size-4 rounded text-blue-600 border-blue-300 focus:ring-blue-500 cursor-pointer"
                       />
                       <span className="font-semibold text-xs text-[#1E40AF]">
@@ -777,7 +794,11 @@ export default function GroupPickerModal({
                             <input
                               type="checkbox"
                               checked={allCurrentViewSelected}
+                              ref={(el) => {
+                                if (el) el.indeterminate = someCurrentViewSelected;
+                              }}
                               onChange={toggleSelectAllCurrentView}
+                              title={allCurrentViewSelected ? "Bỏ chọn tất cả" : "Chọn tất cả (tối đa 20 nhóm)"}
                               className="size-3.5 rounded text-blue-600 border-slate-300 cursor-pointer"
                             />
                           </th>

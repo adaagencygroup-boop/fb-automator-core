@@ -230,7 +230,11 @@ export default function GroupScanMemberListPage() {
     }
     const catName = newCategoryName.trim();
     try {
-      await createScanCategory(catName);
+      const created = await createScanCategory(catName);
+      if (created?.existed) {
+        toast.warning(`Danh mục «${created.category?.name || catName}» đã tồn tại — không tạo trùng.`);
+        return;
+      }
       await loadCategories();
       setNewCategoryName("");
       setCreateCategoryModalOpen(false);
@@ -248,7 +252,7 @@ export default function GroupScanMemberListPage() {
         {/* Card Header Bar */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] px-5 py-4 bg-[#F8FAFC]/50">
           <div className="flex items-center gap-2.5">
-            <h2 className="text-sm font-bold text-[#0B1C30]">
+            <h2 className="text-base font-bold text-[#0B1C30]">
               DANH SÁCH THÀNH VIÊN ĐÃ QUÉT
             </h2>
             <span className="rounded-full bg-[#EFF6FF] border border-[#BFDBFE] px-2.5 py-0.5 text-[11px] font-semibold text-[#1D4ED8]">
@@ -312,6 +316,7 @@ export default function GroupScanMemberListPage() {
               loading={loading}
               selectedMemberIds={selectedMemberIds}
               onToggleSelectRow={handleToggleSelect}
+              onSelectRows={setSelectedMemberIds}
               onToggleSelectAll={handleToggleSelectAll}
               allFilteredSelected={allFilteredSelected}
               onRemoveMember={handleRemoveMember}

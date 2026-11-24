@@ -1401,3 +1401,73 @@ class GroupCategoryTests(unittest.TestCase):
         sql, params = seen[0]
         self.assertIn("GROUP BY lower(name)", sql)  # "Phenikaa" + "phenikaa" không nhân đôi dòng
         self.assertEqual(sql.count("?"), len(params))
+
+
+class DuplicateCategoryTests(unittest.TestCase):
+    """Không tạo thư mục trùng tên chỉ khác hoa/thường / khoảng trắng."""
+
+    def setUp(self):
+        self.cats = [{"id": 1, "name": "Phenikaa", "description": ""}, {"id": 2, "name": "nam sách", "description": ""}]
+        self.writes = []
+        outer = self
+
+        class _DB:
+            def fetch_all(self, sql, params=()):
+                if "FROM scanned_group_categories WHERE owner_username" in sql:
+                    return list(outer.cats)
+                return []
+
+            def fetch_one(self, sql, params=()):
+                if "FROM scanned_group_categories WHERE owner_username = ? AND id = ?" in sql:
+                    return next((c for c in outer.cats if c["id"] == params[1]), None)
+                return None
+
+            def execute(self, sql, params=()):
+                outer.writes.append((" ".join(sql.split()), params))
+                if sql.strip().startswith("INSERT INTO scanned_group_categories") and len(params) == 3:
+                    outer.cats.append({"id": len(outer.cats) + 1, "name": params[1], "description": params[2]})
+
+        p = mock.patch.object(models, "db", _DB())
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_create_reuses_existing_folder_case_insensitive(self):
+        for name in ("phenikaa", "  PHENIKAA ", "Nam  Sách"):
+            res = models.create_scan_category("alice", name)
+            self.assertTrue(res["ok"] and res["existed"], name)
+        self.assertEqual(models.create_scan_category("alice", "phenikaa")["category"]["name"], "Phenikaa")
+        self.assertFalse(any(w[0].startswith("INSERT INTO scanned_group_categories") for w in self.writes))
+        res = models.create_scan_category("alice", "Cẩm Ly")
+        self.assertTrue(res["ok"] and not res["existed"])
+        self.assertEqual(len(self.cats), 3)
+
+    def test_rename_to_existing_name_is_rejected(self):
+        res = models.update_scan_category("alice", "cat-1", "NAM SÁCH")
+        self.assertFalse(res["ok"])
+        self.assertIn("nam sách", res["error"])
+        self.assertTrue(models.update_scan_category("alice", "cat-1", "phenikaa  ")["ok"])  # đổi hoa/thường chính nó: được
+
+    def test_move_and_save_use_the_existing_folder_name(self):
+        with mock.patch.object(models, "resolve_scanned_group_id", lambda owner, gid: str(gid)):
+            models.move_groups_to_category("alice", "PHENIKAA", ["111"])
+        inserted = [w for w in self.writes if w[0].startswith("INSERT INTO scanned_group_category_groups")]
+        self.assertEqual(inserted[-1][1], ("alice", "Phenikaa", "111"))
+
+    def test_scanning_links_only_new_groups_to_folder(self):
+        group = {"href": "https://www.facebook.com/groups/111", "name": "G", "type": "public"}
+        for existing in (None, {"id": 9}):
+            self.writes.clear()
+            with mock.patch.object(models.db, "fetch_one", lambda sql, params=(), e=existing: e):
+                models.upsert_scanned_group(owner="alice", keyword="phenikaa", group=group)
+            links = [w for w in self.writes if w[0].startswith("INSERT INTO scanned_group_category_groups")]
+            if existing is None:
+                self.assertEqual([lk[1] for lk in links], [("alice", "Phenikaa", "111")])
+            else:
+                self.assertEqual(links, [])  # nhóm đã có (có thể đã Chuyển mục) → không gắn lại thư mục từ khóa
+
+    def test_startup_sync_skips_case_duplicates_and_does_not_relink(self):
+        models._sync_keywords_to_categories()
+        sql = " ".join(w[0] for w in self.writes)
+        self.assertIn("NOT EXISTS", sql)
+        self.assertIn("lower(c.name) = lower(g.keyword)", sql)
+        self.assertNotIn("INSERT INTO scanned_group_category_groups", sql)
