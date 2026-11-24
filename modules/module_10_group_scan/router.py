@@ -49,6 +49,7 @@ from modules.module_10_group_scan.models import (
     list_scan_categories,
     list_scan_sessions,
     list_scanned_group_members,
+    lookup_scanned_groups,
     move_groups_to_category,
     save_groups_to_category,
     update_scan_category,
@@ -74,6 +75,16 @@ def _status(account) -> str:
     if raw == "DIE":
         return "die"
     return "unknown"
+
+
+# Delay tối thiểu giữa 2 lần quét — nhanh hơn dễ bị Facebook chặn / checkpoint. Gửi nhỏ hơn (client cũ,
+# Chạy tiếp phiên cũ) thì tự nâng lên, nhập ngược (Min > Max) thì tự đổi chỗ — không báo lỗi.
+MIN_DELAY_SEC = 3.0
+
+
+def _safe_delay_range(delay_min: float, delay_max: float) -> tuple[float, float]:
+    lo, hi = max(MIN_DELAY_SEC, float(delay_min or 0)), max(MIN_DELAY_SEC, float(delay_max or 0))
+    return (hi, lo) if lo > hi else (lo, hi)
 
 
 class KeywordQuota(BaseModel):
@@ -115,6 +126,7 @@ class CheckKeywordRequest(BaseModel):
 
     @model_validator(mode="after")
     def _require_keyword_source(self):
+        self.delay_min, self.delay_max = _safe_delay_range(self.delay_min, self.delay_max)
         if not self.uid and not self.uids:
             raise ValueError("Cần chọn ít nhất 1 tài khoản (uid hoặc uids)")
         if not self.uid and self.uids:
@@ -391,6 +403,18 @@ def get_groups(
     )
 
 
+class GroupLookupRequest(BaseModel):
+    links: list[str] = Field(default_factory=list, max_length=5000)
+
+
+@router.post("/groups/lookup", dependencies=[Depends(scoped_owner)])
+def lookup_groups(body: GroupLookupRequest):
+    """Kiểm tra & Lọc trùng lặp: link nào đã có trong Danh sách nhóm quét (đã quét trước đó) + quyền riêng tư."""
+    owner = owner_context.get() or get_owner_username()
+    if not owner:
+        raise HTTPException(401, "Chưa đăng nhập")
+    return {"known": lookup_scanned_groups(owner, body.links)}
+
 @router.delete("/groups/{id}", dependencies=[Depends(scoped_owner)])
 def delete_group(id: str):
     """Xóa 1 nhóm đã quét khỏi Database."""
@@ -557,8 +581,8 @@ def post_save_to_category(body: SaveToCategoryRequest):
 class StartMemberScanRequest(BaseModel):
     uids: list[str] = Field(..., min_length=1, description="Danh sách UID tài khoản thực thi")
     groups: list[dict[str, Any]] = Field(..., min_length=1, description="Danh sách nhóm mục tiêu (tối đa 20)")
-    delay_min: float = Field(5.0, ge=1.0, le=3600.0)
-    delay_max: float = Field(10.0, ge=1.0, le=3600.0)
+    delay_min: float = Field(5.0, ge=0, le=3600.0)
+    delay_max: float = Field(10.0, ge=0, le=3600.0)
     switch_acc_threshold: int = Field(5, ge=1, le=1000, description="Đổi nick sau N nhóm")
     members_limit: int = Field(50, ge=1, le=1000)
     skip_admin: bool = Field(True)
@@ -567,8 +591,7 @@ class StartMemberScanRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_rules(self):
-        if self.delay_max < self.delay_min:
-            raise ValueError("Thời gian trễ tối đa phải lớn hơn hoặc bằng thời gian tối thiểu")
+        self.delay_min, self.delay_max = _safe_delay_range(self.delay_min, self.delay_max)
         if len(self.groups) > 20:
             raise ValueError("Số lượng nhóm mục tiêu trong một phiên quét không được vượt quá 20 nhóm")
         return self

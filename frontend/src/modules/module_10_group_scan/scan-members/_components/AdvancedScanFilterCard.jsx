@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
+import DelayRangeInput from "../../components/DelayRangeInput";
+import { INT_INPUT_PROPS, blockNonDigitKey, digitsOnly } from "../../utils/intInput";
 
 export default function AdvancedScanFilterCard({
   minDelay,
@@ -16,16 +17,6 @@ export default function AdvancedScanFilterCard({
   newMembersOnly,
   setNewMembersOnly,
 }) {
-  const delayError = useMemo(() => {
-    if (minDelay > maxDelay) {
-      return "Thời gian tối đa luôn phải lớn hơn hoặc bằng thời gian tối thiểu.";
-    }
-    if (maxDelay > 3600) {
-      return "Thời gian tối đa không được vượt quá 3600 giây.";
-    }
-    return "";
-  }, [minDelay, maxDelay]);
-
   return (
     <section className="flex flex-col h-full rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] space-y-4">
       {/* Header */}
@@ -44,71 +35,16 @@ export default function AdvancedScanFilterCard({
           <span className="text-xs font-medium text-[#334155]">
             Khoảng cách giữa các lần quét:
           </span>
-          <div className="flex items-center gap-2">
-            {/* Min delay stepper */}
-            <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
-              <button
-                type="button"
-                onClick={() => setMinDelay((v) => Math.max(1, v - 1))}
-                className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                value={minDelay}
-                onChange={(e) => {
-                  const val = Number(e.target.value) || 1;
-                  setMinDelay(Math.min(3600, Math.max(1, val)));
-                }}
-                className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-              />
-              <button
-                type="button"
-                onClick={() => setMinDelay((v) => Math.min(3600, v + 1))}
-                className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
-              >
-                +
-              </button>
-            </div>
-
-            <span className="text-xs text-[#94A3B8]">-</span>
-
-            {/* Max delay stepper */}
-            <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
-              <button
-                type="button"
-                onClick={() => setMaxDelay((v) => Math.max(1, v - 1))}
-                className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                value={maxDelay}
-                onChange={(e) => {
-                  const val = Number(e.target.value) || 1;
-                  setMaxDelay(Math.min(3600, Math.max(1, val)));
-                }}
-                className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-              />
-              <button
-                type="button"
-                onClick={() => setMaxDelay((v) => Math.min(3600, v + 1))}
-                className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
-              >
-                +
-              </button>
-            </div>
-
-            <span className="text-xs text-[#64748B]">giây</span>
-          </div>
+          <DelayRangeInput
+            min={Number(minDelay) || 1}
+            max={Number(maxDelay) || 1}
+            ceil={3600}
+            onChange={(lo, hi) => {
+              setMinDelay(lo);
+              setMaxDelay(hi);
+            }}
+          />
         </div>
-        {delayError && (
-          <p className="text-[11px] font-medium text-rose-500">
-            * {delayError}
-          </p>
-        )}
       </div>
 
       {/* Stepper 2: Members Limit per Group */}
@@ -126,9 +62,10 @@ export default function AdvancedScanFilterCard({
               -
             </button>
             <input
-              type="number"
+              {...INT_INPUT_PROPS}
               value={membersLimit}
-              onChange={(e) => setMembersLimit(Math.min(1000, Math.max(1, Number(e.target.value) || 10)))}
+              onKeyDown={blockNonDigitKey}
+              onChange={(e) => setMembersLimit(Math.min(1000, Math.max(1, Number(digitsOnly(e.target.value)) || 10)))}
               className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
             />
             <button

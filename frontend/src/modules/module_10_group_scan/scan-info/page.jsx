@@ -20,6 +20,7 @@ import {
   getCheckStatus,
   getKeywordCapacityStatus,
   getScanAccounts,
+  lookupScannedGroups,
   startGroupScan,
   startKeywordCapacity,
   stopKeywordCapacity,
@@ -31,6 +32,8 @@ import LiveLogConsole from "./_components/LiveLogConsole";
 import { downloadTable, groupExportTable } from "../utils/exportTable";
 import ModulePageHeader from "../components/ModulePageHeader";
 import ResumeSessionBanner from "../components/ResumeSessionBanner";
+import { normalizeDelayRange } from "../components/DelayRangeInput";
+import { toInt } from "../utils/intInput";
 import { parseGroupLinkRows, splitTextRows } from "../utils/groupLinks";
 import { getSessionUserId } from "@/services/sessionIdentity.mjs";
 import { loadInputDraft, saveInputDraft } from "./inputDraft.mjs";
@@ -87,6 +90,25 @@ function mergeKeywords(current, next) {
     map.set(key, w);
   });
   return [...map.values()].slice(0, 30);
+}
+
+/**
+ * Đánh dấu link đã có trong Danh sách nhóm quét (kết quả tra DB): "scanned" (đã quét) hoặc "private"
+ * (nhóm riêng tư đã biết). Hai trạng thái này KHÔNG được quét lại (chỉ status "valid" mới gửi lên Engine).
+ * known: { [url]: {group_name, privacy, last_seen_at} | null } — null = đã tra, chưa quét.
+ */
+function markKnownLinks(rows, known) {
+  return (rows || []).map((r) => {
+    if (!["valid", "scanned", "private"].includes(r.status) || !r.url) return r;
+    const info = known?.[r.url];
+    if (!info) return { ...r, status: "valid", known: null };
+    return { ...r, status: info.privacy === "private" ? "private" : "scanned", known: info };
+  });
+}
+
+function knownSummary(rows) {
+  const count = (st) => rows.filter((r) => r.status === st).length;
+  return { valid: count("valid"), scanned: count("scanned"), priv: count("private"), dup: count("duplicate"), invalid: count("invalid") };
 }
 
 function mapGroupRow(g) {
@@ -365,12 +387,29 @@ export default function GroupScanInfoPage() {
     toast.info("Đã xóa toàn bộ liên kết.");
   };
 
+  // Kết quả tra "link đã quét chưa" (Kiểm tra & Lọc trùng lặp) — giữ qua các lần sửa ô nhập.
+  const knownLinksRef = useRef({});
+  const lookupKnownLinks = useCallback(async (urls) => {
+    const list = [...new Set((urls || []).filter(Boolean))];
+    if (!list.length) return knownLinksRef.current;
+    const found = await lookupScannedGroups(list);
+    const next = { ...knownLinksRef.current };
+    list.forEach((u) => {
+      next[u] = found[u] || null;
+    });
+    knownLinksRef.current = next;
+    return next;
+  }, []);
+
   // Đọc ô Nhập link → danh sách xem trước (cũng là danh sách sẽ quét). Link trùng bị bỏ luôn.
   const applyLinkText = useCallback((text) => {
     const { rows } = parseGroupLinkRows(splitTextRows(text));
-    const list = rows
-      .filter((r) => r.status !== "duplicate")
-      .map((r, idx) => ({ id: `link-${idx + 1}`, stt: idx + 1, url: r.url, raw: r.raw, status: r.status }));
+    const list = markKnownLinks(
+      rows
+        .filter((r) => r.status !== "duplicate")
+        .map((r, idx) => ({ id: `link-${idx + 1}`, stt: idx + 1, url: r.url, raw: r.raw, status: r.status })),
+      knownLinksRef.current,
+    );
     setParsedLinks(list);
     setLinkQuotas((current) => {
       const next = { ...current };
@@ -383,27 +422,82 @@ export default function GroupScanInfoPage() {
   }, []);
 
   // Dán / gõ / xoá trong ô là danh sách tự cập nhật — không để danh sách cũ bị quét nhầm.
+  // Link mới dán vào (chưa tra) → tự tra "đã quét chưa" để hiện ngay nhãn Đã quét, không cần bấm Kiểm tra.
   useEffect(() => {
-    const timer = setTimeout(() => applyLinkText(linkText), 250);
-    return () => clearTimeout(timer);
-  }, [linkText, applyLinkText]);
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      const { list } = applyLinkText(linkText);
+      const fresh = list.filter((r) => r.status === "valid" && !(r.url in knownLinksRef.current)).map((r) => r.url);
+      if (!fresh.length) return;
+      try {
+        await lookupKnownLinks(fresh);
+        if (!cancelled) applyLinkText(linkText);
+      } catch {
+        /* Engine chưa sẵn sàng — Kiểm tra / Bắt đầu sẽ tra lại */
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [linkText, applyLinkText, lookupKnownLinks]);
 
-  const handleCheckAndDeduplicateLinks = () => {
-    const { list, rows } = applyLinkText(linkText);
-    if (!rows.length) {
+  // Tệp mở lại từ nháp (chưa tra) → tra để đánh dấu link đã quét.
+  useEffect(() => {
+    const fresh = (fileData?.rows || [])
+      .filter((r) => r.status === "valid" && r.url && !(r.url in knownLinksRef.current))
+      .map((r) => r.url);
+    if (!fresh.length) return undefined;
+    let cancelled = false;
+    lookupKnownLinks(fresh)
+      .then((known) => {
+        if (cancelled) return;
+        setFileData((cur) => {
+          if (!cur?.rows) return cur;
+          const rows = markKnownLinks(cur.rows, known);
+          const sum = knownSummary(rows);
+          return { ...cur, rows, validCount: sum.valid, scannedCount: sum.scanned + sum.priv };
+        });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [fileData, lookupKnownLinks]);
+
+  const [checkingLinks, setCheckingLinks] = useState(false);
+  const handleCheckAndDeduplicateLinks = async () => {
+    const first = applyLinkText(linkText);
+    if (!first.rows.length) {
       toast.warning("Vui lòng nhập ít nhất 1 liên kết nhóm Facebook.");
       return;
     }
-    const validCount = list.filter((r) => r.status === "valid").length;
-    const dupCount = rows.length - list.length;
-    if (!validCount) {
+    const urls = first.list.filter((r) => r.url && r.status !== "invalid").map((r) => r.url);
+    if (!urls.length) {
       toast.error("Không tìm thấy link nhóm Facebook nào trong nội dung đã nhập.");
       return;
     }
-    toast.success(
-      `Nhận ${validCount} link nhóm${dupCount ? `, bỏ ${dupCount} link trùng` : ""}`
-      + `${list.length > validCount ? `, ${list.length - validCount} dòng không phải link nhóm` : ""}.`,
-    );
+    setCheckingLinks(true);
+    try {
+      await lookupKnownLinks(urls);
+    } catch (err) {
+      toast.error(err?.message || "Không kiểm tra được link đã quét — thử lại sau.");
+      return;
+    } finally {
+      setCheckingLinks(false);
+    }
+    const { list, rows } = applyLinkText(linkText);
+    const sum = knownSummary(list);
+    const dupCount = rows.length - list.length;
+    const parts = [
+      dupCount ? `bỏ ${dupCount} link trùng` : null,
+      sum.scanned ? `bỏ ${sum.scanned} link đã quét trước đó` : null,
+      sum.priv ? `bỏ ${sum.priv} nhóm riêng tư` : null,
+      sum.invalid ? `${sum.invalid} dòng không phải link nhóm` : null,
+    ].filter(Boolean);
+    const msg = `Còn ${sum.valid} link nhóm mới sẽ quét${parts.length ? ` (${parts.join(", ")})` : ""}.`;
+    if (sum.valid) toast.success(msg);
+    else toast.warning(`Không còn link nhóm mới nào để quét${parts.length ? ` — ${parts.join(", ")}` : ""}.`);
   };
 
   const handleRemoveLink = (id) => {
@@ -438,7 +532,14 @@ export default function GroupScanInfoPage() {
       if (truncated) {
         toast.warning("Tệp có hơn 1.000 link nhóm — chỉ lấy 1.000 link đầu tiên.");
       }
-      const rows = parsed.map((r, idx) => ({ ...r, id: `f-${idx + 1}` }));
+      let rows = parsed.map((r, idx) => ({ ...r, id: `f-${idx + 1}` }));
+      try {
+        const known = await lookupKnownLinks(rows.filter((r) => r.status === "valid").map((r) => r.url));
+        rows = markKnownLinks(rows, known);
+      } catch (err) {
+        console.warn("[Group Scan] lookup scanned links:", err);
+      }
+      const scannedCount = rows.filter((r) => r.status === "scanned" || r.status === "private").length;
       const validCount = rows.filter((r) => r.status === "valid").length;
       const dupCount = rows.filter((r) => r.status === "duplicate").length;
       const invalidCount = rows.filter((r) => r.status === "invalid").length;
@@ -450,6 +551,7 @@ export default function GroupScanInfoPage() {
         totalCount: rows.length,
         validCount,
         dupCount,
+        scannedCount,
         invalidCount,
         rows,
       });
@@ -462,11 +564,13 @@ export default function GroupScanInfoPage() {
         return next;
       });
 
-      if (validCount === 0) {
+      if (validCount === 0 && scannedCount > 0) {
+        toast.warning(`Tất cả link nhóm trong tệp «${name}» đều đã quét trước đó — không còn link mới để quét.`);
+      } else if (validCount === 0) {
         toast.error(`Tệp «${name}» không chứa liên kết nhóm Facebook nào (${invalidCount} dòng sai định dạng). Vui lòng kiểm tra lại!`);
       } else {
         toast.success(
-          `Đã nhận diện tệp ${name}: ${validCount} link nhóm hợp lệ${dupCount > 0 ? `, ${dupCount} trùng lặp` : ""}${invalidCount > 0 ? `, ${invalidCount} không phải link nhóm (loại trừ)` : ""}.`
+          `Đã nhận diện tệp ${name}: ${validCount} link nhóm mới${scannedCount > 0 ? `, bỏ ${scannedCount} link đã quét trước đó` : ""}${dupCount > 0 ? `, ${dupCount} trùng lặp` : ""}${invalidCount > 0 ? `, ${invalidCount} không phải link nhóm (loại trừ)` : ""}.`
         );
       }
     } catch (err) {
@@ -480,7 +584,7 @@ export default function GroupScanInfoPage() {
   const displayedFileRows = useMemo(() => {
     if (!fileData?.rows) return [];
     if (fileFilter === "valid") return fileData.rows.filter((r) => r.status === "valid");
-    if (fileFilter === "duplicate") return fileData.rows.filter((r) => r.status === "duplicate");
+    if (fileFilter === "duplicate") return fileData.rows.filter((r) => ["duplicate", "scanned", "private"].includes(r.status));
     if (fileFilter === "invalid") return fileData.rows.filter((r) => r.status === "invalid");
     return fileData.rows;
   }, [fileData, fileFilter]);
@@ -647,6 +751,7 @@ export default function GroupScanInfoPage() {
                   ...row,
                   status: "stopped",
                   detail: [row.detail, "bị gián đoạn — chưa xem hết, bấm Kiểm tra lại"].filter(Boolean).join(" · "),
+                  note: "Bị gián đoạn — chưa xem hết, bấm Kiểm tra lại",
                 };
               }
             });
@@ -665,26 +770,27 @@ export default function GroupScanInfoPage() {
     };
   }, [capacityJobId]);
 
-  const buildScanBody = (wordList = []) => {
+  // targets: link/tệp đã lọc lại ngay lúc bấm Bắt đầu (bỏ link đã quét) — mặc định lấy từ màn hình.
+  const buildScanBody = (wordList = [], targets = null) => {
     let payloadKeywords = [];
     if (method === "keyword") {
       payloadKeywords = wordList.map((word) => ({
         keyword: word,
-        limit: Math.max(1, Math.min(200, Number(quotas[word]) || 30)),
+        limit: Math.max(1, Math.min(200, toInt(quotas[word]) || 30)),
       }));
     } else if (method === "link") {
-      const validLinks = (parsedLinks || []).filter((l) => l.status === "valid");
+      const validLinks = targets || (parsedLinks || []).filter((l) => l.status === "valid");
       payloadKeywords = validLinks.map((l) => ({
         keyword: l.url,
-        limit: Math.max(1, Math.min(200, Number(linkQuotas[l.url]) || 30)),
+        limit: Math.max(1, Math.min(200, toInt(linkQuotas[l.url]) || 30)),
       }));
     } else if (method === "file") {
-      const validRows = (fileData?.rows || []).filter((r) => r.status === "valid");
+      const validRows = targets || (fileData?.rows || []).filter((r) => r.status === "valid");
       payloadKeywords = validRows.map((r) => {
         const target = r.url || r.raw;
         return {
           keyword: target,
-          limit: Math.max(1, Math.min(200, Number(fileQuotas[target] ?? fileQuotas[r.raw]) || 30)),
+          limit: Math.max(1, Math.min(200, toInt(fileQuotas[target] ?? fileQuotas[r.raw]) || 30)),
         };
       });
     }
@@ -695,12 +801,13 @@ export default function GroupScanInfoPage() {
       uids: selectedUids,
       keyword: firstWord,
       keywords: payloadKeywords,
-      delay_min: Math.max(0, Number(delayMin) || 0),
-      delay_max: Math.max(Number(delayMin) || 0, Number(delayMax) || 0),
+      // Min > Max (nháp cũ / nhập ngược) → hoán đổi thay vì ép Max = Min.
+      delay_min: normalizeDelayRange(delayMin, delayMax).min,
+      delay_max: normalizeDelayRange(delayMin, delayMax).max,
       // Luồng quét chỉ lấy nhóm Public và không tham gia nhóm (backend cũng ép như vậy).
       public_only: true,
       private_only: false,
-      min_members: minMembersEnabled ? Math.max(0, Number(minMembers) || 0) : null,
+      min_members: minMembersEnabled ? Math.max(0, toInt(minMembers)) : null,
       auto_join: false,
       force: true,
     };
@@ -833,19 +940,35 @@ export default function GroupScanInfoPage() {
         return;
       }
     }
-    if (method === "link") {
-      const validLinks = (parsedLinks || []).filter((l) => l.status === "valid");
-      if (!validLinks.length) {
-        toast.warning("Vui lòng nhập và kiểm tra ít nhất 1 liên kết nhóm Facebook hợp lệ.");
+    // Link / tệp: tra lại DB ngay lúc bấm — link nhóm đã quét trước đó (hoặc nhóm riêng tư) không quét lại.
+    let targets = null;
+    if (method === "link" || method === "file") {
+      const source = method === "link" ? applyLinkText(linkText).list : fileData?.rows || [];
+      let marked = source;
+      try {
+        const known = await lookupKnownLinks(
+          source.filter((r) => ["valid", "scanned", "private"].includes(r.status)).map((r) => r.url),
+        );
+        marked = markKnownLinks(source, known);
+      } catch (err) {
+        console.warn("[Group Scan] lookup scanned links before start:", err);
+        pushLog("⚠️ Không kiểm tra được link đã quét (mất kết nối Engine/DB) — dùng kết quả kiểm tra trước đó.", "warn");
+      }
+      if (method === "link") setParsedLinks(marked);
+      else setFileData((cur) => (cur ? { ...cur, rows: marked, validCount: knownSummary(marked).valid } : cur));
+      targets = marked.filter((r) => r.status === "valid");
+      const skipped = marked.filter((r) => r.status === "scanned" || r.status === "private").length;
+      if (!targets.length) {
+        toast.warning(
+          skipped
+            ? `Tất cả ${skipped} link nhóm đã quét trước đó — không còn link mới để quét.`
+            : method === "link"
+              ? "Vui lòng nhập và kiểm tra ít nhất 1 liên kết nhóm Facebook hợp lệ."
+              : "Tệp không chứa liên kết nhóm Facebook hợp lệ nào. Vui lòng kiểm tra lại tệp!",
+        );
         return;
       }
-    }
-    if (method === "file") {
-      const validRows = (fileData?.rows || []).filter((r) => r.status === "valid");
-      if (!validRows.length) {
-        toast.warning("Tệp không chứa liên kết nhóm Facebook hợp lệ nào. Vui lòng kiểm tra lại tệp!");
-        return;
-      }
+      if (skipped) pushLog(`Bỏ qua ${skipped} link nhóm đã quét trước đó — chỉ quét ${targets.length} link mới.`, "info");
     }
 
     setResults([]);
@@ -857,7 +980,7 @@ export default function GroupScanInfoPage() {
     } catch {}
 
     const uid = selectedUids[0];
-    const body = buildScanBody(wordList);
+    const body = buildScanBody(wordList, targets);
     // Bỏ mã phiên cũ (đã xong / đã dừng) TRƯỚC khi chuyển sang "đang chạy": nếu không, vòng theo dõi sẽ
     // đọc phiên cũ, thấy "đã dừng" rồi tắt trạng thái chạy — phiên mới quét ngầm mà màn hình đứng yên.
     setCheckJobId("");
@@ -881,15 +1004,13 @@ export default function GroupScanInfoPage() {
         "info",
       );
     } else if (method === "link") {
-      const validLinks = (parsedLinks || []).filter((l) => l.status === "valid");
       pushLog(
-        `Bắt đầu thực thi: ${selectedUids.length} nick, ${validLinks.length} link nhóm…`,
+        `Bắt đầu thực thi: ${selectedUids.length} nick, ${targets.length} link nhóm…`,
         "info",
       );
     } else {
-      const validCnt = (fileData?.rows || []).filter((r) => r.status === "valid").length;
       pushLog(
-        `Bắt đầu thực thi: ${selectedUids.length} nick, ${validCnt} link nhóm từ tệp ${fileData?.name || ""}…`,
+        `Bắt đầu thực thi: ${selectedUids.length} nick, ${targets.length} link nhóm từ tệp ${fileData?.name || ""}…`,
         "info",
       );
     }
@@ -977,10 +1098,12 @@ export default function GroupScanInfoPage() {
   };
 
   // Theo từ khóa: phải Kiểm tra xong mọi từ khóa (biết quét được tối đa bao nhiêu nhóm) mới cho Bắt đầu thực thi.
-  const uncheckedKeywords = useMemo(
-    () => (method === "keyword" ? keywords.filter((word) => !isKeywordChecked(keywordStats[word])) : []),
-    [method, keywords, keywordStats],
-  );
+  // Tính cả từ khóa mới gõ trong ô nhập mà chưa bấm Thêm (Bắt đầu thực thi sẽ tự thêm chúng vào danh sách).
+  const uncheckedKeywords = useMemo(() => {
+    if (method !== "keyword") return [];
+    const typed = keywordInput.trim() ? parseKeywords(keywordInput) : [];
+    return mergeKeywords(keywords, typed).filter((word) => !isKeywordChecked(keywordStats[word]));
+  }, [method, keywords, keywordInput, keywordStats]);
   const needCheckFirst = runState === "idle" && uncheckedKeywords.length > 0;
 
   const handlePrimaryAction = async () => {
@@ -1120,6 +1243,7 @@ export default function GroupScanInfoPage() {
             onLinkTextChange={setLinkText}
             onClearAllLinks={handleClearAllLinks}
             onCheckAndDeduplicateLinks={handleCheckAndDeduplicateLinks}
+            checkingLinks={checkingLinks}
             parsedLinks={parsedLinks}
             onRemoveLink={handleRemoveLink}
             fileData={fileData}
@@ -1128,7 +1252,7 @@ export default function GroupScanInfoPage() {
             fileFilter={fileFilter}
             onFileFilterChange={setFileFilter}
             validFileRowsCount={validFileRows.length}
-            duplicateFileRowsCount={(fileData?.rows || []).filter((r) => r.status === "duplicate").length}
+            duplicateFileRowsCount={(fileData?.rows || []).filter((r) => ["duplicate", "scanned", "private"].includes(r.status)).length}
             invalidFileRowsCount={(fileData?.rows || []).filter((r) => r.status === "invalid").length}
             displayedFileRows={displayedFileRows}
           />
@@ -1261,6 +1385,7 @@ export default function GroupScanInfoPage() {
           keywordOptions={keywordOptions}
           allVisibleSelected={allVisibleSelected}
           onToggleAllRows={toggleAllRows}
+          onSelectRows={setSelectedRows}
           onToggleRow={(id, checked) => {
             setSelectedRows((current) => {
               const next = new Set(current);

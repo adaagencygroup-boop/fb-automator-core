@@ -1,5 +1,6 @@
 "use client";
 
+import { groupInCategory } from "../../utils/groupCategory";
 import { Folder, RefreshCw, Search, MoreVertical } from "lucide-react";
 
 export default function CategorySidebar({
@@ -68,17 +69,7 @@ export default function CategorySidebar({
           {categories.map((cat) => {
             const isActive = cat.id === activeCategoryId;
             const catGroupCount =
-              cat.id === "cat-all"
-                ? groups.length
-                : groups.filter((g) => {
-                    const cname = cat.name;
-                    if (cname) {
-                      if ((g.category_name || "").toLowerCase() === cname.toLowerCase()) return true;
-                      if ((g.keyword || "").toLowerCase() === cname.toLowerCase()) return true;
-                    }
-                    if (g.categoryId === cat.id) return true;
-                    return false;
-                  }).length;
+              cat.id === "cat-all" ? groups.length : groups.filter((g) => groupInCategory(g, cat)).length;
 
             return (
               <div

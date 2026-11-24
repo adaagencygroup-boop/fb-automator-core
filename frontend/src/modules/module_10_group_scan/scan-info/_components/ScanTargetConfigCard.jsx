@@ -3,6 +3,8 @@
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { IconInfo } from "../../components/icons";
+import DelayRangeInput from "../../components/DelayRangeInput";
+import { INT_INPUT_PROPS, blockNonDigitKey, digitsOnly } from "../../utils/intInput";
 
 /** Backend giới hạn cứng 200 nhóm / từ khóa (HARD_MAX_GROUPS). */
 const QUOTA_MIN = 1;
@@ -13,20 +15,18 @@ const arrowClass =
 
 /** Ô số có mũi tên lên / xuống — cùng kiểu với SuffixInput của Module 04. */
 function QuotaInput({ value, onChange, label }) {
-  const current = Number(value);
+  const current = Math.floor(Number(value));
   const clamp = (n) => Math.max(QUOTA_MIN, Math.min(QUOTA_MAX, n));
   const bump = (delta) => onChange(clamp((Number.isFinite(current) ? current : QUOTA_MIN) + delta));
 
   return (
     <div className="flex h-8 w-20 items-center rounded-lg border border-[#E2E8F0] bg-white pl-2 pr-0.5 focus-within:border-[#2563EB]">
       <input
-        type="number"
-        inputMode="numeric"
-        min={QUOTA_MIN}
-        max={QUOTA_MAX}
-        value={value}
+        {...INT_INPUT_PROPS}
+        value={Number.isFinite(current) ? current : value}
         aria-label={label}
-        onChange={(event) => onChange(clamp(Number(event.target.value) || QUOTA_MIN))}
+        onKeyDown={blockNonDigitKey}
+        onChange={(event) => onChange(clamp(Number(digitsOnly(event.target.value)) || QUOTA_MIN))}
         className="min-w-0 flex-1 bg-transparent text-center text-xs font-bold text-[#0F172A] outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
       />
       <span className="flex shrink-0 flex-col">
@@ -136,65 +136,24 @@ export default function ScanTargetConfigCard({
           <span className="text-xs font-medium text-[#334155]">
             Khoảng cách giữa các lần quét:
           </span>
-          <div className="flex items-center gap-2">
-            {/* Min delay stepper */}
-            <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
-              <button
-                type="button"
-                onClick={() => onDelayMinChange(Math.max(0, delayMin - 1))}
-                className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                value={delayMin}
-                onChange={(event) => onDelayMinChange(Math.max(0, Number(event.target.value) || 0))}
-                className="w-8 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-              />
-              <button
-                type="button"
-                onClick={() => onDelayMinChange(delayMin + 1)}
-                className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
-              >
-                +
-              </button>
-            </div>
+          <DelayRangeInput
+            min={Number(delayMin) || 0}
+            max={Number(delayMax) || 0}
+            onChange={(lo, hi) => {
+              onDelayMinChange(lo);
+              onDelayMaxChange(hi);
+            }}
+          />
+        </div>
 
-            <span className="text-xs text-[#94A3B8]">-</span>
-
-            {/* Max delay stepper */}
-            <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
-              <button
-                type="button"
-                onClick={() => onDelayMaxChange(Math.max(delayMin, delayMax - 1))}
-                className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                value={delayMax}
-                onChange={(event) => onDelayMaxChange(Math.max(delayMin, Number(event.target.value) || delayMin))}
-                className="w-8 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-              />
-              <button
-                type="button"
-                onClick={() => onDelayMaxChange(delayMax + 1)}
-                className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
-              >
-                +
-              </button>
-            </div>
-
-            <span className="text-xs text-[#64748B]">giây</span>
+        {/* Theo từ khóa: số nhóm quét được (bảng Kiểm tra) đã loại sẵn nhóm riêng tư → ghi chú này thừa.
+            Nhập link / tải tệp vẫn cần: link nhóm riêng tư người dùng đưa vào sẽ bị bỏ qua. */}
+        {method !== "keyword" && (
+          <div className="flex items-start gap-2 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-3 py-2 text-[11px] leading-5 text-[#1E40AF]">
+            <IconInfo className="mt-0.5" />
+            <span>Chỉ quét nhóm <b>công khai</b>. Link nhóm riêng tư sẽ được bỏ qua và tài khoản không tham gia nhóm nào.</span>
           </div>
-        </div>
-
-        <div className="flex items-start gap-2 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-3 py-2 text-[11px] leading-5 text-[#1E40AF]">
-          <IconInfo className="mt-0.5" />
-          <span>Chỉ quét nhóm <b>công khai</b>. Nhóm riêng tư được bỏ qua và tài khoản không tham gia nhóm nào.</span>
-        </div>
+        )}
 
         <div className="flex flex-wrap items-center justify-between gap-2">
           <label className="flex cursor-pointer items-center gap-2 text-xs text-[#0F172A]">
@@ -215,10 +174,11 @@ export default function ScanTargetConfigCard({
                 -
               </button>
               <input
-                type="number"
+                {...INT_INPUT_PROPS}
                 disabled={!minMembersEnabled}
                 value={minMembers}
-                onChange={(event) => onMinMembersChange(Math.max(0, Number(event.target.value) || 0))}
+                onKeyDown={blockNonDigitKey}
+                onChange={(event) => onMinMembersChange(Math.max(0, Number(digitsOnly(event.target.value)) || 0))}
                 className="w-16 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               />
               <button

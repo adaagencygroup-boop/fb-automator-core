@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { attachDragSelection } from "@/modules/module_02_account_manager/utils/drag-selection.mjs";
 import { Check, ChevronDown, Copy, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -173,6 +174,28 @@ export default function AccountSelectModal({
 
   const allReadyChecked = readyRows.length > 0 && readyRows.every((acc) => draft.has(acc.uid));
 
+  // Giữ chuột trái trên 1 dòng rồi kéo lên/xuống để chọn liền nhiều tài khoản (giữ Ctrl để cộng thêm
+  // vào lựa chọn hiện có). Dùng chung cơ chế kéo chọn của Quản lý tài khoản Facebook.
+  const [tableBox, setTableBox] = useState(null);
+  const rowsRef = useRef([]);
+  const draftRef = useRef(draft);
+  rowsRef.current = readyRows;
+  draftRef.current = draft;
+  useEffect(() => {
+    if (!tableBox) return undefined;
+    return attachDragSelection(tableBox, {
+      getVisibleUids: () => rowsRef.current.map((acc) => acc.uid),
+      getAvailableUids: () => readyAccounts.map((acc) => acc.uid),
+      getSelectedUids: () => [...draftRef.current],
+      onSelectionChange: (uids) => {
+        const next = new Set(uids);
+        draftRef.current = next;
+        setDraft(next);
+      },
+      disabled: loading,
+    });
+  }, [tableBox, readyAccounts, loading]);
+
   const toggle = (uid, checked, ready) => {
     if (!ready) return;
     setDraft((current) => {
@@ -283,7 +306,7 @@ export default function AccountSelectModal({
         </div>
 
         {/* SCROLLABLE TABLE CONTENT */}
-        <div className="min-h-0 flex-1 overflow-x-auto overflow-y-auto px-6 py-1">
+        <div ref={setTableBox} className="min-h-0 flex-1 overflow-x-auto overflow-y-auto px-6 py-1">
           <table className="w-full min-w-[860px] text-left text-xs sm:text-sm">
             <thead className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_#F1F5F9]">
               <tr className="border-b border-slate-100 text-[11px] font-bold uppercase tracking-wider text-slate-400 bg-white">
@@ -345,6 +368,7 @@ export default function AccountSelectModal({
                   return (
                     <tr
                       key={acc.uid || idx}
+                      data-account-uid={ready ? acc.uid : undefined}
                       className={cn(
                         "transition-colors",
                         ready ? "hover:bg-slate-50/70 cursor-pointer" : "opacity-60",

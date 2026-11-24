@@ -262,3 +262,10 @@ export async function getResumableSession(scanType) {
 export async function resumeScanSession(sessionId) {
   return api.post(`/api/group-scan/sessions/${encodeURIComponent(sessionId)}/resume`, {});
 }
+
+/** Kiểm tra & Lọc trùng lặp: link nào đã có trong Danh sách nhóm quét → { [link]: {group_name, privacy, last_seen_at} }. */
+export async function lookupScannedGroups(links) {
+  if (!links?.length) return {};
+  const res = await api.post("/api/group-scan/groups/lookup", { links });
+  return res?.known || {};
+}
