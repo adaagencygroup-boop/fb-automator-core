@@ -1,33 +1,25 @@
 import React, { useMemo } from "react";
 import { Users, Info, Clock, UserCheck, AlertCircle } from "lucide-react";
+import { DEFAULT_POSTS_PER_ACCOUNT } from "../runPlan.mjs";
 
+/**
+ * Bước "Số lượng tài khoản sử dụng" + "Thiết lập thời gian" — giao diện và luồng giống hệt Seeding Page /
+ * Seeding Trang cá nhân (PageAccountConfig). Khác duy nhất: khung thông tin ghi cách chia xoay vòng của Seeding Bài viết.
+ */
 export default function PostAccountConfig({
+  accountStep = 4,
+  timeStep = 5,
   accountCount,
-  onAccountCountChange,
   availableAccounts = 0,
-  liveAccounts = 0,
-  totalAccounts = 0,
+  selectedUids = [],
+  targetCount = 0,
+  postsPerAccount = DEFAULT_POSTS_PER_ACCOUNT,
   minDelay,
   maxDelay,
   onMinDelayChange,
   onMaxDelayChange,
-  selectedReactionsCount,
-  doLike,
-  doComment,
-  doShare,
   onOpenAccountModal,
-  selectedUids = [],
   isRunning = false,
-  threads = 2,
-  onThreadsChange = () => {},
-  startMode = "now",
-  onStartModeChange = () => {},
-  startAt = "",
-  onStartAtChange = () => {},
-  spreadEnabled = false,
-  onSpreadEnabledChange = () => {},
-  spreadHours = 3,
-  onSpreadHoursChange = () => {},
 }) {
   const delayErrorMessage = useMemo(() => {
     if (
@@ -54,14 +46,16 @@ export default function PostAccountConfig({
     return "";
   }, [minDelay, maxDelay]);
 
+  const per = postsPerAccount;
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
-      {/* Step 4: Số lượng tài khoản sử dụng */}
+      {/* Số lượng tài khoản sử dụng */}
       <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm p-6 flex flex-col justify-between space-y-4">
         {/* Header */}
         <div className="flex items-center gap-3">
           <span className="w-6 h-6 rounded-full bg-rose-500 text-white text-xs font-bold flex items-center justify-center shrink-0">
-            {doComment ? "4" : "3"}
+            {accountStep}
           </span>
           <h2 className="text-base font-bold text-gray-900">
             Số lượng tài khoản sử dụng
@@ -120,27 +114,21 @@ export default function PostAccountConfig({
         <div className="p-3.5 rounded-xl bg-blue-50/70 border border-blue-100 flex items-start gap-2.5 text-xs text-blue-900 leading-relaxed mt-auto">
           <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
           <div>
-            <p className="font-bold text-blue-950">Mỗi tài khoản:</p>
-            <ul className="text-blue-800/90 mt-1 space-y-0.5 list-disc list-inside">
-              {doLike && (
-                <li>1 Cảm xúc (ngẫu nhiên 1 trong {selectedReactionsCount} loại đã chọn)</li>
-              )}
-              {doComment && <li>1 Bình luận (ngẫu nhiên từ danh sách)</li>}
-              {doShare && <li>1 Chia sẻ</li>}
-              {!doLike && !doComment && !doShare && (
-                <li className="italic text-gray-500">Chưa chọn hành động tương tác nào</li>
-              )}
-            </ul>
+            <p className="font-bold text-blue-950">Mỗi tài khoản làm {per} bài liên tiếp (chia xoay vòng)</p>
+            <p className="text-blue-800/90 mt-0.5">
+              Tài khoản 1 làm bài 1–{per}, tài khoản 2 làm bài {per + 1}–{per * 2}… hết tài khoản thì quay lại tài khoản 1.
+              Mỗi bài viết chỉ 1 tài khoản tương tác{targetCount ? ` (${targetCount} bài viết)` : ""}.
+            </p>
           </div>
         </div>
       </div>
 
-      {/* Step 5: Thiết lập thời gian */}
+      {/* Thiết lập thời gian */}
       <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm p-6 flex flex-col justify-between space-y-4">
         {/* Header */}
         <div className="flex items-center gap-3">
           <span className="w-6 h-6 rounded-full bg-rose-500 text-white text-xs font-bold flex items-center justify-center shrink-0">
-            {doComment ? "5" : "4"}
+            {timeStep}
           </span>
           <h2 className="text-base font-bold text-gray-900">
             Thiết lập thời gian
@@ -227,79 +215,6 @@ export default function PostAccountConfig({
               </p>
             )}
           </div>
-        </div>
-
-        {/* Tốc độ & thời điểm chạy */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-          <label className="flex flex-col gap-1.5 font-semibold text-gray-700">
-            Số luồng Chrome chạy song song
-            <input
-              type="number"
-              min={1}
-              max={5}
-              value={threads}
-              disabled={isRunning}
-              onChange={(e) => onThreadsChange(Math.max(1, Math.min(5, Number(e.target.value) || 1)))}
-              className="h-9 rounded-lg border border-gray-200 bg-white px-2 text-center text-sm font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:bg-gray-100 disabled:text-gray-400"
-            />
-            <span className="font-normal text-[11px] text-gray-500">Nhiều luồng chạy nhanh hơn nhưng tốn máy hơn (tối đa 5).</span>
-          </label>
-          <div className="flex flex-col gap-1.5 font-semibold text-gray-700">
-            <span>Bắt đầu</span>
-            <div className="flex gap-1.5" role="group" aria-label="Thời điểm bắt đầu">
-              {[
-                { id: "now", label: "Chạy ngay" },
-                { id: "schedule", label: "Hẹn giờ" },
-              ].map((o) => (
-                <button
-                  key={o.id}
-                  type="button"
-                  aria-pressed={startMode === o.id}
-                  disabled={isRunning}
-                  onClick={() => onStartModeChange(o.id)}
-                  className={`flex-1 h-9 rounded-lg border text-xs font-semibold transition-colors ${
-                    startMode === o.id ? "border-blue-500 bg-blue-50 text-blue-700" : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
-                  } disabled:opacity-50`}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
-            {startMode === "schedule" && (
-              <input
-                type="datetime-local"
-                aria-label="Giờ bắt đầu"
-                value={startAt}
-                disabled={isRunning}
-                onChange={(e) => onStartAtChange(e.target.value)}
-                className="h-9 rounded-lg border border-gray-200 bg-white px-2 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-              />
-            )}
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-gray-50/60 p-3 text-xs text-gray-700">
-          <label className="flex items-center gap-2 font-semibold cursor-pointer">
-            <input
-              type="checkbox"
-              checked={spreadEnabled}
-              disabled={isRunning}
-              onChange={(e) => onSpreadEnabledChange(e.target.checked)}
-              className="w-4 h-4 accent-[#2563EB]"
-            />
-            Rải đều trong
-          </label>
-          <input
-            type="number"
-            min={0.5}
-            step={0.5}
-            value={spreadHours}
-            disabled={isRunning || !spreadEnabled}
-            aria-label="Số giờ rải đều"
-            onChange={(e) => onSpreadHoursChange(Math.max(0.5, Number(e.target.value) || 0.5))}
-            className="w-16 h-8 rounded-lg border border-gray-200 bg-white px-1 text-center text-xs font-bold disabled:bg-gray-100 disabled:text-gray-400"
-          />
-          <span>giờ</span>
-          <span className="text-[11px] text-gray-500">— tự kéo dài thời gian nghỉ để lượt tương tác tăng dần tự nhiên (thay cho thời gian nghỉ ở trên).</span>
         </div>
 
         {/* Info box */}

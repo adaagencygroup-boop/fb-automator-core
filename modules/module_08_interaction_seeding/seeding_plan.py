@@ -96,3 +96,44 @@ def pick_action_uids(
     if not eligible:
         return set(used_uids)
     return set(rng.sample(eligible, min(max(0, int(quota)), len(eligible))))
+
+
+# ─────────────────────────────────────────────────────────────
+# Chia lượt xoay vòng: mỗi nick nhận 1 khối N bài liên tiếp
+# ─────────────────────────────────────────────────────────────
+DISTRIBUTION_ALL = "all"            # mọi nick tương tác trên mọi bài (cách cũ)
+DISTRIBUTION_ROTATION = "rotation"  # mỗi bài 1 nick, nick i nhận khối N bài, hết nick thì quay lại nick đầu
+DEFAULT_POSTS_PER_ACCOUNT = 50
+MAX_POSTS_PER_ACCOUNT = 5000
+
+
+def normalize_distribution(mode: str | None) -> str:
+    return DISTRIBUTION_ROTATION if (mode or "").strip().lower() == DISTRIBUTION_ROTATION else DISTRIBUTION_ALL
+
+
+def clamp_posts_per_account(value) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = DEFAULT_POSTS_PER_ACCOUNT
+    return max(1, min(MAX_POSTS_PER_ACCOUNT, n))
+
+
+def rotation_owner(idx: int, uids: Sequence[str], per_account: int) -> str:
+    """Nick làm bài thứ `idx` (đếm từ 0): bài 0..N-1 → nick 1, N..2N-1 → nick 2, … hết nick thì quay lại nick 1."""
+    if not uids:
+        raise ValueError("Cần ít nhất 1 nick")
+    per = clamp_posts_per_account(per_account)
+    return uids[(idx // per) % len(uids)]
+
+
+def rotation_blocks(owners: Sequence[str]) -> List[Tuple[str, List[int]]]:
+    """Gom các bài liên tiếp cùng nick thành khối: [(uid, [vị trí bài…]), …] theo đúng thứ tự.
+    Mỗi khối chạy trong 1 phiên Chrome của nick đó."""
+    blocks: List[Tuple[str, List[int]]] = []
+    for i, uid in enumerate(owners):
+        if blocks and blocks[-1][0] == uid:
+            blocks[-1][1].append(i)
+        else:
+            blocks.append((uid, [i]))
+    return blocks
