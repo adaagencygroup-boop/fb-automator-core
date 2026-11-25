@@ -347,6 +347,54 @@ export default function PageScannerSearch() {
     }
   };
 
+  // "Tải file mẫu": báo kết quả cho người dùng; khoá nút trong lúc tải để bấm liên tục không tải / báo nhiều lần
+  const TEMPLATE_LOCK_MS = 1500;
+  const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
+  const templateLockRef = useRef(false);
+  const templateTimerRef = useRef(null);
+  useEffect(() => () => clearTimeout(templateTimerRef.current), []);
+
+  const handleDownloadTemplate = async () => {
+    if (templateLockRef.current) return;
+    templateLockRef.current = true;
+    setIsDownloadingTemplate(true);
+    const startedAt = Date.now();
+    try {
+      // Chỉ báo "thành công" khi người dùng đã chọn nơi lưu, bấm Lưu và file đã ghi xong
+      const { status, fileName } = await downloadPageTemplate();
+      if (status === "saved") {
+        toast.success(`Đã tải file mẫu "${fileName}" thành công!`, {
+          title: "TẢI FILE THÀNH CÔNG",
+          key: "m11-template-download",
+        });
+      } else if (status === "cancelled") {
+        toast.info("Đã huỷ lưu file mẫu.", { title: "TẢI FILE MẪU", key: "m11-template-download" });
+      } else if (status === "downloaded") {
+        // Trình duyệt không có hộp thoại lưu file → không biết người dùng có bấm Lưu hay không, không báo "thành công"
+        toast.info(`Đã gửi file mẫu "${fileName}" cho trình duyệt — kiểm tra thư mục Tải xuống.`, {
+          title: "TẢI FILE MẪU",
+          key: "m11-template-download",
+        });
+      } else {
+        toast.info("Đã mở file mẫu ở tab mới — hãy lưu file để dùng.", {
+          title: "TẢI FILE MẪU",
+          key: "m11-template-download",
+        });
+      }
+    } catch {
+      toast.error("Không tải được file mẫu. Vui lòng thử lại!", {
+        title: "LỖI TẢI FILE",
+        key: "m11-template-download",
+      });
+    } finally {
+      clearTimeout(templateTimerRef.current);
+      templateTimerRef.current = setTimeout(() => {
+        templateLockRef.current = false;
+        setIsDownloadingTemplate(false);
+      }, Math.max(0, TEMPLATE_LOCK_MS - (Date.now() - startedAt)));
+    }
+  };
+
   const pushLog = useCallback((message, type = "info") => {
     setLogs((prev) => {
       const next = [...prev, { id: `${Date.now()}_${prev.length}`, timestamp: nowStamp(), message, type }];
@@ -1590,10 +1638,17 @@ export default function PageScannerSearch() {
 
               <button
                 type="button"
-                onClick={downloadPageTemplate}
-                className="flex items-center gap-1.5 text-[11px] font-semibold text-[#1877F2] hover:underline"
+                onClick={handleDownloadTemplate}
+                disabled={isDownloadingTemplate}
+                aria-busy={isDownloadingTemplate}
+                className="flex items-center gap-1.5 text-[11px] font-semibold text-[#1877F2] hover:underline disabled:cursor-not-allowed disabled:opacity-60 disabled:no-underline"
               >
-                <Download className="size-3" /> Tải file mẫu
+                {isDownloadingTemplate ? (
+                  <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Download className="size-3" aria-hidden="true" />
+                )}
+                {isDownloadingTemplate ? "Đang tải…" : "Tải file mẫu"}
               </button>
             </div>
           )}
