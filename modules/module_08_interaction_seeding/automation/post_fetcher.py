@@ -205,13 +205,26 @@ def _read_post_batch(driver, selector: str) -> List[Dict[str, Any]]:
     for row in rows:
         post_url = str(row.get("post_url") or "").strip()
         if not post_url and row.get("candidate_index") is not None:
-            post_url = _resolve_post_url_from_embed_menu(driver, selector, int(row["candidate_index"]))
-        if not post_url:
-            continue
+            attempted = driver.execute_script(r"""
+const node = document.querySelectorAll(arguments[0])[arguments[1]];
+if (!node) return false;
+const attempts = Number(node.getAttribute('data-m8-embed-attempts') || '0');
+const nextAttemptAt = Number(node.getAttribute('data-m8-embed-next-at') || '0');
+if (Date.now() < nextAttemptAt) return false;
+node.setAttribute('data-m8-embed-attempts', String(attempts + 1));
+const delay = Math.min(30000, 1000 * (2 ** Math.min(attempts, 5)));
+node.setAttribute('data-m8-embed-next-at', String(Date.now() + delay));
+return true;
+""", selector, int(row["candidate_index"]))
+            if attempted:
+                post_url = _resolve_post_url_from_embed_menu(driver, selector, int(row["candidate_index"]))
         raw = str(row.get("content") or "").replace("\xa0", " ")
         content = "\n".join(line.strip() for line in raw.splitlines() if line.strip())
         posts.append({
             "post_url": post_url,
+            "post_key": row.get("post_key"),
+            "card_signature": row.get("card_signature") or "",
+            "candidate_index": row.get("candidate_index"),
             "content": content or "Bài viết không có nội dung",
             "post_type": row.get("post_type") or "text",
             "published_at": row.get("published_at"),
@@ -249,12 +262,14 @@ const isProfile = pagelets.some((name) => /profile.*(timeline|feed|comet)|profil
   || ((headings.some((text) => /personal details|personal information|chi tiết cá nhân|thông tin cá nhân/.test(text))
     || /personal details|personal information|chi tiết cá nhân|thông tin cá nhân/.test(bodyText))
     && (headings.some((text) => /friends|bạn bè/.test(text)) || /\bfriends\b|bạn bè/.test(bodyText)));
-// Facebook's current tab label is a plain span; start from that exact node, then
-// climb to the interactive tab instead of relying on its unstable class names.
-const postsSpan = Array.from(document.querySelectorAll('span'))
-  .filter(visible)
-  .find((el) => normalize(el.innerText || el.textContent) === 'posts');
-const postsControl = postsSpan?.closest('[role="tab"], a, button, [role="link"], [role="button"]') || postsSpan;
+// Facebook may expose Posts as a tab/span or as an h2 heading above the feed.
+// Start from the exact label instead of relying on unstable class names.
+const headingNodes = Array.from(document.querySelectorAll('h1, h2, h3, [role="heading"]'))
+  .filter(visible);
+const postsHeading = headingNodes.find((el) => normalize(el.innerText || el.textContent) === 'posts') ||
+  Array.from(document.querySelectorAll('span')).filter(visible)
+    .find((el) => normalize(el.innerText || el.textContent) === 'posts');
+const postsControl = postsHeading?.closest('[role="tab"], a, button, [role="link"], [role="button"]') || postsHeading;
 const controls = Array.from(document.querySelectorAll('[role="tab"], a, button, [role="link"], [role="button"]'))
   .filter(visible)
   .map((el) => ({ el, label: normalize(el.getAttribute('aria-label') || el.innerText || el.textContent) }))
@@ -262,11 +277,35 @@ const controls = Array.from(document.querySelectorAll('[role="tab"], a, button, 
 if (postsControl && !controls.some(({ el }) => el === postsControl)) {
   controls.unshift({ el: postsControl, label: 'posts' });
 }
-if (!controls.length) return { found: false, selected: false, is_profile: isProfile };
+if (!controls.length) return { found: false, selected: false, is_profile: isProfile, posts_heading: Boolean(postsHeading) };
 const selected = controls.find(({ el }) => el.getAttribute('aria-selected') === 'true' || el.getAttribute('aria-current') === 'page');
-if (selected) return { found: true, selected: true, is_profile: isProfile };
-controls[0].el.click();
-return { found: true, selected: false, clicked: true, is_profile: isProfile };
+if (!selected && controls[0].el !== postsHeading) {
+  controls[0].el.click();
+  return { found: true, selected: false, clicked: true, is_profile: isProfile };
+}
+// Scope scanning to the content under Posts, excluding a Page's Featured area.
+document.querySelectorAll('[data-m8-posts-scope="1"]').forEach((el) => el.removeAttribute('data-m8-posts-scope'));
+if (postsHeading) {
+  let scope = null;
+  let current = postsHeading;
+  for (let depth = 0; current && current !== document.body && depth < 12; depth++, current = current.parentElement) {
+    const parent = current.parentElement;
+    if (!parent) break;
+    const siblings = Array.from(parent.children);
+    const afterHeading = siblings.slice(siblings.indexOf(current) + 1);
+    const feedSibling = afterHeading.find((el) => el.querySelector(
+      '[data-ad-rendering-role="story_message"], [data-ad-comet-preview="message"], [data-ad-preview="message"], [aria-label^="Actions for this post"]'
+    ));
+    if (feedSibling) {
+      scope = feedSibling;
+      break;
+    }
+  }
+  if (scope) scope.setAttribute('data-m8-posts-scope', '1');
+}
+const scoped = Boolean(document.querySelector('[data-m8-posts-scope="1"]'));
+if (postsHeading && !scoped && !isProfile) return { found: false, selected: Boolean(selected), is_profile: isProfile, posts_heading: true };
+return { found: true, selected: Boolean(selected), is_profile: isProfile, posts_heading: Boolean(postsHeading), scoped };
 """
 
 _MARK_BATCH_JS = r"""
@@ -274,10 +313,34 @@ const token = arguments[0];
 const maxN = arguments[1] || 12;
 const MESSAGE_SEL = '[data-ad-rendering-role="story_message"], [data-ad-comet-preview="message"], [data-ad-preview="message"]';
 const LINK_RE = /\/posts\/[^/?#]+|\/permalink(?:\.php)?(?:\/[^/?#]+)?(?:[?#]|$)|\/(?:reels?|videos?)\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)|[?&]story_fbid=/i;
+const scanScope = document.querySelector('[data-m8-posts-scope="1"]') || document;
 const candidates = [];
 const hasPostLink = (el) => Array.from(el.querySelectorAll('a[href]')).some((a) => LINK_RE.test(a.href || a.getAttribute('href') || ''));
+const linkRank = (anchor) => {
+  const href = anchor.href || anchor.getAttribute('href') || '';
+  if (/\/posts\/[^/?#]+/i.test(href)) return 0;
+  if (/\/permalink(?:\.php)?(?:\/[^/?#]+)?(?:[?#]|$)/i.test(href) || /[?&]story_fbid=/i.test(href)) return 1;
+  if (/\/(?:reels?|videos?)\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)/i.test(href)) return 2;
+  return 3;
+};
+const linksForPost = (el) => {
+  const links = [];
+  let sharedContext = false;
+  let root = el;
+  for (let depth = 0; root && root !== document.body && depth < 12 && (scanScope === document || scanScope.contains(root)); depth++, root = root.parentElement) {
+    if (depth > 0 && topMessageCount(root) > 1) break;
+    if (/\bshared post\b|b\u00e0i vi\u1ebft \u0111\u01b0\u1ee3c chia s\u1ebb|\u0111\u00e3 chia s\u1ebb/i.test(root.innerText || root.textContent || '')) sharedContext = true;
+    const anchors = root.querySelectorAll('a[href]');
+    if (anchors.length > 64) break;
+    for (const anchor of anchors) {
+      if (LINK_RE.test(anchor.href || anchor.getAttribute('href') || '') && !links.includes(anchor)) links.push(anchor);
+    }
+  }
+  if (sharedContext && links.length && links.every((anchor) => linkRank(anchor) >= 2)) return [];
+  return links.sort((a, b) => linkRank(a) - linkRank(b));
+};
 const postKey = (el) => {
-  const links = Array.from(el.querySelectorAll('a[href]')).filter((a) => LINK_RE.test(a.href || a.getAttribute('href') || ''));
+  const links = linksForPost(el).sort((a, b) => linkRank(a) - linkRank(b));
   const isInComment = (anchor) => {
     for (let current = anchor; current && current !== el; current = current.parentElement) {
       const label = [current.getAttribute('aria-label'), current.getAttribute('data-testid'), current.getAttribute('data-pagelet')]
@@ -290,8 +353,15 @@ const postKey = (el) => {
   if (!anchor) return '';
   try {
     const url = new URL(anchor.href || anchor.getAttribute('href'), location.href);
-    const identity = ['story_fbid', 'fbid', 'id', 'v'].map((key) => url.searchParams.get(key) || '').filter(Boolean).join(':');
-    return `${url.pathname}${identity ? `?${identity}` : ''}`;
+    // Keep recognizable query names so _READ_POST_BATCH_JS can reconstruct
+    // the same post identity and match its timestamp permalink. Flattening
+    // these values into "pfbid:id" made /permalink.php identities unreadable.
+    const identity = new URLSearchParams();
+    for (const key of ['story_fbid', 'fbid', 'id', 'v']) {
+      const value = url.searchParams.get(key);
+      if (value) identity.set(key, value);
+    }
+    return `${url.pathname}${identity.toString() ? `?${identity.toString()}` : ''}`;
   } catch {
     return anchor.getAttribute('href') || '';
   }
@@ -299,11 +369,25 @@ const postKey = (el) => {
 const refreshMarker = (el) => {
   const key = postKey(el);
   const previous = el.getAttribute('data-m8-post-key');
-  if (key && previous && key !== previous) {
+  const message = el.querySelector(MESSAGE_SEL);
+  const messageText = (message?.innerText || message?.textContent || '')
+    .replace(/\bsee more\b/gi, '').replace(/\s+/g, ' ').trim().slice(0, 240);
+  const media = Array.from(el.querySelectorAll('video, img'))
+    .map((item) => item.getAttribute('data-video-id') || item.getAttribute('poster') || item.getAttribute('src') || item.getAttribute('alt') || '')
+    .filter(Boolean).slice(0, 2).join('|').slice(0, 180);
+  const fingerprint = `${message?.id || ''}|${messageText}|${media}`.slice(0, 480);
+  const signature = fingerprint.replace(/[|\s]/g, '') ? fingerprint : key;
+  const previousSignature = el.getAttribute('data-m8-card-signature');
+  if ((key && previous && key !== previous) || (signature && previousSignature && signature !== previousSignature)) {
     el.removeAttribute('data-m8-done');
     el.removeAttribute('data-m8-batch');
+    el.removeAttribute('data-m8-pending-retries');
+    el.removeAttribute('data-m8-embed-attempts');
+    el.removeAttribute('data-m8-embed-next-at');
   }
   if (key) el.setAttribute('data-m8-post-key', key);
+  else el.removeAttribute('data-m8-post-key');
+  if (signature) el.setAttribute('data-m8-card-signature', signature);
 };
 const hasPostActions = (el) => Array.from(el.querySelectorAll('[role="button"]')).some((button) => {
   const label = (button.getAttribute('aria-label') || button.innerText || button.textContent || '').toLowerCase();
@@ -317,7 +401,7 @@ const addCandidate = (el) => {
 };
 
 // Dùng message của bài làm mốc; không chọn wrapper Timeline/Feed hoặc article của bình luận.
-const messages = Array.from(document.querySelectorAll(MESSAGE_SEL)).filter((message) => {
+const messages = Array.from(scanScope.querySelectorAll(MESSAGE_SEL)).filter((message) => {
   for (let parent = message.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
     if (parent.matches(MESSAGE_SEL)) return false;
   }
@@ -365,10 +449,13 @@ for (const message of messages) {
 
 // Giữ cả bài chỉ có ảnh/video, không có story_message để trích nội dung.
 const SEMANTIC_POST_SEL = '[role="article"], div[data-pagelet*="FeedUnit"]';
-for (const el of document.querySelectorAll(SEMANTIC_POST_SEL)) {
+for (const el of scanScope.querySelectorAll(SEMANTIC_POST_SEL)) {
   if (candidates.length >= maxN) break;
   if (el.parentElement && el.parentElement.closest(SEMANTIC_POST_SEL)) continue;
-  if (topMessageCount(el) > 0 || !hasPostLink(el) || !hasPostActions(el)) continue;
+  // A valid post card can omit its permalink anchor until Facebook hydrates it.
+  // Keep the post-level action card; the reader can resolve its permalink from
+  // Facebook's Embed dialog after reading the visible content and date.
+  if (topMessageCount(el) > 0 || !hasPostActions(el)) continue;
   addCandidate(el);
 }
 
@@ -384,7 +471,7 @@ const isCommentLink = (anchor) => {
   }
   return false;
 };
-for (const anchor of document.querySelectorAll(
+for (const anchor of scanScope.querySelectorAll(
   'a[href*="/posts/"], a[href*="/permalink"], a[href*="/reel/"], a[href*="/reels/"], a[href*="/videos/"], a[href*="story_fbid="]'
 )) {
   if (candidates.length >= maxN) break;
@@ -416,7 +503,16 @@ for (const el of candidates) {
   marked++;
 }
 const doc = document.documentElement;
-return { marked: marked, expanded: expanded, height: Math.max(doc.scrollHeight, document.body ? document.body.scrollHeight : 0) };
+return {
+  marked: marked,
+  expanded: expanded,
+  cards: candidates.slice(0, marked).map((el, index) => ({
+    index,
+    signature: el.getAttribute('data-m8-card-signature') || '',
+    post_key: el.getAttribute('data-m8-post-key') || '',
+  })),
+  height: Math.max(doc.scrollHeight, document.body ? document.body.scrollHeight : 0),
+};
 """
 
 # Bài riêng cho Module 8: không đọc số lượng tương tác và không lấy text tổng hợp cả article.
@@ -424,9 +520,15 @@ _READ_POST_BATCH_JS = r"""
 const selector = arguments[0];
 const MESSAGE_SEL = '[data-ad-rendering-role="story_message"], [data-ad-comet-preview="message"], [data-ad-preview="message"]';
 const result = [];
+const topMessageCount = (root) => Array.from(root.querySelectorAll(MESSAGE_SEL)).filter((message) => {
+  for (let parent = message.parentElement; parent && parent !== root; parent = parent.parentElement) {
+    if (parent.matches(MESSAGE_SEL)) return false;
+  }
+  return true;
+}).length;
 const normalize = (value) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 const cleanTimeText = (value) => normalize(value).replace(/[\u034f\u200b-\u200f\u2060\ufeff]/g, '');
-const isTimeLabel = (value) => /just\s*now|yesterday|ago|hôm\s*qua|trước|\d+\s*(?:minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|months?|years?|y|phút|giờ|ngày|tuần|tháng|năm)(?=\s|$|[^a-z])|tháng\s*\d|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|january|february|march|april|may|june|july|august|september|october|november|december|\bjan\b|\bfeb\b|\bmar\b|\bapr\b|\bjun\b|\bjul\b|\baug\b|\bsep\b|\boct\b|\bnov\b|\bdec\b/i.test(value || '');
+const isTimeLabel = (value) => /just\s*now|yesterday|ago|h\u00f4m\s*qua|tr\u01b0\u1edbc|\d+\s*(?:minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|months?|years?|y|ph\u00fat|gi\u1edd|ng\u00e0y|tu\u1ea7n|th\u00e1ng|n\u0103m)(?=\s|$|[^a-z])|th\u00e1ng\s*\d|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|january|february|march|april|may|june|july|august|september|october|november|december|\bjan\b|\bfeb\b|\bmar\b|\bapr\b|\bjun\b|\bjul\b|\baug\b|\bsep\b|\boct\b|\bnov\b|\bdec\b/i.test(value || '');
 const isCommentLink = (anchor, postNode) => {
   if (anchor.closest('[role="navigation"]')) return true;
   for (let current = anchor; current && current !== postNode; current = current.parentElement) {
@@ -439,14 +541,6 @@ const isCommentLink = (anchor, postNode) => {
 
 const postNodes = Array.from(document.querySelectorAll(selector));
 for (const [candidateIndex, node] of postNodes.entries()) {
-  // Chọn anchor hợp lệ đầu tiên theo thứ tự DOM như luồng trước.
-  const postLink = Array.from(node.querySelectorAll('a[href]')).find((a) => {
-    const href = a.href || a.getAttribute('href') || '';
-    return /\/posts\/[^/?#]+|\/permalink(?:\.php)?(?:\/[^/?#]+)?(?:[?#]|$)|\/(?:reels?|videos?)\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)|[?&]story_fbid=/i.test(href)
-      && !isCommentLink(a, node);
-  });
-  const postUrl = postLink ? (postLink.href || postLink.getAttribute('href') || '') : '';
-
   // Trích xuất CHÍNH XÁC nội dung bài viết qua element [data-ad-comet-preview="message"] / [data-ad-preview="message"] / [data-ad-rendering-role="story_message"]
   // Tuyệt đối KHÔNG đọc nhầm bình luận (bình luận không có các data-ad-* marker này).
   let content = '';
@@ -466,8 +560,6 @@ for (const [candidateIndex, node] of postNodes.entries()) {
     node.querySelector('[data-ad-rendering-role="story_message"]') ||
     node.querySelector('[data-ad-comet-preview="message"]') ||
     node.querySelector('[data-ad-preview="message"]');
-
-  if (!postUrl && !messageRoot) continue;
 
   if (messageRoot) {
     // Ưu tiên 1: Lấy các div[dir="auto"] bên trong x126k92a (cấu trúc chuẩn của bài viết Facebook Comet)
@@ -504,17 +596,25 @@ for (const [candidateIndex, node] of postNodes.entries()) {
   // NẾU KHÔNG CÓ messageRoot -> Bài viết không có text (chỉ có ảnh/video/share bài khác không kèm caption).
   // Tuyệt đối KHÔNG fallback sang các div[dir="auto"] ngoài messageRoot vì sẽ bắt nhầm bình luận!
 
-  const TIME_SELECTOR = 'abbr[data-utime], time[datetime], [data-utime], [datetime], [data-tooltip-content], [data-time], [title], [aria-label], [aria-labelledby]';
-  const timeNodes = Array.from(node.querySelectorAll(TIME_SELECTOR));
+  const TIME_SELECTOR = 'abbr[data-utime], time[datetime], [data-utime], [datetime], [data-tooltip-content], [data-time], [title], [aria-label], [aria-labelledby], [aria-description]';
   const timeLabelText = (el) => {
     const referenced = (el.getAttribute('aria-labelledby') || '').split(/\s+/)
-      .map((id) => document.getElementById(id)?.textContent || '')
+      .map((id) => document.getElementById(id))
+      .filter(Boolean)
+      .flatMap((label) => [label.getAttribute('aria-label'), label.getAttribute('aria-description'), label.getAttribute('title'), label.getAttribute('datetime'), label.innerText, label.textContent])
       .filter(Boolean).join(' ');
-    return cleanTimeText(
-      el.getAttribute('title') || el.getAttribute('datetime') || el.getAttribute('data-tooltip-content') ||
-      el.getAttribute('data-time') || el.getAttribute('aria-label') || referenced || el.innerText || el.textContent
-    );
+    // Facebook may expose a generated/obfuscated aria-labelledby string while
+    // the same permalink also has a readable title, aria-label, or rendered text.
+    // Test every source and prefer the one that actually looks like a timestamp.
+    const candidates = [
+      el.getAttribute('title'), el.getAttribute('datetime'), el.getAttribute('data-tooltip-content'),
+      el.getAttribute('data-time'), el.getAttribute('aria-label'), el.getAttribute('aria-description'),
+      referenced, el.innerText, el.textContent,
+    ].map(cleanTimeText).filter(Boolean);
+    return candidates.find(isTimeLabel) || '';
   };
+  // The batch marker already stores the post identity. Use it only to match
+  // this card's date label; do not open or resolve its permalink yet.
   const postIdentityOf = (rawUrl) => {
     if (!rawUrl) return '';
     try {
@@ -531,37 +631,48 @@ for (const [candidateIndex, node] of postNodes.entries()) {
       return '';
     }
   };
-  // Locate the same post's timestamp permalink in the card header, even when
-  // Facebook places that header just outside the action/content element we marked.
-  const targetPostIdentity = postIdentityOf(postUrl);
+  const targetPostIdentity = postIdentityOf(node.getAttribute('data-m8-post-key'));
   const matchingPostLinks = [];
   if (targetPostIdentity) {
     let root = node;
-    for (let depth = 0; root && root !== document.body && depth < 8; depth++, root = root.parentElement) {
+    for (let depth = 0; root && root !== document.body && depth < 12; depth++, root = root.parentElement) {
+      const anchors = root.querySelectorAll('a[href]');
+      // Stop before walking into the whole feed. The matching permalink and
+      // its date label live in the post card, not in a page-wide wrapper.
+      if (anchors.length > 64) break;
       for (const anchor of root.querySelectorAll('a[href]')) {
         if (postIdentityOf(anchor.href || anchor.getAttribute('href')) === targetPostIdentity
           && !isCommentLink(anchor, root) && !matchingPostLinks.includes(anchor)) {
           matchingPostLinks.push(anchor);
         }
       }
+      if (matchingPostLinks.length) break;
     }
   }
-  // Also inspect the original post link's descendants for aria-labelledby/title metadata.
-  const permalinkAnchors = [...new Set([...matchingPostLinks, ...(postLink ? [postLink] : [])])];
-  const permalinkTimeNodes = permalinkAnchors.flatMap((anchor) => {
+  // Read the post's visible/accessible date before inspecting or resolving its
+  // permalink. Facebook may put the label inside the permalink or beside it in
+  // a header wrapper, so only inspect links that match this post's stored ID.
+  const permalinkTimeNodes = matchingPostLinks.flatMap((anchor) => {
     const nodes = [anchor, ...anchor.querySelectorAll(TIME_SELECTOR)];
-    // Comet can put the timestamp beside (rather than inside) the permalink.
-    // Read only the small header wrapper around that exact post link.
     let header = anchor.parentElement;
-    for (let depth = 0; header && depth < 4; depth++, header = header.parentElement) {
+    for (let depth = 0; header && depth < 5; depth++, header = header.parentElement) {
       if (header.querySelectorAll('a[href]').length > 8) break;
+      if (header.matches(TIME_SELECTOR)) nodes.push(header);
       nodes.push(...header.querySelectorAll(TIME_SELECTOR));
     }
     return nodes;
   });
-  const orderedTimeNodes = [...new Set([...permalinkTimeNodes, ...timeNodes])];
-  const timeNode = orderedTimeNodes.find((el) => el.hasAttribute('data-utime') || el.hasAttribute('datetime')) ||
-    orderedTimeNodes.find((el) => isTimeLabel(timeLabelText(el)));
+  const orderedTimeNodes = [...permalinkTimeNodes, ...node.querySelectorAll(TIME_SELECTOR)];
+  const uniqueTimeNodes = [...new Set(orderedTimeNodes)];
+  // Prefer the readable timestamp attached to this post's exact permalink.
+  // Cards can contain an embedded Reel/share with its own data-utime, which
+  // must not override the outer post's visible date label.
+  const permalinkDateNode = permalinkTimeNodes.find((el) => isTimeLabel(timeLabelText(el)));
+  const permalinkTimestampNode = permalinkTimeNodes.find((el) => el.hasAttribute('data-utime') || el.hasAttribute('datetime'));
+  const cardTimestampNode = Array.from(node.querySelectorAll(TIME_SELECTOR))
+    .find((el) => el.hasAttribute('data-utime') || el.hasAttribute('datetime'));
+  const timeNode = permalinkDateNode || permalinkTimestampNode || cardTimestampNode ||
+    uniqueTimeNodes.find((el) => isTimeLabel(timeLabelText(el)));
   const utimeRaw = timeNode?.getAttribute('data-utime') || timeNode?.closest('[data-utime]')?.getAttribute('data-utime') || timeNode?.querySelector('[data-utime]')?.getAttribute('data-utime');
   const utime = Number(utimeRaw);
   const rawTimeText = timeNode ? timeLabelText(timeNode) : '';
@@ -569,23 +680,9 @@ for (const [candidateIndex, node] of postNodes.entries()) {
   if (!(publishedDate instanceof Date) || Number.isNaN(publishedDate.getTime())) publishedDate = null;
   if (!publishedDate && Number.isFinite(utime) && utime > 0) publishedDate = new Date(utime * 1000);
   if (!publishedDate) {
-    const relative = rawTimeText.match(/(just\s*now|yesterday|hôm\s*qua|an?\s+(?:minute|hour|day|week|month|year)s?\s+ago|\d+\s*(?:minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|months?|years?|y|phút|giờ|ngày|tuần|tháng|năm)(?=\s|$|[^a-z]))/i);
-    if (relative) {
-      const label = relative[0].toLowerCase();
-      const amount = Number(label.match(/\d+/)?.[0] || (/^an?\s/.test(label) ? 1 : 0));
-      const published = new Date();
-      if (/yesterday|hôm\s*qua/.test(label)) published.setDate(published.getDate() - 1);
-      else if (/min|phút|\bm\b/.test(label)) published.setMinutes(published.getMinutes() - amount);
-      else if (/\bhr?\b|hour|giờ/.test(label)) published.setHours(published.getHours() - amount);
-      else if (/week|tuần|\bw\b/.test(label)) published.setDate(published.getDate() - amount * 7);
-      else if (/month|tháng/.test(label)) published.setMonth(published.getMonth() - amount);
-      else if (/year|năm|\by\b/.test(label)) published.setFullYear(published.getFullYear() - amount);
-      else if (/day|ngày|\bd\b/.test(label)) published.setDate(published.getDate() - amount);
-      publishedDate = published;
-    }
-  }
-  if (!publishedDate) {
-    const vietnameseDate = rawTimeText.match(/\b(\d{1,2})\s+tháng\s+(\d{1,2})(?:[,\s]+(\d{4}))?/i);
+    // Parse calendar dates before relative labels: "23 tháng 8" is an
+    // absolute date, not "23 months ago".
+    const vietnameseDate = rawTimeText.match(/\b(\d{1,2})\s+th\u00e1ng\s+(\d{1,2})(?:[,\s]+(\d{4}))?/i);
     const numericDate = rawTimeText.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b/);
     const englishDate = rawTimeText.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:,?\s+(\d{4}))?\b/i);
     if (vietnameseDate) {
@@ -601,6 +698,22 @@ for (const [candidateIndex, node] of postNodes.entries()) {
       if (!Number.isNaN(parsed.getTime())) publishedDate = parsed;
     }
   }
+  if (!publishedDate) {
+    const relative = rawTimeText.match(/(just\s*now|yesterday|h\u00f4m\s*qua|an?\s+(?:minute|hour|day|week|month|year)s?\s+ago|\d+\s*(?:minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|months?|years?|y|ph\u00fat|gi\u1edd|ng\u00e0y|tu\u1ea7n|th\u00e1ng|n\u0103m)(?=\s|$|[^a-z]))/i);
+    if (relative) {
+      const label = relative[0].toLowerCase();
+      const amount = Number(label.match(/\d+/)?.[0] || (/^an?\s/.test(label) ? 1 : 0));
+      const published = new Date();
+      if (/yesterday|h\u00f4m\s*qua/.test(label)) published.setDate(published.getDate() - 1);
+      else if (/min|ph\u00fat|\bm\b/.test(label)) published.setMinutes(published.getMinutes() - amount);
+      else if (/\bhr?\b|hour|gi\u1edd/.test(label)) published.setHours(published.getHours() - amount);
+      else if (/week|tu\u1ea7n|\bw\b/.test(label)) published.setDate(published.getDate() - amount * 7);
+      else if (/month|th\u00e1ng/.test(label)) published.setMonth(published.getMonth() - amount);
+      else if (/year|n\u0103m|\by\b/.test(label)) published.setFullYear(published.getFullYear() - amount);
+      else if (/day|ng\u00e0y|\bd\b/.test(label)) published.setDate(published.getDate() - amount);
+      publishedDate = published;
+    }
+  }
   // Facebook labels sometimes omit the year; a future date without an explicit year is last year.
   if (publishedDate && !/\b\d{4}\b/.test(rawTimeText) && publishedDate > new Date()) {
     publishedDate.setFullYear(publishedDate.getFullYear() - 1);
@@ -609,13 +722,55 @@ for (const [candidateIndex, node] of postNodes.entries()) {
   const publishedText = publishedDate
     ? `${String(publishedDate.getDate()).padStart(2, '0')}-${String(publishedDate.getMonth() + 1).padStart(2, '0')}-${publishedDate.getFullYear()}`
     : null;
+
+  // Resolve the final post URL last, after caption and publish date are read.
+  const linkRank = (anchor) => {
+    const href = anchor.href || anchor.getAttribute('href') || '';
+    if (/\/posts\/[^/?#]+/i.test(href)) return 0;
+    if (/\/permalink(?:\.php)?(?:\/[^/?#]+)?(?:[?#]|$)/i.test(href) || /[?&]story_fbid=/i.test(href)) return 1;
+    if (/\/(?:reels?|videos?)\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)/i.test(href)) return 2;
+    return 3;
+  };
+  // A feed card may contain both its own /posts/pfbid... permalink and a
+  // shared Reel's /reel/... URL. Collect links in the bounded post wrapper and
+  // prefer the outer post permalink; media links are a fallback for standalone Reels.
+  const postLinks = [];
+  let sharedContext = false;
+  let linkRoot = node;
+  for (let depth = 0; linkRoot && linkRoot !== document.body && depth < 12; depth++, linkRoot = linkRoot.parentElement) {
+    if (depth > 0 && topMessageCount(linkRoot) > 1) break;
+    if (/\bshared post\b|b\u00e0i vi\u1ebft \u0111\u01b0\u1ee3c chia s\u1ebb|\u0111\u00e3 chia s\u1ebb/i.test(linkRoot.innerText || linkRoot.textContent || '')) sharedContext = true;
+    const anchors = linkRoot.querySelectorAll('a[href]');
+    if (anchors.length > 64) break;
+    for (const anchor of anchors) {
+      const href = anchor.href || anchor.getAttribute('href') || '';
+      if (/\/posts\/[^/?#]+|\/permalink(?:\.php)?(?:\/[^/?#]+)?(?:[?#]|$)|\/(?:reels?|videos?)\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)|[?&]story_fbid=/i.test(href)
+        && !isCommentLink(anchor, linkRoot) && !postLinks.includes(anchor)) postLinks.push(anchor);
+    }
+  }
+  const outerPostLinks = sharedContext ? postLinks.filter((anchor) => linkRank(anchor) < 2) : postLinks;
+  outerPostLinks.sort((a, b) => linkRank(a) - linkRank(b));
+  const postLink = outerPostLinks[0];
+  const markerKey = node.getAttribute('data-m8-post-key') || '';
+  let markerUrl = '';
+  try { if (markerKey) markerUrl = new URL(markerKey, location.href).href; } catch {}
+  const postUrl = postLink ? (postLink.href || postLink.getAttribute('href') || '') : markerUrl;
   const lowerUrl = postUrl.toLowerCase();
   const postType = /\/(reel|reels|videos?|watch)\b/.test(lowerUrl) || node.querySelector('video')
     ? 'video'
     : /\/photo\/?\?/.test(lowerUrl) || node.querySelector('img[src*="scontent"]')
       ? 'photo'
       : 'text';
-  result.push({ post_url: postUrl, candidate_index: candidateIndex, content, post_type: postType, published_at: publishedAt, published_text: publishedText });
+  result.push({
+    post_url: postUrl,
+    post_key: markerKey,
+    card_signature: node.getAttribute('data-m8-card-signature') || '',
+    candidate_index: candidateIndex,
+    content,
+    post_type: postType,
+    published_at: publishedAt,
+    published_text: publishedText,
+  });
 }
 return result;
 """
@@ -624,12 +779,22 @@ return result;
 _FINISH_BATCH_JS = r"""
 const token = arguments[0];
 const trim = !!arguments[1];
+const pendingIndexes = new Set((arguments[2] || []).map(Number));
 for (const message of document.querySelectorAll('[data-m8-message-root="' + token + '"]')) {
   message.removeAttribute('data-m8-message-root');
 }
-for (const el of document.querySelectorAll('[data-m8-batch="' + token + '"]')) {
+for (const [index, el] of Array.from(document.querySelectorAll('[data-m8-batch="' + token + '"]')).entries()) {
   el.removeAttribute('data-m8-batch');
-  el.setAttribute('data-m8-done', '1');
+  if (pendingIndexes.has(index)) {
+    const retries = Number(el.getAttribute('data-m8-pending-retries') || '0');
+    el.setAttribute('data-m8-pending-retries', String(retries + 1));
+    el.removeAttribute('data-m8-done');
+  } else {
+    el.removeAttribute('data-m8-pending-retries');
+    el.removeAttribute('data-m8-embed-attempts');
+    el.removeAttribute('data-m8-embed-next-at');
+    el.setAttribute('data-m8-done', '1');
+  }
 }
 let trimmed = 0;
 if (trim) {
@@ -653,7 +818,9 @@ return trimmed;
 """
 
 _SCROLL_JS = r"""(() => {
-  const step = Math.max(320, Math.round(window.innerHeight * 0.45));
+  // Small overlapping steps let Facebook hydrate each post card before older
+  // cards are virtualized out of the feed.
+  const step = Math.max(240, Math.round(window.innerHeight * 0.3));
   const root = document.scrollingElement || document.documentElement;
   const rootBefore = root.scrollTop || 0;
   window.scrollBy(0, step);
@@ -662,7 +829,8 @@ _SCROLL_JS = r"""(() => {
   }
 
   // Một số layout Facebook cuộn trong vùng feed thay vì document.
-  const anchors = document.querySelectorAll(
+  const scanScope = document.querySelector('[data-m8-posts-scope="1"]') || document;
+  const anchors = scanScope.querySelectorAll(
     'a[href*="/posts/"], a[href*="/permalink"], a[href*="/reel/"], a[href*="/reels/"], a[href*="/videos/"], a[href*="story_fbid="]'
   );
   const candidates = new Set();
@@ -696,7 +864,8 @@ _SCROLL_JS = r"""(() => {
 _SCROLL_BOTTOM_JS = r"""(() => {
   const root = document.scrollingElement || document.documentElement;
   window.scrollTo(0, root.scrollHeight);
-  const anchors = document.querySelectorAll(
+  const scanScope = document.querySelector('[data-m8-posts-scope="1"]') || document;
+  const anchors = scanScope.querySelectorAll(
     'a[href*="/posts/"], a[href*="/permalink"], a[href*="/reel/"], a[href*="/reels/"], a[href*="/videos/"], a[href*="story_fbid="]'
   );
   const candidates = new Set();
@@ -837,14 +1006,19 @@ def _select_posts_tab(driver, stop: threading.Event) -> bool:
     """Select Posts on Pages; profiles may expose their posts directly in the feed."""
     try:
         state = driver.execute_script(_OPEN_POSTS_TAB_JS) or {}
-        if not state.get("found"):
-            if state.get("is_profile"):
-                logger.info("Profile page has no separate Posts tab; continuing with its default feed.")
-                return True
-            return False
         if state.get("clicked"):
             stop.wait(1.5)
-        return True
+            state = driver.execute_script(_OPEN_POSTS_TAB_JS) or {}
+        for _ in range(5):
+            if state.get("found"):
+                return True
+            if state.get("is_profile"):
+                logger.info("Profile feed has no Posts heading; continuing with its default feed.")
+                return True
+            if not state.get("posts_heading") or stop.wait(0.8):
+                return False
+            state = driver.execute_script(_OPEN_POSTS_TAB_JS) or {}
+        return bool(state.get("found"))
     except Exception as exc:
         logger.debug("Unable to select Facebook Posts tab: %s", exc)
         return False
@@ -871,7 +1045,7 @@ def _run_fetch_job(
     from modules.module_02_account_manager.services.browser_service import HWID
     from modules.module_08_interaction_seeding.automation import FacebookSeedingBot
     from modules.module_08_interaction_seeding.routes.seeding_routes import _safe_close_seeding_driver, broadcast
-    from modules.module_11_page_scanner.page_detail_scan import _open_and_wait, has_session_cookie
+    from modules.module_11_page_scanner.page_detail_scan import _open_and_wait
 
     owner = str(owner_id)
     ctx_token = owner_context.set(owner)
@@ -909,34 +1083,34 @@ def _run_fetch_job(
         log("info", f"Mở Chrome của nick {account_uid} để lấy bài…")
         driver = create_driver(uid=account_uid, headless=False, proxy=account.proxy, scope="seeding")
         bot = FacebookSeedingBot(driver)
-        if not bot.is_facebook_session_alive(navigate=True):
+        # Mở thẳng trang nguồn rồi kiểm tra phiên tại đó; tránh mở trang chủ trước
+        # và điều hướng qua lại nhiều lần trong Chrome.
+        log("info", f"Mở {source_url}")
+        _open_and_wait(driver, source_url, stop)
+        if stop.is_set():
+            status, reason = "STOPPED", "USER_STOPPED"
+            return
+
+        if on_checkpoint() or not bot.is_facebook_session_alive(navigate=False):
             log("warning", "Nick chưa có phiên đăng nhập — đang nạp cookie / đăng nhập…")
             if not bot.apply_facebook_support_data(account, HWID, callback=lambda m: log("info", m)):
                 reason, error = "LOGGED_OUT", "Không đăng nhập được Facebook bằng nick này."
+                return
+            if stop.is_set():
+                status, reason = "STOPPED", "USER_STOPPED"
+                return
+            _open_and_wait(driver, source_url, stop)
+            if on_checkpoint() or not bot.is_facebook_session_alive(navigate=False):
+                reason, error = "LOGGED_OUT", "Phiên Facebook chưa đăng nhập được sau khi nạp cookie."
                 return
         if stop.is_set():
             status, reason = "STOPPED", "USER_STOPPED"
             return
 
-        log("info", f"Mở {source_url}")
-        _open_and_wait(driver, source_url, stop)
         if not _select_posts_tab(driver, stop):
             error = "Không tìm thấy mục Bài viết trên trang nguồn; đã dừng để tránh quét mục Đáng chú ý."
             reason = "POSTS_TAB_NOT_FOUND"
             return
-        if on_checkpoint() or not has_session_cookie(driver):
-            log("warning", "Phiên đăng nhập bị mất — thử đăng nhập lại 1 lần…")
-            if not bot.apply_facebook_support_data(account, HWID, callback=lambda m: log("info", m)):
-                reason, error = "LOGGED_OUT", "Nick bị đăng xuất / checkpoint, không đăng nhập lại được."
-                return
-            _open_and_wait(driver, source_url, stop)
-            if on_checkpoint():
-                reason, error = "CHECKPOINT", "Nick bị checkpoint khi mở trang."
-                return
-            if not _select_posts_tab(driver, stop):
-                error = "Không tìm thấy mục Bài viết trên trang nguồn; đã dừng để tránh quét mục Đáng chú ý."
-                reason = "POSTS_TAB_NOT_FOUND"
-                return
 
         name = _source_name(driver)
         if name:
@@ -944,8 +1118,11 @@ def _run_fetch_job(
         log("info", f"Bắt đầu cuộn feed{(' của ' + name) if name else ''} — lấy tới khi hết bài hoặc bấm Dừng.")
 
         rounds = idle = errors = 0
+        seen_candidate_signatures: set[str] = set()
+        unresolved_cards: Dict[str, Dict[str, Any]] = {}
         last_height = 0
         bottom_blocked_last_round = False
+        bottom_no_progress_rounds = 0
         last_new_at = time.time()
         last_beat = 0.0
         next_rest_at = LONG_REST_EVERY
@@ -954,10 +1131,23 @@ def _run_fetch_job(
         while not stop.is_set():
             rounds += 1
             batch = f"b{rounds}"
+            marked = 0
             try:
                 info = driver.execute_script(_MARK_BATCH_JS, batch, BATCH_SIZE) or {}
                 marked = int(info.get("marked") or 0)
                 height = int(info.get("height") or 0)
+                candidate_signatures = {
+                    str(signature)
+                    for signature in (card.get("signature") for card in (info.get("cards") or []))
+                    if signature
+                }
+                candidate_progress = len(candidate_signatures - seen_candidate_signatures)
+                seen_candidate_signatures.update(candidate_signatures)
+                cards_by_index = {
+                    int(card.get("index")): card
+                    for card in (info.get("cards") or [])
+                    if card.get("index") is not None
+                }
                 fresh = 0
                 if marked:
                     # Facebook updates a caption asynchronously after "See more".
@@ -965,19 +1155,95 @@ def _run_fetch_job(
                         time.sleep(0.9)
                     batch_selector = f'[data-m8-batch="{batch}"]'
                     posts = _read_post_batch(driver, batch_selector)
+                    if posts and any(not post.get("post_url") or not (post.get("published_at") or post.get("published_text")) for post in posts):
+                        # The feed can render the post card before its permalink timestamp is hydrated.
+                        # Re-read this small batch once so the date is saved with the post on first display.
+                        stop.wait(0.35)
+                        refreshed_posts = _read_post_batch(driver, batch_selector)
+                        posts_by_identity = {
+                            (post.get("post_key") or post.get("card_signature") or f"candidate:{post.get('candidate_index')}"): post
+                            for post in posts
+                        }
+                        for refreshed in refreshed_posts:
+                            key = refreshed.get("post_key") or refreshed.get("card_signature") or f"candidate:{refreshed.get('candidate_index')}"
+                            previous = posts_by_identity.get(key)
+                            if previous is None:
+                                posts_by_identity[key] = refreshed
+                                continue
+                            if not previous.get("published_at") and refreshed.get("published_at"):
+                                previous["published_at"] = refreshed["published_at"]
+                                previous["published_text"] = refreshed.get("published_text")
+                            if len(refreshed.get("content") or "") > len(previous.get("content") or ""):
+                                previous["content"] = refreshed["content"]
+                            if not previous.get("post_type") and refreshed.get("post_type"):
+                                previous["post_type"] = refreshed["post_type"]
+                        posts = list(posts_by_identity.values())
+                    resolved_candidate_indexes = {
+                        int(post["candidate_index"])
+                        for post in posts
+                        if post.get("candidate_index") is not None
+                        and post.get("post_url")
+                        and (post.get("published_at") or post.get("published_text"))
+                    }
+                    complete_indexes = set(resolved_candidate_indexes)
+                    for post in posts:
+                        index = post.get("candidate_index")
+                        card = cards_by_index.get(int(index)) if index is not None else {}
+                        signature = str(post.get("card_signature") or (card or {}).get("signature") or "")
+                        key = str(post.get("post_key") or (card or {}).get("post_key") or "")
+                        if signature or key:
+                            identity = key or signature
+                            if post.get("post_url") and (post.get("published_at") or post.get("published_text")):
+                                unresolved_cards.pop(identity, None)
+                                if signature:
+                                    unresolved_cards.pop(signature, None)
+                            else:
+                                unresolved_cards[identity] = {
+                                    "signature": signature,
+                                    "post_key": key,
+                                    "post_url": post.get("post_url"),
+                                    "published_at": post.get("published_at"),
+                                }
+                    for index, card in cards_by_index.items():
+                        identity = str(card.get("post_key") or card.get("signature") or f"candidate:{rounds}:{index}")
+                        if index in complete_indexes:
+                            unresolved_cards.pop(identity, None)
+                            if card.get("signature"):
+                                unresolved_cards.pop(str(card["signature"]), None)
+                        elif not any(int(post.get("candidate_index", -1)) == index for post in posts):
+                            unresolved_cards[identity] = {
+                                "signature": card.get("signature"),
+                                "post_key": card.get("post_key"),
+                                "post_url": "",
+                                "published_at": None,
+                            }
+                    pending_candidate_indexes = sorted(
+                        set(range(marked)) - resolved_candidate_indexes
+                        | {
+                            int(post["candidate_index"])
+                            for post in posts
+                            if post.get("candidate_index") is not None
+                            and (not post.get("post_url") or not (post.get("published_at") or post.get("published_text")))
+                        }
+                    )
                     rows = prepare_rows(posts)
                     fresh = sum(1 for r in rows if r["post_key"] not in found_keys)
                     found_keys.update(r["post_key"] for r in rows)
                     if rows:
                         # Chỉ lưu tạm (RAM + file trên máy) — DB chỉ ghi khi người dùng bấm thêm bài đã chọn
                         new_total += fetched_posts_store.upsert(owner_id, source_key, job_id, rows)
-                    driver.execute_script(_FINISH_BATCH_JS, batch, TRIM_MEDIA)
+                    driver.execute_script(_FINISH_BATCH_JS, batch, TRIM_MEDIA, pending_candidate_indexes)
                 errors = 0
             except Exception as exc:
                 if _browser_gone(exc):
                     error = "Chrome đã bị đóng trong lúc lấy bài."
                     return
                 errors += 1
+                if marked:
+                    try:
+                        driver.execute_script(_FINISH_BATCH_JS, batch, False, list(range(marked)))
+                    except Exception:
+                        pass
                 logger.warning(f"[SeedingFetch #{job_id}] vòng {rounds} lỗi: {exc}")
                 if errors >= MAX_ROUND_ERRORS:
                     error = f"Lỗi liên tục khi đọc bài: {exc}"
@@ -986,9 +1252,9 @@ def _run_fetch_job(
                 continue
 
             now = time.time()
-            if fresh:
+            if fresh or candidate_progress:
                 last_new_at = now
-            if fresh or now - last_beat >= HEARTBEAT_EVERY_S:
+            if fresh or candidate_progress or now - last_beat >= HEARTBEAT_EVERY_S:
                 _update_job(job_id, found_count=len(found_keys), new_count=new_total, heartbeat_at=vn_now())
                 last_beat = now
             if len(found_keys) >= next_log_at:
@@ -1000,13 +1266,35 @@ def _run_fetch_job(
             height_increased = height > last_height
             # DOM có thể dựng lại node cũ khiến marked > 0 dù không có bài mới.
             # Khi đã chạm đáy, chỉ cần một vòng xác nhận không có bài mới/chiều cao mới.
-            if bottom_blocked_last_round and not fresh and not height_increased:
-                status, reason = "COMPLETED", "END_OF_FEED"
-                break
+            if bottom_blocked_last_round and not fresh and not candidate_progress and not height_increased:
+                bottom_no_progress_rounds += 1
+                if bottom_no_progress_rounds >= 8:
+                    missing_links = sum(1 for card in unresolved_cards.values() if not card.get("post_url"))
+                    missing_dates = sum(
+                        1 for card in unresolved_cards.values()
+                        if card.get("post_url") and not (card.get("published_at") or card.get("published_text"))
+                    )
+                    if missing_links:
+                        status, reason = "FAILED", "INCOMPLETE_POST_DATA"
+                        error = f"C\u00f2n {missing_links} b\u00e0i ch\u01b0a x\u00e1c \u0111\u1ecbnh \u0111\u01b0\u1ee3c link b\u00e0i vi\u1ebft; c\u00e1c b\u00e0i n\u00e0y ch\u01b0a th\u1ec3 th\u00eam v\u00e0o danh s\u00e1ch seeding."
+                    elif missing_dates:
+                        status, reason = "COMPLETED", "END_OF_FEED_WITH_MISSING_DATES"
+                        error = f"\u0110\u00e3 qu\u00e9t xong; Facebook ch\u01b0a cung c\u1ea5p ng\u00e0y \u0111\u0103ng cho {missing_dates} b\u00e0i. C\u00e1c b\u00e0i n\u00e0y v\u1eabn c\u00f3 trong danh s\u00e1ch."
+                    else:
+                        status, reason = "COMPLETED", "END_OF_FEED"
+                    break
+                # Facebook may still be fetching the next batch after scroll
+                # position reaches the current bottom. Recheck several times.
+                if stop.wait(4.0):
+                    status, reason = "STOPPED", "USER_STOPPED"
+                    break
+                driver.execute_script(_SCROLL_BOTTOM_JS)
+                continue
+            bottom_no_progress_rounds = 0
             bottom_blocked_last_round = False
 
             # Có bài mới trên trang hoặc trang dài thêm (Facebook vừa tải thêm) = còn tiến triển
-            if marked or height_increased:
+            if fresh or candidate_progress or height_increased:
                 idle = 0
             else:
                 idle += 1
@@ -1021,7 +1309,19 @@ def _run_fetch_job(
                 bottom_blocked_last_round = True
                 continue
             if now - last_new_at >= NO_NEW_TIMEOUT_S:
-                status, reason = "COMPLETED", "END_OF_FEED"
+                missing_links = sum(1 for card in unresolved_cards.values() if not card.get("post_url"))
+                missing_dates = sum(
+                    1 for card in unresolved_cards.values()
+                    if card.get("post_url") and not (card.get("published_at") or card.get("published_text"))
+                )
+                if missing_links:
+                    status, reason = "FAILED", "INCOMPLETE_POST_DATA"
+                    error = f"H\u1ebft th\u1eddi gian ch\u1edd; c\u00f2n {missing_links} b\u00e0i ch\u01b0a x\u00e1c \u0111\u1ecbnh \u0111\u01b0\u1ee3c link b\u00e0i vi\u1ebft."
+                elif missing_dates:
+                    status, reason = "COMPLETED", "END_OF_FEED_WITH_MISSING_DATES"
+                    error = f"\u0110\u00e3 qu\u00e9t xong; Facebook ch\u01b0a cung c\u1ea5p ng\u00e0y \u0111\u0103ng cho {missing_dates} b\u00e0i. C\u00e1c b\u00e0i n\u00e0y v\u1eabn c\u00f3 trong danh s\u00e1ch."
+                else:
+                    status, reason = "COMPLETED", "END_OF_FEED"
                 break
             if rounds % 10 == 0 and on_checkpoint():
                 reason, error = "CHECKPOINT", "Nick bị checkpoint / đăng xuất giữa chừng."

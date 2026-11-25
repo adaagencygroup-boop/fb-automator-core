@@ -25,9 +25,9 @@ const PAGE_SIZE = 100;
 const POLL_MS = 2000;
 const FETCH_ACCOUNT_CURSOR_KEY = "m8-seeding-post-fetch-account-cursor";
 const TYPES = {
-  photo: { Icon: ImageIcon, label: "Ảnh" },
-  video: { Icon: Video, label: "Video" },
-  text: { Icon: FileText, label: "Bài viết" },
+  photo: { Icon: ImageIcon },
+  video: { Icon: Video },
+  text: { Icon: FileText },
 };
 const INPUT =
   "min-w-0 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs text-gray-800 outline-none placeholder:text-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50 disabled:text-gray-400";
@@ -65,7 +65,11 @@ function statusLine(job) {
   const name = job.source_name ? ` · ${job.source_name}` : "";
   if (job.status === "RUNNING") return { tone: "run", text: `Đang lấy bài… đã quét được ${n} bài viết${name}` };
   if (job.status === "STOPPING") return { tone: "run", text: `Đang dừng… đã quét được ${n} bài viết${name}` };
-  if (job.status === "COMPLETED") return { tone: "ok", text: `Đã quét được ${n} bài viết${name}.` };
+  if (job.status === "COMPLETED") {
+    return job.error_message
+      ? { tone: "warn", text: "\u0110\u00e3 qu\u00e9t xong " + n + " b\u00e0i: " + job.error_message }
+      : { tone: "ok", text: "\u0110\u00e3 qu\u00e9t \u0111\u01b0\u1ee3c " + n + " b\u00e0i vi\u1ebft" + name + "." };
+  }
   if (job.status === "STOPPED") return { tone: "warn", text: `Đã dừng lấy bài: quét được ${n} bài viết${name}.` };
   return {
     tone: "err",
@@ -83,11 +87,9 @@ const TONE = {
 function splitContent(content) {
   const text = String(content || "").trim();
   if (!text || text === "Bài viết không có nội dung") {
-    return { title: "Bài viết không có nội dung", desc: "" };
+    return "Bài viết không có nội dung";
   }
-  const [first, ...rest] = text.split(/\r?\n+/);
-  if (first.length > 100) return { title: `${first.slice(0, 100)}…`, desc: text };
-  return { title: first, desc: rest.join(" ") };
+  return text.replace(/\r?\n+/g, " ");
 }
 
 export default function PostSourceFetcher({
@@ -296,6 +298,7 @@ export default function PostSourceFetcher({
               terminalToastJobsRef.current.add(terminalKey);
               loadList(true);
               if (next.status === "STOPPED") toast.warning(statusLine(next).text, "ĐÃ DỪNG");
+              else if (next.status === "COMPLETED" && next.error_message) toast.warning(statusLine(next).text, "\u0110\u00c3 QU\u00c9T XONG");
               else if (next.status !== "COMPLETED") toast.error(statusLine(next).text, "LẤY BÀI THẤT BẠI");
             }
           } else if (next.found_count !== lastFound.current) {
@@ -439,9 +442,10 @@ export default function PostSourceFetcher({
               type="text"
               inputMode="url"
               placeholder="https://www.facebook.com/ten-trang"
+              maxLength={2048}
               value={sourceUrl}
               disabled={lockInputs}
-              onChange={(e) => setSourceUrl(e.target.value)}
+              onChange={(e) => setSourceUrl(e.target.value.replace(/[\s&]/g, "").slice(0, 2048))}
               className={`${INPUT} block w-full shadow-sm`}
             />
           </label>
@@ -595,10 +599,10 @@ export default function PostSourceFetcher({
                 </p>
               ) : (
                 list.items.map((p) => {
-                  const { Icon, label } = TYPES[p.post_type] || TYPES.text;
+                  const { Icon } = TYPES[p.post_type] || TYPES.text;
                   const checked = p.added || isSelected(sel, p.id);
-                  const { title, desc } = splitContent(p.content);
-                    const date = formatDateOnly(p.published_text) || formatDateOnly(p.published_at);
+                  const contentPreview = splitContent(p.content);
+                  const date = formatDateOnly(p.published_text) || formatDateOnly(p.published_at) || "\u0043\u0068\u01b0\u0061\u0020\u0111\u1ecdc\u0020\u0111\u01b0\u1ee3c\u0020ng\u00e0y\u0020\u0111\u0103ng";
                   return (
                     <label
                       key={p.id}
@@ -634,11 +638,9 @@ export default function PostSourceFetcher({
                       />
                       <Icon className="size-4 shrink-0 text-gray-400" aria-hidden="true" />
                       <span className="min-w-0 space-y-1">
-                        <span className="block break-words text-xs font-semibold text-gray-900">{title}</span>
-                        {desc && <span className="line-clamp-2 break-words text-xs text-gray-500">{desc}</span>}
+                        <span className="line-clamp-2 break-words text-xs font-bold text-gray-900">{contentPreview}</span>
                         <span className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-gray-700">{label}</span>
-                          {date && <span>{date}</span>}
+                          <span className={date.includes("ng\u00e0y") ? "text-amber-700" : ""}>{date}</span>
                           {p.added && <span className="font-medium text-emerald-700">Đã có trong danh sách seeding</span>}
                         </span>
                       </span>
