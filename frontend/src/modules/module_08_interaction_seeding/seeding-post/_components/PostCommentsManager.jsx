@@ -117,7 +117,7 @@ export default function PostCommentsManager({
                 type="button"
                 onClick={() => setIsExcelModalOpen(true)}
                 disabled={isAddingBulk}
-                className="flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-gray-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <FileSpreadsheet className="size-3.5 text-emerald-600" aria-hidden="true" />
                 Import file (Excel)
@@ -126,7 +126,7 @@ export default function PostCommentsManager({
                 type="button"
                 onClick={handleBulkAdd}
                 disabled={bulkText.trim().length === 0 || isAddingBulk}
-                className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
+                className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-gray-400 disabled:shadow-none"
               >
                 {isAddingBulk ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Plus className="size-3.5" aria-hidden="true" />}
                 {isAddingBulk ? "Đang thêm..." : "Thêm vào danh sách"}
@@ -139,7 +139,7 @@ export default function PostCommentsManager({
             onChange={(e) => setBulkText(e.target.value)}
             aria-label="Dán danh sách bình luận, mỗi dòng 1 bình luận"
             placeholder={`Dán danh sách bình luận (mỗi dòng 1 bình luận)...\nBài viết rất hữu ích, cảm ơn ad!\nThông tin quá hay 👍\nMình rất thích, cảm ơn bạn đã chia sẻ!\nĐịa điểm này đẹp quá, nhất định sẽ đi!\nBài viết chất lượng, rất chi tiết!\nCảnh đẹp quá, cho mình xin thêm thông tin với ạ!`}
-            className="h-[188px] w-full resize-none rounded-xl border border-slate-200 bg-white p-3.5 text-xs leading-relaxed text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+            className="h-[188px] w-full resize-none rounded-xl border border-slate-200 bg-white p-3.5 text-xs leading-relaxed text-gray-800 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
           />
 
         </div>
@@ -147,9 +147,9 @@ export default function PostCommentsManager({
         {/* Cột phải: danh sách đang dùng */}
         <div className="space-y-3">
           <div className="flex h-8 items-center justify-between gap-2">
-            <span className="text-xs font-bold text-slate-800">
+            <span className="text-xs font-bold text-gray-800">
               Danh sách bình luận{" "}
-              <span className="font-semibold text-slate-500">
+              <span className="font-semibold text-gray-500">
                 ({comments.length.toLocaleString("vi-VN")}
                 {commentPerPost > 1 ? `/${commentPerPost.toLocaleString("vi-VN")}` : ""})
               </span>
@@ -171,19 +171,19 @@ export default function PostCommentsManager({
 
           <div className="h-[188px] overflow-y-auto rounded-xl border border-slate-200 bg-white">
             {comments.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-xs italic text-slate-400">
+              <div className="flex h-full items-center justify-center text-xs italic text-gray-400">
                 Chưa có bình luận nào trong danh sách.
               </div>
             ) : (
               <table className="w-full border-collapse text-left text-xs">
-                <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 font-semibold text-slate-600">
+                <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 font-semibold text-gray-600">
                   <tr>
                     <th className="w-10 px-3 py-2.5">STT</th>
                     <th className="px-3 py-2.5">Nội dung bình luận</th>
                     <th className="w-20 px-3 py-2.5 text-right">Thao tác</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-700">
+                <tbody className="divide-y divide-slate-100 text-gray-700">
                   {comments.map((cmt, idx) => (
                     <tr key={idx} className="hover:bg-blue-50/30">
                       <td className="px-3 py-2.5 font-semibold text-blue-600">{idx + 1}</td>
@@ -197,7 +197,7 @@ export default function PostCommentsManager({
                           disabled={isRunning}
                           aria-label={`Xóa bình luận ${idx + 1}`}
                           title={isRunning ? "Đang chạy seeding, không thể xóa" : "Xóa bình luận này"}
-                          className="inline-flex items-center justify-center rounded-md p-1 text-rose-500 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:text-slate-300"
+                          className="inline-flex items-center justify-center rounded-md p-1 text-rose-500 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:text-gray-300"
                         >
                           <Trash2 className="size-3.5" aria-hidden="true" />
                         </button>
@@ -210,7 +210,7 @@ export default function PostCommentsManager({
           </div>
 
           {comments.length > 0 && variantsTotal > comments.length && (
-            <p className="text-[11px] text-slate-500">Spintax: {variantsTotal.toLocaleString("vi-VN")} câu khác nhau.</p>
+            <p className="text-[11px] text-gray-500">Spintax: {variantsTotal.toLocaleString("vi-VN")} câu khác nhau.</p>
           )}
           {notEnough && (
             <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-[11px] text-amber-900">

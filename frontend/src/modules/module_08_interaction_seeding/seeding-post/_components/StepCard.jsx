@@ -10,7 +10,7 @@ export function StepHeader({ step, title, children }) {
         <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-red-500 text-xs font-bold text-white">
           {step}
         </span>
-        <h2 className="text-base font-bold text-slate-900">{title}</h2>
+        <h2 className="text-base font-bold text-gray-900">{title}</h2>
       </div>
       {children ? <div className="flex flex-wrap items-center gap-2">{children}</div> : null}
     </div>

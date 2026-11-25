@@ -85,11 +85,11 @@ export default function PostAccountConfig({
               }
               className={`inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm ${
                 isRunning || availableAccounts === 0
-                  ? "bg-slate-200 text-slate-400 border border-slate-300/80 cursor-not-allowed shadow-none select-none"
+                  ? "bg-slate-200 text-gray-400 border border-slate-300/80 cursor-not-allowed shadow-none select-none"
                   : "bg-blue-600 hover:bg-blue-700 text-white shadow-blue-500/20 active:scale-[0.98] cursor-pointer"
               }`}
             >
-              <UserCheck className={`w-4 h-4 ${isRunning || availableAccounts === 0 ? "text-slate-400" : "text-white"}`} />
+              <UserCheck className={`w-4 h-4 ${isRunning || availableAccounts === 0 ? "text-gray-400" : "text-white"}`} />
               Chọn tài khoản ({accountCount})
             </button>
           </div>

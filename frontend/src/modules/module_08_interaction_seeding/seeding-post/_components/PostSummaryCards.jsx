@@ -44,7 +44,7 @@ export default function PostSummaryCards({
             <ClipboardList className="w-4 h-4" />
             <h3 className="text-xs font-bold tracking-wide">Tóm tắt cấu hình</h3>
           </div>
-          <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-medium">
+          <span className="text-[11px] bg-white/20 px-2 py-0.5 rounded-full font-medium">
             Bài viết
           </span>
         </div>
@@ -66,17 +66,17 @@ export default function PostSummaryCards({
             <span className="text-gray-500">Loại tương tác</span>
             <div className="flex flex-wrap gap-1 justify-end">
               {doLike && (
-                <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200">
+                <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[11px] font-bold border border-emerald-200">
                   Cảm xúc
                 </span>
               )}
               {doComment && (
-                <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 text-[10px] font-bold border border-blue-200">
+                <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 text-[11px] font-bold border border-blue-200">
                   Bình luận
                 </span>
               )}
               {doShare && (
-                <span className="px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 text-[10px] font-bold border border-purple-200">
+                <span className="px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 text-[11px] font-bold border border-purple-200">
                   Chia sẻ
                 </span>
               )}
@@ -116,7 +116,7 @@ export default function PostSummaryCards({
               </span>
               <span>Phân bổ lượt (dự kiến)</span>
             </div>
-            <span className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-semibold">
+            <span className="text-[11px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-semibold">
               Đã cân bằng
             </span>
           </div>

@@ -252,8 +252,8 @@ function InteractionCard({ Icon, title, desc, checked, onChecked, disabled }) {
         <Icon className="size-[18px]" aria-hidden="true" />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block text-xs font-bold text-slate-900">{title}</span>
-        <span className="block text-xs text-slate-500">{desc}</span>
+        <span className="block text-xs font-bold text-gray-900">{title}</span>
+        <span className="block text-xs text-gray-500">{desc}</span>
       </span>
       <input
         type="checkbox"
@@ -311,12 +311,12 @@ export default function PostReactionSelector({
           <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-slate-800">Cảm xúc Facebook (Reactions):</span>
+                <span className="text-xs font-bold text-gray-800">Cảm xúc Facebook (Reactions):</span>
                 <span className="rounded-md border border-blue-100 bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-600">
                   Đã chọn {selectedReactions.length} cảm xúc
                 </span>
               </div>
-              <span className="text-xs text-slate-400">Nhấn để bật / tắt cảm xúc mong muốn</span>
+              <span className="text-xs text-gray-400">Nhấn để bật / tắt cảm xúc mong muốn</span>
             </div>
 
             <div className="grid grid-cols-4 gap-3 sm:grid-cols-7">
@@ -331,7 +331,7 @@ export default function PostReactionSelector({
                     aria-pressed={isSelected}
                     onClick={() => onToggleReaction(r.id)}
                     className={`group relative flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 bg-white px-2 py-3 transition-all select-none disabled:cursor-not-allowed disabled:opacity-60 ${
-                      isSelected ? r.on : "border-slate-100 text-slate-400 hover:border-slate-200"
+                      isSelected ? r.on : "border-slate-100 text-gray-400 hover:border-slate-200"
                     }`}
                   >
                     {isSelected && (
@@ -355,10 +355,10 @@ export default function PostReactionSelector({
             </div>
           </div>
 
-          <div className="flex items-start gap-2 rounded-xl border border-blue-100 bg-blue-50/60 px-3.5 py-2.5 text-xs text-slate-700">
+          <div className="flex items-start gap-2 rounded-xl border border-blue-100 bg-blue-50/60 px-3.5 py-2.5 text-xs text-gray-700">
             <Info className="mt-0.5 size-4 shrink-0 text-blue-600" aria-hidden="true" />
             <span>
-              <strong className="text-slate-900">Chọn nhiều cảm xúc:</strong> Hệ thống sẽ tự động random phân bổ đều hoặc
+              <strong className="text-gray-900">Chọn nhiều cảm xúc:</strong> Hệ thống sẽ tự động random phân bổ đều hoặc
               ngẫu nhiên giữa các cảm xúc đã chọn cho các bài viết và tài khoản thực thi.
             </span>
           </div>

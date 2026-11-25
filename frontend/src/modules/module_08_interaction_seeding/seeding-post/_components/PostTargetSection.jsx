@@ -463,7 +463,7 @@ export default function PostTargetSection({
       {targets.length > 0 && (
         <div className="space-y-2 pt-1">
           <div className="flex items-center justify-between px-1">
-            <span className="text-xs font-bold text-slate-900">
+            <span className="text-xs font-bold text-gray-900">
               Danh sách bài viết đã thêm:{" "}
               <span className="text-blue-600 font-semibold">({targets.length.toLocaleString("vi-VN")})</span>
             </span>
@@ -489,7 +489,7 @@ export default function PostTargetSection({
           <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
             <div className="max-h-60 overflow-y-auto overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
-                <thead className="bg-slate-50 sticky top-0 z-10 text-slate-600 font-semibold border-b border-slate-200">
+                <thead className="bg-slate-50 sticky top-0 z-10 text-gray-600 font-semibold border-b border-slate-200">
                   <tr>
                     <th className="py-2.5 px-4 w-14 text-center whitespace-nowrap">STT</th>
                     <th className="py-2.5 px-4 whitespace-nowrap">Tên hiển thị</th>

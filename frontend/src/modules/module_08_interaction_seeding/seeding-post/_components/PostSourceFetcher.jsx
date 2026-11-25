@@ -30,9 +30,9 @@ const TYPES = {
   text: { Icon: FileText, label: "Bài viết" },
 };
 const INPUT =
-  "min-w-0 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50 disabled:text-slate-400";
+  "min-w-0 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs text-gray-800 outline-none placeholder:text-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50 disabled:text-gray-400";
 const PRIMARY =
-  "inline-flex items-center justify-center gap-2 rounded-full bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400";
+  "inline-flex items-center justify-center gap-2 rounded-full bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-gray-400";
 const CHECKBOX =
   "size-4 shrink-0 cursor-pointer appearance-none rounded-full border-2 border-slate-300 bg-white checked:border-blue-600 checked:bg-blue-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:opacity-50 disabled:checked:border-slate-400 disabled:checked:bg-slate-400 disabled:checked:opacity-100";
 const fmt = (n) => Number(n || 0).toLocaleString("vi-VN");
@@ -414,7 +414,7 @@ export default function PostSourceFetcher({
     <>
       <div className="space-y-4 p-5 sm:p-6">
         <form onSubmit={handleStart} className="space-y-3">
-          <label className="block space-y-1.5 text-xs text-slate-600">
+          <label className="block space-y-1.5 text-xs text-gray-600">
             <span>Link Page hoặc trang cá nhân Facebook</span>
             <input
               type="text"
@@ -449,8 +449,8 @@ export default function PostSourceFetcher({
         </form>
 
         {accountUid ? (
-          <p className="text-xs text-slate-500">
-            Tài khoản quét lượt này: <b className="font-semibold text-slate-700">{accountLabel}</b> (luân phiên theo các tài khoản đã tích chọn)
+          <p className="text-xs text-gray-500">
+            Tài khoản quét lượt này: <b className="font-semibold text-gray-700">{accountLabel}</b> (luân phiên theo các tài khoản đã tích chọn)
           </p>
         ) : (
           <p role="alert" className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
@@ -482,20 +482,20 @@ export default function PostSourceFetcher({
           <>
             <div className="space-y-3 border-t border-slate-100 pt-4">
               <div className="flex items-center justify-between gap-2">
-                <h3 className="text-xs font-bold text-slate-900">Danh sách bài viết</h3>
+                <h3 className="text-xs font-bold text-gray-900">Danh sách bài viết</h3>
                 <div className="flex items-center gap-2">
                   {list.items.length > 0 && (
                     <button
                       type="button"
                       onClick={handleClearResults}
                       disabled={fetchBusy || loadingList}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <RefreshCw className={`size-3 ${loadingList ? "animate-spin" : ""}`} aria-hidden="true" />
                       Làm mới
                     </button>
                   )}
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{fmt(list.total)} kết quả</span>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-gray-600">{fmt(list.total)} kết quả</span>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -507,7 +507,7 @@ export default function PostSourceFetcher({
                   onChange={(e) => setQInput(e.target.value)}
                   className={`${INPUT} min-w-44 flex-1`}
                 />
-                <label className="flex items-center gap-2 text-xs text-slate-500">
+                <label className="flex items-center gap-2 text-xs text-gray-500">
                   Số bài
                   <input
                     type="text"
@@ -534,13 +534,13 @@ export default function PostSourceFetcher({
                   type="button"
                   onClick={handlePickFirst}
                   disabled={busy || !list.total || !pickValid}
-                  className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+                  className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs text-gray-700 hover:bg-slate-200 disabled:opacity-50"
                 >
                   Chọn {pickValid ? fmt(pickN) : "N"} bài
                 </button>
               </div>
               <div className="flex items-center justify-between gap-3 text-xs">
-                <label className="flex cursor-pointer items-center gap-2 text-slate-700">
+                <label className="flex cursor-pointer items-center gap-2 text-gray-700">
                   <input
                     type="checkbox"
                     className={CHECKBOX}
@@ -554,7 +554,7 @@ export default function PostSourceFetcher({
                   type="button"
                   disabled={busy || !chosen}
                   onClick={() => setSel(emptySelection())}
-                  className="shrink-0 px-2 py-1 text-slate-500 hover:text-blue-700 disabled:opacity-50"
+                  className="shrink-0 px-2 py-1 text-gray-500 hover:text-blue-700 disabled:opacity-50"
                 >
                   Bỏ chọn
                 </button>
@@ -563,11 +563,11 @@ export default function PostSourceFetcher({
 
             <div className="max-h-[52vh] space-y-2 overflow-y-auto overscroll-contain pr-1">
               {loadingList && !list.items.length ? (
-                <p className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 p-4 text-xs text-slate-500">
+                <p className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 p-4 text-xs text-gray-500">
                   <Loader2 className="size-4 animate-spin text-blue-600" aria-hidden="true" /> Đang tải bài viết...
                 </p>
               ) : !list.items.length ? (
-                <p className="rounded-xl border border-slate-200 p-4 text-center text-xs text-slate-500">
+                <p className="rounded-xl border border-slate-200 p-4 text-center text-xs text-gray-500">
                   {running
                     ? "Đang chờ bài đầu tiên..."
                     : q
@@ -613,12 +613,12 @@ export default function PostSourceFetcher({
                         }}
                         disabled={busy || p.added}
                       />
-                      <Icon className="size-4 shrink-0 text-slate-400" aria-hidden="true" />
+                      <Icon className="size-4 shrink-0 text-gray-400" aria-hidden="true" />
                       <span className="min-w-0 space-y-1">
-                        <span className="block break-words text-xs font-semibold text-slate-900">{title}</span>
-                        {desc && <span className="line-clamp-2 break-words text-xs text-slate-500">{desc}</span>}
-                        <span className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-700">{label}</span>
+                        <span className="block break-words text-xs font-semibold text-gray-900">{title}</span>
+                        {desc && <span className="line-clamp-2 break-words text-xs text-gray-500">{desc}</span>}
+                        <span className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-gray-700">{label}</span>
                           {date && <span>{date}</span>}
                           {p.added && <span className="font-medium text-emerald-700">Đã có trong danh sách seeding</span>}
                         </span>
@@ -628,7 +628,7 @@ export default function PostSourceFetcher({
                 })
               )}
               {list.items.length > 0 && loadingList && (
-                <div className="flex min-h-9 items-center justify-center gap-2 py-2 text-xs text-slate-500" aria-live="polite">
+                <div className="flex min-h-9 items-center justify-center gap-2 py-2 text-xs text-gray-500" aria-live="polite">
                   <Loader2 className="size-3.5 animate-spin text-blue-600" aria-hidden="true" />
                   Đang tải toàn bộ danh sách bài viết...
                 </div>
@@ -641,8 +641,8 @@ export default function PostSourceFetcher({
       {sourceKey && (
         <footer className="sticky bottom-0 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 bg-white px-5 py-3 sm:px-6">
           <div aria-live="polite">
-            <p className="text-xs font-bold text-slate-900">{fmt(chosen)} bài đã chọn</p>
-            <p className="text-xs text-slate-500">
+            <p className="text-xs font-bold text-gray-900">{fmt(chosen)} bài đã chọn</p>
+            <p className="text-xs text-gray-500">
               Bài viết chỉ lưu tạm — bấm &quot;Thêm bài viết đã chọn&quot; mới lưu vào danh sách seeding
             </p>
           </div>

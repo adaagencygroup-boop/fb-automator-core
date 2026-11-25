@@ -532,8 +532,8 @@ export default function SeedingPostPage() {
           <Send className="size-6 stroke-[2.2]" aria-hidden="true" />
         </div>
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Seeding Bài viết</h1>
-          <p className="mt-1 text-xs text-slate-500">Tăng Like, cảm xúc, bình luận và chia sẻ cho nhiều bài viết trên Facebook.</p>
+          <h1 className="text-2xl font-bold tracking-tight text-gray-900">Seeding Bài viết</h1>
+          <p className="mt-1 text-xs text-gray-500">Tăng Like, cảm xúc, bình luận và chia sẻ cho nhiều bài viết trên Facebook.</p>
         </div>
       </div>
 
