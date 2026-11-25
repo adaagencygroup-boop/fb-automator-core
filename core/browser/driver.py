@@ -503,7 +503,7 @@ def open_browser(
   options.add_argument("--profile-directory=Default")
   # Luồng chạy nhiều Chrome cùng lúc / cuộn trang dài: cửa sổ bị che hoặc thu nhỏ vẫn phải chạy trang,
   # nếu không Facebook ngừng tải thêm kết quả khi cuộn (Module 10 quét nhóm / thành viên song song).
-  if scope in ("page_scanner", "post", "group-scan", "group-members"):
+  if scope in ("page_scanner", "post", "group-scan", "group-members", "post-engagement"):
     if scope == "page_scanner":
       options.page_load_strategy = "eager"
     for _arg in (
@@ -532,7 +532,7 @@ def open_browser(
     if scope == "post":
       slot0 = int(window_slot) if window_slot is not None else (abs(hash(f"{owner or ''}:{uid}")) % 2)
       options.add_argument(f"--window-position={40 + slot0 * 120},{40 + slot0 * 40}")
-    elif scope in ("group-scan", "group-members") and window_slot is not None:
+    elif scope in ("group-scan", "group-members", "post-engagement") and window_slot is not None:
       # Mỗi Chrome song song lệch vị trí một chút để thấy được từng cửa sổ (không đè kín nhau).
       slot0 = max(0, int(window_slot)) % 5
       options.add_argument(f"--window-position={50 + slot0 * 140},{50 + slot0 * 60}")

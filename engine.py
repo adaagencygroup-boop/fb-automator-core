@@ -134,6 +134,9 @@ def _init_remaining_schemas():
       init_models as init_page_scanner_models,
     )
     init_page_scanner_models()
+  with startup_step("Module 12 Post Engagement"):
+    from modules.module_12_post_engagement.models import init_models as init_post_engagement_models
+    init_post_engagement_models()
 async def _finish_engine_startup(fast_startup: bool):
   if not fast_startup:
     await asyncio.to_thread(_init_remaining_schemas)
@@ -415,6 +418,8 @@ def fetch_pages_tokens(req: AddPageTokenRequest, request: Request):
   return start_sync(require_owner(request), req.account_uid.strip(), req.user_token.strip())
 from modules.module_11_page_scanner.api.router import router as page_scanner_router
 app.include_router(page_scanner_router)
+from modules.module_12_post_engagement.router import router as post_engagement_router
+app.include_router(post_engagement_router)
 @app.get("/api/settings")
 def get_settings():
   return {"config": settings.get_all()}
