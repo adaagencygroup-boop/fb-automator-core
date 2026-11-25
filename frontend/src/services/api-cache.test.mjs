@@ -381,6 +381,8 @@ test("mọi endpoint tiến trình có vòng setInterval đều bị loại tr�
     "/api/pages/tiktok/auth-status",    // getTikTokAuthStatus
     "/api/facebook/sync-status",        // getSyncStatus
     "/api/group-scan/check-status",     // module 10
+    "/api/page-scanner/sessions/121",   // module 11 — poll tiến độ/log phiên quét page
+    "/api/page-scanner/pages",          // module 11 — danh sách page cập nhật liên tục trong lúc quét
     "/api/farm/status",                 // module 03
   ]) {
     calls = [];

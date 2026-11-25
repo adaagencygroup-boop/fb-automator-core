@@ -5,6 +5,7 @@ Mở từng Page → đọc header (tên, followers, tích xanh, avatar, hạng 
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
