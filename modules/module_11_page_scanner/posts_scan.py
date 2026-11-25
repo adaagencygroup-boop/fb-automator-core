@@ -29,6 +29,7 @@ from .scanner import (
     _ACTIVE_PAUSE_EVENTS,
     _ACTIVE_SESSIONS_LOCK,
     _ACTIVE_STOP_EVENTS,
+    ScanStopped,
     _wait_if_paused,
     _wait_if_paused_timed,
     append_session_log,
@@ -887,9 +888,10 @@ def run_post_scan_flow(
     total_dup = 0
     batches = 0
     start_time = time.time()
-    session_keys: Set[str] = set()
+    session_keys: Set[str] = set()  # bài đã lưu trong phiên, dùng lọc trùng giữa các Page
     final_status = "COMPLETED"
     pinned_skipped = 0
+    cross_skipped = 0
     rotate_every = max(0, int(rotate_every or 0))
 
     rotation = AccountRotation(
@@ -1011,8 +1013,15 @@ def run_post_scan_flow(
                     pk = item["post_key"]
                     first_seen_on_page = pk not in page_seen
                     page_seen.add(pk)
-                    if pk in session_keys or pk in known:
+                    # Bỏ tick lọc trùng → mỗi Page lưu đủ bài của nó, chỉ lọc trong chính Page
+                    cross_page = skip_existing and pk in session_keys and pk not in known
+                    if cross_page or pk in known:
                         total_dup += 1
+                        if cross_page and first_seen_on_page:
+                            cross_skipped += 1
+                            append_session_log(
+                                session_id, f"{page_key}: bỏ qua bài trùng với Page khác {pk}", "info"
+                            )
                         in_range = not item.get("published_at") or date_in_range(
                             item["published_at"], date_from, date_to
                         )
@@ -1039,7 +1048,6 @@ def run_post_scan_flow(
                             "info",
                         )
                     new_items.append(item)
-                    session_keys.add(pk)
                     known.add(pk)
 
                 if new_items:
@@ -1048,7 +1056,8 @@ def run_post_scan_flow(
                     new_items = new_items[:room]
                     ins, upd = upsert_posts_batch(owner_key, page_key, new_items, session_id)
                     page_got += len(new_items)
-                    total_unique = len(session_keys)
+                    session_keys.update(item["post_key"] for item in new_items)
+                    total_unique += len(new_items)
                     batches += 1
                     last_new_at = time.time()
                     stagnant = 0
@@ -1145,7 +1154,7 @@ def run_post_scan_flow(
             if total_unique == 0:
                 stop_reason = "NO_NEW_RESULTS"
 
-    except Exception as exc:
+    except (Exception, ScanStopped) as exc:
         if stop_event.is_set():
             # Dừng khẩn cấp đóng Chrome giữa chừng → lỗi WebDriver là hệ quả của việc dừng
             logger.info(f"[POST_SCAN] #{session_id} dừng giữa thao tác trình duyệt: {exc}")
@@ -1156,6 +1165,8 @@ def run_post_scan_flow(
             error_message = str(exc)[:500]
             append_session_log(session_id, f"Lỗi: {error_message}", "error")
     finally:
+        # Nhả trước khi ghi DB để DB lỗi không làm kẹt khóa profile
+        rotation.release(stop_reason, keep_browser)
         duration = int(time.time() - start_time)
         final_status = {
             "USER_STOPPED": "STOPPED",
@@ -1183,10 +1194,10 @@ def run_post_scan_flow(
             (
                 f"Kết thúc POST_SCAN · {final_status}/{stop_reason} · posts={total_unique}"
                 f"{f' · bỏ {pinned_skipped} bài ghim' if pinned_skipped else ''}"
+                f"{f' · bỏ {cross_skipped} bài trùng Page khác' if cross_skipped else ''}"
             ),
             "success" if final_status == "COMPLETED" else "warn",
         )
-        rotation.release(stop_reason, keep_browser)
         with _ACTIVE_SESSIONS_LOCK:
             _ACTIVE_STOP_EVENTS.pop(session_id, None)
             _ACTIVE_PAUSE_EVENTS.pop(session_id, None)

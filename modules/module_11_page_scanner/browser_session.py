@@ -34,38 +34,92 @@ class AccountBusyError(RuntimeError):
         )
 
 
+def _is_job_stale_or_stopped(session_id: int) -> bool:
+    """Kiểm tra phiên đang giữ khóa có bị dừng, lỗi, hoàn tất hoặc không còn chạy."""
+    if not session_id:
+        return True
+    sid = int(session_id)
+    try:
+        from .scanner import _ACTIVE_STOP_EVENTS, _ACTIVE_SESSIONS_LOCK
+        with _ACTIVE_SESSIONS_LOCK:
+            ev = _ACTIVE_STOP_EVENTS.get(sid)
+            if ev and ev.is_set():
+                return True
+    except Exception:
+        pass
+
+    try:
+        from core.database import db
+        row = db.fetch_one("SELECT status FROM page_scan_sessions WHERE id = %s", (sid,))
+        if row:
+            st = str(row.get("status") or "").upper()
+            if st in ("STOPPED", "FAILED", "COMPLETED", "CANCELLED", "TIMEOUT", "ERROR"):
+                return True
+    except Exception:
+        pass
+
+    # Kiểm tra xem có thread worker nào thực sự còn đang chạy không
+    try:
+        worker_prefixes = (
+            "page_hashtag_worker_",
+            "page_scan_worker_",
+            "page_followers_worker_",
+            "page_detail_worker_",
+            "page_posts_worker_",
+        )
+        alive_worker = any(
+            t.is_alive() and any(t.name == f"{pref}{sid}" for pref in worker_prefixes)
+            for t in threading.enumerate()
+        )
+        if not alive_worker:
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
 def try_acquire_account_job(
     account_uid: str,
     session_id: int,
     job_type: str,
 ) -> None:
-    """Đăng ký acc→session. Raise AccountBusyError nếu trùng acc khác session."""
+    """Đăng ký acc→session. Tự động gỡ khóa mồ côi nếu phiên cũ đã dừng/hoàn tất."""
     uid = str(account_uid or "").strip()
     if not uid:
         raise ValueError("account_uid bắt buộc để khóa browser")
+    sid = int(session_id)
     with _ACCOUNT_JOB_LOCK:
         cur = _ACCOUNT_ACTIVE_JOBS.get(uid)
-        if cur and int(cur.get("session_id") or 0) != int(session_id):
-            raise AccountBusyError(
-                uid,
-                int(cur["session_id"]),
-                str(cur.get("job_type") or ""),
-            )
+        if cur and int(cur.get("session_id") or 0) != sid:
+            old_sid = int(cur.get("session_id") or 0)
+            if old_sid and _is_job_stale_or_stopped(old_sid):
+                logger.info(
+                    f"[Module 11] Tự động giải phóng khóa phiên cũ #{old_sid} (đã dừng) cho acc {uid} để phiên #{sid} nhận khóa"
+                )
+                _ACCOUNT_ACTIVE_JOBS.pop(uid, None)
+            else:
+                raise AccountBusyError(
+                    uid,
+                    old_sid,
+                    str(cur.get("job_type") or ""),
+                )
         _ACCOUNT_ACTIVE_JOBS[uid] = {
-            "session_id": int(session_id),
+            "session_id": sid,
             "job_type": str(job_type or ""),
         }
 
 
-def release_account_job(account_uid: str, session_id: int) -> None:
-    """Gỡ khóa nếu đúng session đang giữ."""
+def release_account_job(account_uid: str, session_id: Optional[int] = None) -> None:
+    """Gỡ khóa nếu đúng session đang giữ (hoặc ép giải phóng nếu session_id=None)."""
     uid = str(account_uid or "").strip()
     if not uid:
         return
     with _ACCOUNT_JOB_LOCK:
         cur = _ACCOUNT_ACTIVE_JOBS.get(uid)
-        if cur and int(cur.get("session_id") or 0) == int(session_id):
-            _ACCOUNT_ACTIVE_JOBS.pop(uid, None)
+        if cur:
+            if session_id is None or int(cur.get("session_id") or 0) == int(session_id):
+                _ACCOUNT_ACTIVE_JOBS.pop(uid, None)
 
 
 def get_active_job_for_account(account_uid: str) -> Optional[Dict[str, Any]]:
@@ -74,7 +128,14 @@ def get_active_job_for_account(account_uid: str) -> Optional[Dict[str, Any]]:
         return None
     with _ACCOUNT_JOB_LOCK:
         cur = _ACCOUNT_ACTIVE_JOBS.get(uid)
-        return dict(cur) if cur else None
+        if cur:
+            sid = int(cur.get("session_id") or 0)
+            if sid and _is_job_stale_or_stopped(sid):
+                logger.info(f"[Module 11] Gỡ khóa mồ côi/đã dừng của acc {uid} (phiên #{sid})")
+                _ACCOUNT_ACTIVE_JOBS.pop(uid, None)
+                return None
+            return dict(cur)
+        return None
 
 
 def get_busy_account_uids() -> Set[str]:
@@ -104,7 +165,76 @@ def close_browsers_for_stopped_sessions(
             targets.add(uid)
     if not targets:
         return []
+    # Khóa profile do chính worker đang giữ tự nhả khi thoát — không nhả hộ từ luồng khác
     return close_scoped_active_drivers(scope="page_scanner", force=True, uids=targets)
+
+
+def stop_owner_page_scanner_jobs(owner_key: str) -> Dict[str, Any]:
+    """
+    Dừng khẩn cấp mọi phiên Module 11 CỦA ĐÚNG owner (không đụng phiên / Chrome của người dùng khác):
+    1. Báo stop (kèm gỡ pause) cho từng phiên RUNNING/PAUSED của owner, cập nhật DB sang STOPPED.
+    2. Đóng Chrome page_scanner của owner (kể cả Chrome keep_browser đang nhàn rỗi).
+    3. Nhả khóa acc của các phiên đó. Khóa profile do worker tự nhả khi thoát.
+    """
+    from core.browser.driver import _active_drivers, _active_drivers_lock
+    from core.database import db
+    from .scanner import accounts_owner_for, request_stop_session
+
+    rows = db.fetch_all(
+        """
+        SELECT id, account_uid FROM page_scan_sessions
+        WHERE owner_key = %s AND status IN ('RUNNING', 'PAUSED')
+        """,
+        (owner_key,),
+    ) or []
+    stopped_ids = {int(r["id"]) for r in rows}
+    uids: Set[str] = {str(r["account_uid"]) for r in rows if r.get("account_uid")}
+    for sid in stopped_ids:
+        request_stop_session(sid)
+    if stopped_ids:
+        db.execute(
+            """
+            UPDATE page_scan_sessions
+            SET status = 'STOPPED', stop_reason = 'USER_STOPPED', finished_at = NOW()
+            WHERE owner_key = %s AND id = ANY(%s) AND status IN ('RUNNING', 'PAUSED')
+            """,
+            (owner_key, sorted(stopped_ids)),
+        )
+
+    # Acc đang xoay vòng trong các phiên này (khác account_uid ban đầu của phiên)
+    with _ACCOUNT_JOB_LOCK:
+        uids |= {
+            uid for uid, job in _ACCOUNT_ACTIVE_JOBS.items()
+            if int(job.get("session_id") or 0) in stopped_ids
+        }
+    # Chrome page_scanner của owner còn mở
+    accounts_owner = accounts_owner_for(owner_key)
+    with _active_drivers_lock:
+        uids |= {
+            str(info["uid"]) for info in _active_drivers.values()
+            if info.get("scope") == "page_scanner"
+            and (str(info.get("owner") or "").strip() or None) == accounts_owner
+        }
+
+    closed: List[str] = []
+    try:
+        closed = close_browsers_for_stopped_sessions(uids, stopped_ids)
+    except Exception as exc:
+        logger.warning(f"[Module 11] Đóng Chrome khi dừng khẩn cấp: {exc}")
+
+    with _ACCOUNT_JOB_LOCK:
+        released = [
+            uid for uid, job in _ACCOUNT_ACTIVE_JOBS.items()
+            if int(job.get("session_id") or 0) in stopped_ids
+        ]
+        for uid in released:
+            _ACCOUNT_ACTIVE_JOBS.pop(uid, None)
+
+    return {
+        "stopped_session_ids": sorted(stopped_ids),
+        "closed_browsers": closed,
+        "released_accounts": released,
+    }
 
 
 def acquire_browser(
@@ -114,6 +244,7 @@ def acquire_browser(
     cookie_str: str,
     headless: bool = False,
     allow_direct_fallback: bool = True,
+    session_id: Optional[int] = None,
 ) -> Tuple[Any, bool, Any, bool]:
     """Wrapper — keep_browser chỉ tái dùng khi cùng uid (logic trong scanner)."""
     from .scanner import _acquire_page_scanner_browser
@@ -125,6 +256,7 @@ def acquire_browser(
         cookie_str=cookie_str,
         headless=headless,
         allow_direct_fallback=allow_direct_fallback,
+        session_id=session_id,
     )
 
 
@@ -231,12 +363,13 @@ class AccountRotation:
             cookie_str=acc.get("cookie") or "",
             headless=self.headless,
             allow_direct_fallback=self.allow_direct_fallback,
+            session_id=self.session_id,
         )
         self.count = 0
         if self.require_login:
             try:
                 self.ensure_login()
-            except Exception:
+            except BaseException:
                 # Không đăng nhập được → đóng Chrome + nhả khóa profile ngay; slot BUSY do nơi gọi xử lý
                 uid = self.uid
                 try:
@@ -307,7 +440,9 @@ class AccountRotation:
         """Đóng / giữ Chrome acc hiện tại và nhả slot BUSY của nó."""
         uid = self.uid
         try:
-            release_browser(stop_reason, keep_browser, self.acquired_lock, self.lock, uid)
+            # Không giữ khóa = Chrome của uid này (nếu có) thuộc phiên khác → không đóng
+            if self.acquired_lock:
+                release_browser(stop_reason, keep_browser, self.acquired_lock, self.lock, uid)
         finally:
             self.driver = None
             self.lock = None

@@ -2,13 +2,9 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
-  Hash,
   Link2,
   FileUp,
   Download,
-  Play,
-  Square,
-  Pause,
   Check,
   ExternalLink,
   Loader2,
@@ -17,14 +13,12 @@ import {
   Search,
   Phone,
   Save,
-  AlertTriangle,
   Plus,
-  Copy,
   Trash2,
   FileSpreadsheet,
 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import CustomSelect from "@/components/ui/custom-select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "@/lib/toast";
@@ -32,10 +26,19 @@ import { WS_BASE } from "@/config/constants";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
 import { normalizeAccount, initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
-import { SelectAccountsModal } from "../shared/SelectPagesModal";
+import { SelectAccountsModal, isAccountUsable } from "../shared/SelectPagesModal";
 import SavePageListModal from "../shared/SavePageListModal";
 import { getSessionUserId } from "@/services/sessionIdentity.mjs";
 import { loadInputDraft, saveInputDraft } from "./inputDraft.mjs";
+import { EmergencyStopModal } from "../shared/EmergencyStopModal";
+import {
+  loadSavedAccountUids,
+  saveSelectedAccountUids,
+  resolveUsableSavedUids,
+} from "../shared/accountStorage";
+import { ScanActionButtons } from "../shared/ScanActionButtons";
+import { clearScanState, fetchSavedSessions, loadScanState, saveScanState } from "../shared/scanStateStorage";
+import { useClickLock } from "../shared/useClickLock";
 import {
   searchPages,
   searchPagesByHashtag,
@@ -43,6 +46,7 @@ import {
   uploadPageFile,
   createDetailSession,
   downloadPageTemplate,
+  emergencyStopAll,
   stopScanSession,
   pauseScanSession,
   resumeScanSession,
@@ -62,27 +66,27 @@ import {
   newCampaignId,
 } from "./campaignUtils";
 import { filterScanResults, toCsv } from "../utils.mjs";
-import { Pager } from "../_shared";
+import { LiveLogConsole, Pager } from "../_shared";
 
 /* ─── Figma tokens (khớp scan-info / node 2889-27377) ─── */
 const FIGMA = {
   pageBg: "bg-[#F4F7FC]",
-  card: "rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] h-full",
+  card: "rounded-xl border border-[#E2E8F0] bg-white p-6 shadow-[0_1px_2px_rgba(0,0,0,0.05)]",
   input:
-    "h-8 rounded-lg border border-[#E2E8F0] bg-white px-2 text-center text-xs font-bold text-[#0F172A] outline-none focus:border-[#2563EB] disabled:bg-slate-100",
+    "h-[26px] rounded-md border border-[#E2E8F0] bg-white px-2 text-center text-xs font-semibold text-[#1E293B] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none outline-none focus:border-[#2563EB] disabled:bg-slate-100",
 };
 
 function SectionCard({ number, title, children }) {
   return (
     <section className={FIGMA.card}>
-      <div className="mb-4 flex items-center gap-2.5">
+      <div className="mb-5 flex items-center gap-2.5 border-b border-[#F1F5F9] pb-2">
         {number ? (
-          <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[#1877F2] text-[11px] font-bold text-white">
-              {number}
-            </span>
+          <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[#2563EB] text-xs font-bold text-white">
+            {number}
+          </span>
         ) : null}
-        <h2 className="font-heading text-sm font-bold text-[#0B1C30]">{title}</h2>
-          </div>
+        <h2 className="font-heading text-base font-semibold text-[#0F172A]">{title}</h2>
+      </div>
       {children}
     </section>
   );
@@ -90,14 +94,15 @@ function SectionCard({ number, title, children }) {
 
 function NumCtrl({ value, onChange, min = 1, max = 500, step = 10, disabled, className = "" }) {
   return (
-    <div className={`flex items-center gap-1.5 ${className}`}>
+    <div className={`inline-flex h-[30px] items-center overflow-hidden rounded-md border border-[#E2E8F0] bg-white ${className}`}>
       <button
         type="button"
+        aria-label="Giảm"
         disabled={disabled || value <= min}
         onClick={() => onChange(Math.max(min, value - step))}
-        className="flex size-7 items-center justify-center rounded-lg border border-[#E2E8F0] bg-white text-sm font-semibold text-[#64748B] hover:bg-slate-50 disabled:opacity-40"
+        className="flex h-full w-7 items-center justify-center border-r border-[#E2E8F0] text-xs font-bold text-[#94A3B8] hover:bg-slate-50 hover:text-[#475569] disabled:opacity-40"
       >
-        −
+        -
       </button>
       <input
         type="number"
@@ -106,13 +111,14 @@ function NumCtrl({ value, onChange, min = 1, max = 500, step = 10, disabled, cla
         value={value}
         disabled={disabled}
         onChange={(e) => onChange(Math.min(max, Math.max(min, Number(e.target.value) || min)))}
-        className={`${FIGMA.input} w-16`}
+        className="h-full w-10 bg-white text-center text-xs font-semibold text-[#1E293B] outline-none [appearance:textfield] disabled:bg-slate-100 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
       />
       <button
         type="button"
+        aria-label="Tăng"
         disabled={disabled || value >= max}
         onClick={() => onChange(Math.min(max, value + step))}
-        className="flex size-7 items-center justify-center rounded-lg border border-[#E2E8F0] bg-white text-sm font-semibold text-[#64748B] hover:bg-slate-50 disabled:opacity-40"
+        className="flex h-full w-7 items-center justify-center border-l border-[#E2E8F0] text-xs font-bold text-[#94A3B8] hover:bg-slate-50 hover:text-[#475569] disabled:opacity-40"
       >
         +
       </button>
@@ -148,12 +154,16 @@ function KeywordDraftInput({ disabled, placeholder, onAdd, onBackspaceEmpty }) {
 }
 
 const SOURCE_MODES = [
-  { id: "keyword", label: "Theo hashtag", Icon: Hash },
+  { id: "keyword", label: "Theo hashtag", Icon: Search },
   { id: "paste", label: "Nhập Link", Icon: Link2 },
-  { id: "upload", label: "Tải tệp (.txt / .csv / .excel)", Icon: FileUp },
+  { id: "upload", label: "Tải tệp (.txt / .csv)", Icon: FileUp },
 ];
 
 const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
+/* Đợt nhiều hashtag chạy tiếp khi rời trang → để ngoài component, vào lại trang vẫn dừng / theo dõi được */
+const campaignRef = {
+  current: { paused: false, abort: false, active: false, queue: [], accIndex: 0, sessionIds: [] },
+};
 const LIVE_STATUSES = new Set(["LIVE", "live", "Live"]);
 
 function nowStamp() {
@@ -208,6 +218,8 @@ export default function PageScannerSearch() {
 
   /* Nháp ô nhập (tab / link đã dán / file đã kiểm tra) — chuyển màn rồi quay lại vẫn còn */
   const [draft] = useState(() => loadInputDraft(getSessionUserId()) || {});
+  // Có nháp = mới hơn bản lưu theo phiên → khôi phục phiên không được ghi đè tab / link / file
+  const hasInputDraft = !!draft.sourceMode;
 
   /* Source */
   const [sourceMode, setSourceMode] = useState(draft.sourceMode || "keyword");
@@ -285,12 +297,18 @@ export default function PageScannerSearch() {
   const [sortDir, setSortDir] = useState("desc");
 
   const pollRef = useRef(null);
-  const campaignRef = useRef({ paused: false, abort: false, queue: [], accIndex: 0 });
+  const ownsCampaignRef = useRef(false); // vòng runMixedCampaign thuộc chính lần mở trang này
+  const mountedRef = useRef(true);
+  const [startLocked, runStartLocked] = useClickLock(1000); // chống bấm liên tục nút BẮT ĐẦU
+  const restoreSeqRef = useRef(0); // tăng khi bắt đầu / quét mới / rời trang → bỏ kết quả khôi phục về muộn
+  const restoreScanRef = useRef(null);
   const sessionMetaRef = useRef({}); // sessionId -> { channel, label, kind }
   const sessionIdsRef = useRef([]);
   const wsRef = useRef(null);
   const lastLoadedRef = useRef(0);
   const [poolStats, setPoolStats] = useState({ pool: 0, aboveMin: 0, showing: 0 });
+  const [showEmergencyModal, setShowEmergencyModal] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
 
   /** Đặt phiên của đợt đang xem — cập nhật ref ngay để loadResults không đọc phiên của đợt trước. */
   const setActiveSessionIds = useCallback((ids) => {
@@ -425,10 +443,15 @@ export default function PageScannerSearch() {
     getAccounts()
       .then((data) => {
         if (ignore) return;
-          const normalized = (Array.isArray(data) ? data : data?.accounts || []).map((a, i) =>
-            normalizeAccount(a, i),
-          );
-          setAccounts(normalized);
+        const normalized = (Array.isArray(data) ? data : data?.accounts || []).map((a, i) =>
+          normalizeAccount(a, i),
+        );
+        setAccounts(normalized);
+        const saved = loadSavedAccountUids("search");
+        if (saved && saved.length) {
+          const usable = resolveUsableSavedUids(saved, normalized);
+          setSelectedUids(usable);
+        }
       })
       .catch((err) => {
         if (!ignore) toast.error(`Lỗi tải tài khoản: ${err.message}`);
@@ -545,6 +568,22 @@ export default function PageScannerSearch() {
     [applyResultFilters, fetchAllSessionPages],
   );
 
+  /** Đợt chạy từ lần mở trang trước: chờ nó sang phiên kế tiếp / kết thúc rồi dựng lại màn hình. */
+  const watchDetachedCampaign = useCallback(
+    (lastSid) => {
+      stopPolling();
+      if (!mountedRef.current) return;
+      pollRef.current = setInterval(() => {
+        const camp = campaignRef.current;
+        const newest = camp.sessionIds[camp.sessionIds.length - 1] ?? null;
+        if (camp.active && newest === lastSid) return;
+        stopPolling();
+        restoreScanRef.current?.();
+      }, 1500);
+    },
+    [stopPolling],
+  );
+
   const startPoll = useCallback(
     (sid) => {
       stopPolling();
@@ -560,19 +599,19 @@ export default function PageScannerSearch() {
             prev.map((row) =>
               row.status === "scanning" || row.status === "paused"
                 ? {
-                    ...row,
-                    count,
-                    status:
-                      session.status === "PAUSED"
-                        ? "paused"
-                        : session.status === "FAILED"
-                          ? "error"
-                          : DONE_STATUSES.includes(session.status)
-                            ? "done"
-                            : session.status === "RUNNING"
-                              ? "scanning"
-                              : row.status,
-                  }
+                  ...row,
+                  count,
+                  status:
+                    session.status === "PAUSED"
+                      ? "paused"
+                      : session.status === "FAILED"
+                        ? "error"
+                        : DONE_STATUSES.includes(session.status)
+                          ? "done"
+                          : session.status === "RUNNING"
+                            ? "scanning"
+                            : row.status,
+                }
                 : row,
             ),
           );
@@ -614,7 +653,10 @@ export default function PageScannerSearch() {
             stopPolling();
             // Đợt khôi phục sau reload không có vòng runMixedCampaign → tự kết thúc UI,
             // kể cả khi backend đánh FAILED phiên mồ côi (app đã tắt giữa chừng).
-            if (!campaignRef.current.active) {
+            const camp = campaignRef.current;
+            if (camp.active && !camp.abort && !ownsCampaignRef.current) {
+              watchDetachedCampaign(sid);
+            } else if (!camp.active) {
               setRunPhase("done");
               pushLog(
                 `Phiên #${sid} đã kết thúc · ${session.status}${session.error_message ? ` · ${session.error_message}` : ""}`,
@@ -627,90 +669,151 @@ export default function PageScannerSearch() {
         }
       }, 1500);
     },
-    [loadResults, stopPolling, pushLog],
+    [loadResults, stopPolling, pushLog, watchDetachedCampaign],
   );
 
-  /* Restore đợt đang chạy theo campaign_id (chỉ dẫn 1.3) */
-  useEffect(() => {
-    let ignore = false;
-    (async () => {
+  /* Khôi phục đợt đang chạy; không có thì đợt quét xong gần nhất (giống Module 3) */
+  const restoreScan = async () => {
+    const seq = ++restoreSeqRef.current;
+    const stale = () => seq !== restoreSeqRef.current;
+    try {
+      const saved = loadScanState("search");
+      const camp = campaignRef.current;
+      let data = await getActiveCampaign("DISCOVERY").catch(() => null);
+      // Không có đợt hashtag → thử phiên quét thông tin theo link / tệp (DETAIL)
+      if (!data?.active && !camp.active) data = await getActiveCampaign("DETAIL").catch(() => null);
+      if (stale()) return;
+      const sessions =
+        data?.active && data.sessions?.length
+          ? data.sessions
+          : await fetchSavedSessions("search", camp.active ? camp.sessionIds : saved?.sessionIds);
+      if (stale() || (!sessions.length && !camp.active)) return;
+      const ids = sessions.map((s) => s.id);
+      const top = sessions.find((s) => s.id === data?.primary_session_id) || sessions[sessions.length - 1] || null;
+      const campId = top?.campaign_id || (camp.active ? camp.campaignId : null);
+      const isSaved =
+        !!saved && ((campId && saved.campaignId === campId) || (top && (saved.sessionIds || []).includes(top.id)));
+      const topDone = !top || DONE_STATUSES.includes(top.status);
+      if (!hasInputDraft && top?.job_type === "DETAIL") setSourceMode(top.source_type === "UPLOAD" ? "upload" : "paste");
+      setCampaignId(campId);
+      setSessionId(top?.id ?? null);
+      setActiveSessionIds(ids);
+      sessionMetaRef.current = Object.fromEntries(
+        sessions.map((s) => [
+          s.id,
+          s.job_type === "DETAIL"
+            ? { channel: s.source_type === "UPLOAD" ? "FILE" : "LINK", label: s.keyword, kind: "detail" }
+            : { channel: "hashtag", label: s.keyword, kind: "hashtag" },
+        ]),
+      );
+      setRunPhase(
+        topDone && !camp.active ? "done" : top?.status === "PAUSED" || (camp.active && camp.paused) ? "paused" : "running",
+      );
+
+      let settings = {};
       try {
-        let data = await getActiveCampaign("DISCOVERY");
-        // Không có đợt hashtag → thử phiên quét thông tin theo link / tệp (DETAIL)
-        if (!data?.active) data = await getActiveCampaign("DETAIL").catch(() => null);
-        if (ignore || !data?.active || !(data.sessions || []).length) return;
-        const sessions = data.sessions;
-        const top = sessions.find((s) => s.id === data.primary_session_id) || sessions[sessions.length - 1];
-        if (data.job_type === "DETAIL") setSourceMode(top.source_type === "UPLOAD" ? "upload" : "paste");
-        setCampaignId(data.campaign_id || null);
-        setSessionId(top.id);
-        setActiveSessionIds(sessions.map((s) => s.id));
-        setRunPhase(top.status === "PAUSED" || data.status === "PAUSED" ? "paused" : "running");
+        settings = typeof top?.settings === "string" ? JSON.parse(top.settings || "{}") : top?.settings || {};
+      } catch {
+        settings = {};
+      }
+      if (Array.isArray(settings.keywords) || Array.isArray(settings.hashtags)) {
+        const chips = [
+          ...(settings.keywords || []),
+          ...(settings.hashtags || []).map((t) => (String(t).startsWith("#") ? t : `#${t}`)),
+        ];
+        if (chips.length) setKeywords(chips);
+      }
 
-        let settings = {};
-        try {
-          settings = typeof top.settings === "string" ? JSON.parse(top.settings || "{}") : top.settings || {};
-        } catch {
-          settings = {};
+      if (isSaved) {
+        const cfg = saved.config || {};
+        if (!hasInputDraft && cfg.sourceMode !== undefined) setSourceMode(cfg.sourceMode);
+        if (cfg.keywords !== undefined) setKeywords(cfg.keywords);
+        if (cfg.maxFollowers !== undefined) setMaxFollowers(cfg.maxFollowers);
+        if (cfg.topN !== undefined) setTopN(cfg.topN);
+        if (!hasInputDraft && cfg.pasteContent !== undefined) setPasteContent(cfg.pasteContent);
+        if (cfg.rotateEvery !== undefined) setRotateEvery(cfg.rotateEvery);
+        if (cfg.delayMin !== undefined) setDelayMin(cfg.delayMin);
+        if (cfg.delayMax !== undefined) setDelayMax(cfg.delayMax);
+        if (cfg.applyAllTarget !== undefined) setApplyAllTarget(cfg.applyAllTarget);
+        if (cfg.targetPagesCount !== undefined) setTargetPagesCount(cfg.targetPagesCount);
+        if (cfg.publicOnly !== undefined) setPublicOnly(cfg.publicOnly);
+        if (cfg.keywordTargets !== undefined) setKeywordTargets(cfg.keywordTargets);
+        if (cfg.minFollowersEnabled !== undefined) setMinFollowersEnabled(cfg.minFollowersEnabled);
+        if (cfg.minFollowers !== undefined) setMinFollowers(cfg.minFollowers);
+        if (cfg.skipSaveBelowThreshold !== undefined) setSkipSaveBelowThreshold(cfg.skipSaveBelowThreshold);
+        if (cfg.minPosts !== undefined) setMinPosts(cfg.minPosts);
+        if (cfg.maxPostsPerHashtag !== undefined) setMaxPostsPerHashtag(cfg.maxPostsPerHashtag);
+        if (!hasInputDraft && saved.upload) {
+          setUploadFileMeta(saved.upload.meta || null);
+          setUploadPreviewRows(saved.upload.previewRows || []);
+          setUploadResult(saved.upload.result || null);
         }
-        if (Array.isArray(settings.keywords) || Array.isArray(settings.hashtags)) {
-          const chips = [
-            ...(settings.keywords || []),
-            ...(settings.hashtags || []).map((t) => (String(t).startsWith("#") ? t : `#${t}`)),
-          ];
-          if (chips.length) setKeywords(chips);
-        }
+      }
 
-        setKeywordProgress(
-          sessions.map((s) => ({
-            keyword: s.keyword || "—",
-            count: s.total_unique || 0,
-            status:
-              s.status === "RUNNING"
-                ? "scanning"
-                : s.status === "PAUSED"
-                  ? "paused"
+      const doneLabels = new Set(sessions.map((s) => s.keyword));
+      const pendingJobs = camp.active ? camp.queue.filter((j) => !doneLabels.has(j.label)) : [];
+      setKeywordProgress([
+        ...sessions.map((s) => ({
+          keyword: s.keyword || "—",
+          count: s.total_unique || 0,
+          status:
+            s.status === "RUNNING"
+              ? "scanning"
+              : s.status === "PAUSED"
+                ? "paused"
+                : s.status === "FAILED"
+                  ? "error"
                   : DONE_STATUSES.includes(s.status)
                     ? "done"
                     : "pending",
-            channel: s.source_type,
-          })),
-        );
+          channel: s.source_type,
+        })),
+        ...pendingJobs.map((j) => ({ keyword: j.label, count: 0, status: "pending", channel: j.channel })),
+      ]);
 
-        // Log đã lưu kèm phiên
-        const allLogs = [];
-        for (const s of sessions) {
-          let lines = s.logs;
-          if (typeof lines === "string") {
-            try {
-              lines = JSON.parse(lines);
-            } catch {
-              lines = [];
-            }
-          }
-          for (const line of lines || []) {
-            allLogs.push({
-              id: `${s.id}_${line.ts}_${allLogs.length}`,
-              timestamp: line.ts || "—",
-              message: line.message,
-              type: line.level === "success" ? "success" : line.level === "warn" ? "warn" : line.level === "error" ? "error" : "info",
-            });
+      // Log đã lưu kèm phiên
+      const allLogs = [];
+      for (const s of sessions) {
+        let lines = s.logs;
+        if (typeof lines === "string") {
+          try {
+            lines = JSON.parse(lines);
+          } catch {
+            lines = [];
           }
         }
-        if (allLogs.length) setLogs(allLogs.slice(-500));
-
-        pushLog(
-          `Khôi phục đợt ${data.campaign_id || `#${top.id}`} · ${sessions.length} phiên · ${top.status}`,
-          "warn",
-        );
-        await loadResults(top.id, 1, sessions.map((s) => s.id));
-        if (top.status === "RUNNING" || top.status === "PAUSED") startPoll(top.id);
-      } catch {
-        /* không có phiên active */
+        for (const line of lines || []) {
+          allLogs.push({
+            id: `${s.id}_${line.ts}_${allLogs.length}`,
+            timestamp: line.ts || "—",
+            message: line.message,
+            type: line.level === "success" ? "success" : line.level === "warn" ? "warn" : line.level === "error" ? "error" : "info",
+          });
+        }
       }
-    })();
+      if (allLogs.length) setLogs(allLogs.slice(-500));
+
+      if (top) {
+        pushLog(`Khôi phục đợt ${campId || `#${top.id}`} · ${sessions.length} phiên · ${top.status}`, "warn");
+      }
+      if (!camp.active && ids.length) saveScanState("search", { sessionIds: ids, campaignId: campId });
+      lastLoadedRef.current = 0;
+      await loadResults(top?.id, 1, ids);
+      if (stale()) return;
+      if (!topDone) startPoll(top.id);
+      else if (camp.active) watchDetachedCampaign(top?.id ?? null);
+    } catch (err) {
+      console.error("[PageScanner] Khôi phục phiên quét:", err);
+    }
+  };
+  restoreScanRef.current = restoreScan;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    restoreScanRef.current?.();
     return () => {
-      ignore = true;
+      mountedRef.current = false;
+      restoreSeqRef.current += 1;
       stopPolling();
       if (wsRef.current) {
         try {
@@ -723,10 +826,57 @@ export default function PageScannerSearch() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const waitForSession = (sid) =>
+  /* Lưu cấu hình kèm phiên đang xem để vào lại trang vẫn còn */
+  const configJson = JSON.stringify({
+    sourceMode,
+    keywords,
+    maxFollowers,
+    topN,
+    pasteContent,
+    rotateEvery,
+    delayMin,
+    delayMax,
+    applyAllTarget,
+    targetPagesCount,
+    publicOnly,
+    keywordTargets,
+    minFollowersEnabled,
+    minFollowers,
+    skipSaveBelowThreshold,
+    minPosts,
+    maxPostsPerHashtag,
+  });
+  useEffect(() => {
+    if (runPhase !== "idle") saveScanState("search", { config: JSON.parse(configJson) });
+  }, [runPhase, configJson]);
+
+  /** "Quét mới": bỏ phiên đang xem (dữ liệu trong kho không bị xóa). */
+  const handleNewScan = () => {
+    restoreSeqRef.current += 1;
+    loadSeqRef.current += 1;
+    stopPolling();
+    clearScanState("search");
+    setRunPhase("idle");
+    setSessionId(null);
+    setCampaignId(null);
+    setActiveSessionIds([]);
+    setKeywordProgress([]);
+    setLogs([]);
+    setPages([]);
+    setSelectedPageKeys([]);
+    setCurrentPage(1);
+    setTotalCount(0);
+    setLoadingResults(false);
+    setPoolStats({ pool: 0, aboveMin: 0, showing: 0 });
+    sessionMetaRef.current = {};
+    mergedRef.current = [];
+    filteredAllRef.current = [];
+  };
+
+  const waitForSession = (sid, camp) =>
     new Promise((resolve) => {
       const tick = async () => {
-        if (campaignRef.current.abort) {
+        if (camp.abort) {
           resolve({ status: "STOPPED", stop_reason: "USER_STOPPED" });
           return;
         }
@@ -780,6 +930,16 @@ export default function PageScannerSearch() {
 
   /* Validate trước khi Bắt đầu (không còn nút Kiểm tra riêng) */
   const validateBeforeStart = () => {
+    if (!selectedUids || selectedUids.length === 0) {
+      toast.warning("Chưa chọn tài khoản");
+      return false;
+    }
+    const usable = accounts.filter((a) => selectedUids.includes(a.uid) && isAccountUsable(a));
+    if (!usable.length) {
+      toast.warning("Không có tài khoản khả dụng (Live & Đã đăng nhập) trong danh sách đã chọn.");
+      return false;
+    }
+
     const errors = [];
     if (sourceMode === "keyword") {
       if (!keywords.length) errors.push("Chưa nhập từ khóa hoặc hashtag (#).");
@@ -797,15 +957,8 @@ export default function PageScannerSearch() {
     } else if (sourceMode === "paste") {
       if (!pasteContent.trim()) errors.push("Chưa dán link Page.");
     } else if (sourceMode === "upload") {
-      if (!uploadFile) errors.push("Chưa tải file lên.");
+      if (!uploadFile && !uploadResult?.pages) errors.push("Chưa tải file lên.");
       else if (uploadResult && !uploadResult.valid_count) errors.push("File không có link Page hợp lệ.");
-    }
-
-    if (selectedUids.length) {
-      const live = accounts.filter(
-        (a) => selectedUids.includes(a.uid) && LIVE_STATUSES.has(String(a.status)),
-      );
-      if (!live.length) errors.push("Không có tài khoản Live trong danh sách đã chọn.");
     }
 
     if (delayMin > delayMax) errors.push("Khoảng giãn cách không hợp lệ (từ > đến).");
@@ -822,7 +975,12 @@ export default function PageScannerSearch() {
     const jobs = buildCampaignJobs({ searchMode, keywords: plainKeywords, manualHashtags });
     const campId = newCampaignId();
     setCampaignId(campId);
-    campaignRef.current = { paused: false, abort: false, queue: jobs, accIndex: 0, active: true };
+    const camp = {
+      paused: false, abort: false, queue: jobs, accIndex: 0, active: true, campaignId: campId, sessionIds: [],
+    };
+    campaignRef.current = camp;
+    ownsCampaignRef.current = true;
+    saveScanState("search", { sessionIds: [], campaignId: campId, upload: null });
     sessionMetaRef.current = {};
     mergedRef.current = [];
     setActiveSessionIds([]);
@@ -852,17 +1010,17 @@ export default function PageScannerSearch() {
     const collectedIds = [];
 
     for (let i = 0; i < jobs.length; i += 1) {
-      while (campaignRef.current.paused && !campaignRef.current.abort) {
+      while (camp.paused && !camp.abort) {
         setRunPhase("paused");
         await new Promise((r) => setTimeout(r, 400));
       }
-      if (campaignRef.current.abort) break;
+      if (camp.abort) break;
 
       setRunPhase("running");
       const job = jobs[i];
       const uid = currentCampaignUid(accState);
       // Giữ Chrome nếu còn job sau (cùng acc tái dùng; đổi acc thì BE đóng scope cũ)
-      const keepBrowser = i < jobs.length - 1 && !campaignRef.current.abort;
+      const keepBrowser = i < jobs.length - 1 && !camp.abort;
 
       setKeywordProgress((prev) =>
         prev.map((row) => (row.keyword === job.label ? { ...row, status: "scanning" } : row)),
@@ -889,7 +1047,7 @@ export default function PageScannerSearch() {
             keep_browser: keepBrowser,
           });
           sid = res.session_id;
-              } else {
+        } else {
           const tagKey = job.label?.startsWith("#") ? job.label : `#${job.query}`;
           const targetPages =
             keywordTargets[tagKey] ||
@@ -898,9 +1056,9 @@ export default function PageScannerSearch() {
             applyAllTarget;
           const orderedUids = selectedUids.length
             ? [
-                ...selectedUids.slice(accState.cursor % selectedUids.length),
-                ...selectedUids.slice(0, accState.cursor % selectedUids.length),
-              ]
+              ...selectedUids.slice(accState.cursor % selectedUids.length),
+              ...selectedUids.slice(0, accState.cursor % selectedUids.length),
+            ]
             : [];
           const res = await searchPagesByHashtag({
             hashtags: [job.query],
@@ -932,9 +1090,12 @@ export default function PageScannerSearch() {
         };
         setSessionId(sid);
         collectedIds.push(sid);
+        // Lưu thẳng (không qua effect) để phiên mở sau khi rời trang cũng được ghi nhớ
+        camp.sessionIds = [...collectedIds];
+        if (campaignRef.current === camp) saveScanState("search", { sessionIds: camp.sessionIds, campaignId: campId });
         setActiveSessionIds([...collectedIds]);
         startPoll(sid);
-        const session = await waitForSession(sid);
+        const session = await waitForSession(sid, camp);
         stopPolling();
         const count = session.pages_count || session.total_unique || 0;
         setKeywordProgress((prev) =>
@@ -946,9 +1107,9 @@ export default function PageScannerSearch() {
         const targetHint =
           job.kind === "hashtag"
             ? keywordTargets[job.label?.startsWith("#") ? job.label : `#${job.query}`] ||
-              keywordTargets[job.rootKeyword] ||
-              keywordTargets[job.query] ||
-              applyAllTarget
+            keywordTargets[job.rootKeyword] ||
+            keywordTargets[job.query] ||
+            applyAllTarget
             : null;
         const partialShort =
           targetHint != null &&
@@ -961,36 +1122,33 @@ export default function PageScannerSearch() {
           session.status === "FAILED" ? "error" : partialShort ? "warn" : "success",
         );
 
-        // Đồng bộ cursor với rotate trong BE (theo số page đạt lọc của job)
-        const limit = Math.max(1, Number(rotateEvery) || 50);
-        if (selectedUids.length > 1 && limit > 0) {
-          const total = (accState.pagesOnAcc || 0) + count;
-          const rotations = Math.floor(total / limit);
-          const rem = total % limit;
-          if (rotations > 0) {
-            pushLog(
-              `Đồng bộ rotate: +${rotations} lần đổi nick trong/sau job (mỗi ${limit} page) → ${selectedUids[(accState.cursor + rotations) % selectedUids.length] || "?"}`,
-              "warn",
-            );
-          }
-          accState = {
-            cursor: (accState.cursor + rotations) % selectedUids.length,
-            pagesOnAcc: rem,
-          };
-        } else {
-          const nextAcc = advanceAccountAfterJob(accState, count, rotateEvery);
-          if (nextAcc.rotated) {
-            pushLog(
-              `Đủ ~${rotateEvery} Page/acc → đổi nick → ${selectedUids[nextAcc.cursor] || "?"} (đã ${nextAcc.prevPages})`,
-              "warn",
-            );
-          }
-          accState = { cursor: nextAcc.cursor, pagesOnAcc: nextAcc.pagesOnAcc };
+        // Phiên hashtag tự đổi acc giữa chừng → lấy acc + số page thật từ BE, chỉ đổi thêm nếu acc đã đủ hạn mức
+        let rotation = null;
+        try {
+          const st = typeof session.settings === "string" ? JSON.parse(session.settings) : session.settings;
+          rotation = st?.rotation || null;
+        } catch {
+          /* không đọc được settings → tính theo số page của job */
         }
-        campaignRef.current.accIndex = accState.cursor;
+        const realCursor = rotation
+          ? selectedUids.findIndex((u) => String(u) === String(rotation.account_uid))
+          : -1;
+        const nextAcc =
+          realCursor >= 0
+            ? advanceAccountAfterJob({ cursor: realCursor, pagesOnAcc: 0 }, rotation.pages_on_acc, rotateEvery)
+            : advanceAccountAfterJob(accState, count, rotateEvery);
+        // Chỉ báo đổi acc khi còn job phía sau
+        if (nextAcc.rotated && i < jobs.length - 1) {
+          pushLog(
+            `Đủ ${nextAcc.prevPages} page / tài khoản → job sau dùng ${selectedUids[nextAcc.cursor] || "?"}`,
+            "warn",
+          );
+        }
+        accState = { cursor: nextAcc.cursor, pagesOnAcc: nextAcc.pagesOnAcc };
+        camp.accIndex = accState.cursor;
 
         // Nghỉ theo cấu hình giữa các job (hashtag/kênh)
-        if (i < jobs.length - 1 && !campaignRef.current.abort) {
+        if (i < jobs.length - 1 && !camp.abort) {
           const lo = Math.min(delayMin, delayMax);
           const hi = Math.max(delayMin, delayMax);
           const gapSec = lo + Math.random() * Math.max(0, hi - lo);
@@ -1008,10 +1166,12 @@ export default function PageScannerSearch() {
       }
     }
 
-    campaignRef.current.active = false;
+    camp.active = false;
+    if (campaignRef.current !== camp) return; // đã bắt đầu đợt khác sau khi dừng khẩn cấp
+    ownsCampaignRef.current = false;
     stopPolling();
     setRunPhase("done");
-    if (campaignRef.current.abort) {
+    if (camp.abort) {
       pushLog("Đã dừng khẩn cấp toàn bộ đợt quét.", "error");
     } else {
       pushLog(`Đợt [${modeLabel}] hoàn tất — đang xếp hạng pool chung.`, "success");
@@ -1024,6 +1184,7 @@ export default function PageScannerSearch() {
 
   const handleStart = async () => {
     if (!validateBeforeStart()) return;
+    restoreSeqRef.current += 1;
     setLogs([]);
     setPages([]);
     setSelectedPageKeys([]);
@@ -1037,8 +1198,8 @@ export default function PageScannerSearch() {
 
     if (sourceMode === "keyword") {
       await runMixedCampaign();
-          return;
-        }
+      return;
+    }
     if (sourceMode === "paste" || sourceMode === "upload") {
       await runDetailScan();
     }
@@ -1050,10 +1211,12 @@ export default function PageScannerSearch() {
    */
   const runDetailScan = async () => {
     const isUpload = sourceMode === "upload";
-    const label = isUpload ? `File ${uploadFile?.name || ""}`.trim() : "Nhập link";
+    const fileName = uploadFile?.name || uploadFileMeta?.name || "";
+    const label = isUpload ? `File ${fileName}`.trim() : "Nhập link";
     setRunPhase("running");
-    campaignRef.current = { paused: false, abort: false, queue: [], accIndex: 0, active: false };
-    pushLog(isUpload ? `Đang đọc file "${uploadFile?.name || "file"}"…` : "Đang chuẩn hoá danh sách link…", "info");
+    campaignRef.current = { paused: false, abort: false, queue: [], accIndex: 0, active: false, sessionIds: [] };
+    ownsCampaignRef.current = false;
+    pushLog(isUpload ? `Đang đọc file "${fileName || "file"}"…` : "Đang chuẩn hoá danh sách link…", "info");
     try {
       let parsed = isUpload ? uploadResult : null;
       if (isUpload && !parsed?.pages) {
@@ -1068,12 +1231,17 @@ export default function PageScannerSearch() {
       if (!targets.length) throw new Error("Không có link Page hợp lệ để quét.");
       pushLog(
         `Hợp lệ ${targets.length} page · trùng ${parsed.dedup_count || 0} · lỗi ${parsed.invalid_count || 0}` +
-          (parsed.already_existing_count ? ` · ${parsed.already_existing_count} page đã có trong kho (sẽ cập nhật)` : ""),
+        (parsed.already_existing_count ? ` · ${parsed.already_existing_count} page đã có trong kho (sẽ cập nhật)` : ""),
         "info",
       );
 
-      const live = accounts.filter((a) => selectedUids.includes(a.uid) && LIVE_STATUSES.has(String(a.status)));
-      const accountUids = live.length ? live.map((a) => a.uid) : [...selectedUids];
+      const usable = accounts.filter((a) => selectedUids.includes(a.uid) && isAccountUsable(a));
+      const accountUids = usable.map((a) => a.uid);
+      if (!accountUids.length) {
+        toast.warning("Chưa chọn tài khoản");
+        setRunPhase("idle");
+        return;
+      }
       const target = Math.min(targetPagesCount, targets.length);
       const res = await createDetailSession({
         pages: targets.map((p) => ({ page_key: p.page_key, page_url: p.page_url })),
@@ -1089,6 +1257,22 @@ export default function PageScannerSearch() {
       });
       const sid = res.session_id;
       sessionMetaRef.current[sid] = { channel: isUpload ? "FILE" : "LINK", label, kind: "detail" };
+      saveScanState("search", {
+        sessionIds: [sid],
+        campaignId: null,
+        upload: isUpload
+          ? {
+            meta: uploadFileMeta,
+            previewRows: uploadPreviewRows.slice(0, 1000),
+            result: {
+              pages: targets.map((p) => ({ page_key: p.page_key, page_url: p.page_url })),
+              valid_count: parsed.valid_count,
+              dedup_count: parsed.dedup_count,
+              invalid_count: parsed.invalid_count,
+            },
+          }
+          : null,
+      });
       setSessionId(sid);
       setActiveSessionIds([sid]);
       setKeywordProgress([{ keyword: label, count: 0, status: "scanning", target }]);
@@ -1121,9 +1305,9 @@ export default function PageScannerSearch() {
     campaignRef.current.paused = true;
     setRunPhase("paused");
     if (sessionId) {
-    try {
+      try {
         await pauseScanSession(sessionId);
-    } catch (err) {
+      } catch (err) {
         pushLog(`Pause lỗi: ${err.message}`, "error");
       }
     }
@@ -1131,20 +1315,30 @@ export default function PageScannerSearch() {
     toast.info("Đã tạm dừng.");
   };
 
-  const handleEmergencyStop = async () => {
+  const handleEmergencyStop = () => {
+    setShowEmergencyModal(true);
+  };
+
+  const handleConfirmEmergencyStop = async () => {
+    setIsStopping(true);
     campaignRef.current.abort = true;
     campaignRef.current.paused = false;
-      stopPolling();
-    if (sessionId) {
-      try {
-        await stopScanSession(sessionId);
+    stopPolling();
+    try {
+      if (sessionId) {
+        await stopScanSession(sessionId).catch(() => {});
         pushLog(`Đã gửi dừng khẩn cấp phiên #${sessionId}.`, "error");
-      } catch (err) {
-        pushLog(`Lỗi dừng: ${err.message}`, "error");
       }
+      await emergencyStopAll().catch(() => {});
+      pushLog("Đã dọn dẹp và giải phóng toàn bộ trình duyệt quét Fanpage.", "warn");
+    } catch (err) {
+      pushLog(`Lỗi dừng: ${err.message}`, "error");
+    } finally {
+      setIsStopping(false);
+      setShowEmergencyModal(false);
+      setRunPhase("done");
+      toast.warning("Đã dừng khẩn cấp.");
     }
-    setRunPhase("done");
-    toast.warning("Đã dừng khẩn cấp.");
   };
 
   /* Chọn file = CHỈ xem trước / kiểm tra (không lưu DB). Lưu khi bấm "Bắt đầu thực thi". */
@@ -1263,20 +1457,20 @@ export default function PageScannerSearch() {
   const selCount = selectedUids.length;
 
   return (
-    <div className={`-m-6 min-h-full space-y-5 ${FIGMA.pageBg} p-6`}>
+    <div className={`-m-6 min-h-full space-y-6 ${FIGMA.pageBg} p-6`}>
       <div>
-        <h1 className="font-heading text-xl font-bold tracking-tight text-[#0B1C30]">Quét thông tin page</h1>
-        <p className="mt-1 max-w-3xl text-xs leading-5 text-[#64748B]">
-          Tìm kiếm, lọc và xuất dữ liệu chi tiết (SĐT, Email, Website, Followers) từ Fanpage Facebook theo
-          hashtag, link hoặc file tải lên.
+        <h1 className="font-heading text-xl font-bold text-[#0F172A]">Quét thông tin page</h1>
+        <p className="mt-1 max-w-3xl text-xs text-[#64748B]">
+          Tìm kiếm, lọc danh sách Fanpage Facebook theo từ khóa, dán danh sách link hoặc tải tệp file và trích
+          xuất dữ liệu chi tiết liên hệ (Số điện thoại, Email, Website, Follower).
         </p>
       </div>
 
-      <div className="grid items-start gap-5 xl:grid-cols-2">
+      <div className="grid items-stretch gap-6 xl:grid-cols-2">
         {/* ═══ Card 1 — Figma 2889-27377 ═══ */}
         <SectionCard number="1" title="Chọn tài khoản & Thiết lập phiên quét">
           {/* Row: + Chọn tài khoản + badge xanh */}
-          <div className="mb-4 flex flex-wrap items-center gap-3">
+          <div className="mb-5 flex flex-wrap items-center gap-3">
             <button
               type="button"
               disabled={isBusy}
@@ -1284,73 +1478,78 @@ export default function PageScannerSearch() {
                 setModalUids([...selectedUids]);
                 setShowAccountModal(true);
               }}
-              className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#1877F2] px-4 text-xs font-bold text-white shadow-sm transition hover:bg-[#166FE5] disabled:opacity-60"
+              className="inline-flex h-8 items-center gap-2 rounded-lg bg-[#2563EB] px-4 text-xs font-semibold text-white shadow-sm transition hover:bg-[#1D4ED8] disabled:opacity-60"
             >
-              <Plus className="size-4 stroke-[2.5]" />
+              <Plus className="size-3.5 stroke-[2.5]" />
               Chọn tài khoản
             </button>
-            <span className="inline-flex items-center gap-2 rounded-full border border-[#A7F3D0] bg-[#ECFDF5] px-3.5 py-1.5 text-xs font-semibold text-[#059669]">
-              <span className="size-2 rounded-full bg-[#10B981]" />
-              Đã chọn: <strong>{selCount} tài khoản</strong>
+            {selCount > 0 ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-[#A7F3D0] bg-[#ECFDF5] px-3 py-1 text-xs font-medium text-[#047857]">
+                <span className="size-2 rounded-full bg-[#10B981]" />
+                Đã chọn: <strong className="font-bold">{selCount} tài khoản</strong>
               </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
+                <span className="size-2 rounded-full bg-amber-500" />
+                Chưa chọn tài khoản
+              </span>
+            )}
           </div>
 
           {/* PHƯƠNG THỨC QUÉT — tab solid blue khi active */}
-          <div className="mb-4">
-            <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-[#64748B]">
+          <div className="mb-5 border-t border-[#F1F5F9] pt-2.5">
+            <p className="mb-2.5 text-xs font-semibold uppercase tracking-[0.6px] text-[#64748B]">
               PHƯƠNG THỨC QUÉT
             </p>
-            <div className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] p-1">
+            <div className="inline-flex flex-wrap items-center gap-1.5 rounded-lg border border-[#E2E8F0]/80 bg-[#F8FAFC] p-1">
               {SOURCE_MODES.map(({ id, label, Icon }) => {
                 const active = sourceMode === id;
                 return (
-              <button
-                key={id}
-                type="button"
+                  <button
+                    key={id}
+                    type="button"
                     disabled={isBusy}
-                onClick={() => setSourceMode(id)}
-                    className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs transition disabled:opacity-60 ${
-                      active
-                        ? "bg-[#1877F2] font-bold text-white shadow-sm"
-                        : "font-medium text-[#475569] hover:text-[#0F172A]"
-                    }`}
-              >
-                <Icon className="size-3.5" />
-                {label}
-              </button>
+                    onClick={() => setSourceMode(id)}
+                    className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition disabled:opacity-60 ${active
+                      ? "bg-[#2563EB] text-white shadow-sm"
+                      : "text-[#475569] hover:text-[#0F172A]"
+                      }`}
+                  >
+                    <Icon className="size-3.5" />
+                    {label}
+                  </button>
                 );
               })}
             </div>
           </div>
 
           {sourceMode === "keyword" && (
-            <div className="space-y-3.5">
+            <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-[#334155]">Nhập hashtag</span>
-                <span className="text-xs text-[#64748B]">
+                <span className="text-xs font-medium text-[#475569]">Nhập hashtag</span>
+                <span className="text-[11px] text-[#94A3B8]">
                   Đã chọn:{" "}
-                  <strong className="font-bold text-[#1877F2]">
-                    {derivedHashtags.length || keywords.length} từ khóa
-                  </strong>
+                  <strong className="font-bold text-[#2563EB]">{derivedHashtags.length || keywords.length}</strong> từ
+                  khóa
                 </span>
               </div>
 
               <div
-                className={`flex min-h-[88px] w-full flex-wrap content-start items-start gap-1.5 rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] p-2.5 transition focus-within:border-[#1877F2] focus-within:bg-white ${
-                  isBusy ? "opacity-60" : ""
-                }`}
+                className={`flex max-h-[200px] min-h-[68px] w-full flex-wrap content-start items-start gap-1.5 overflow-y-auto rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] p-1.5 transition focus-within:border-[#2563EB] focus-within:bg-white ${isBusy ? "opacity-60" : ""
+                  }`}
               >
                 {keywords.map((chip) => (
                   <span
                     key={chip}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-2.5 py-1 text-xs font-semibold text-[#1D4ED8]"
+                    className="inline-flex items-center gap-1 rounded bg-[#DBEAFE] px-2.5 py-1 text-xs font-medium text-[#1E40AF]"
                   >
                     {chip}
                     {!isBusy && (
                       <button
                         type="button"
                         onClick={() => setKeywords(keywords.filter((c) => c !== chip))}
-                        className="rounded-full p-0.5 text-[#1D4ED8]/70 hover:bg-[#BFDBFE]/60 hover:text-[#1E3A8A]"
+                        aria-label={`Xóa ${chip}`}
+                        className="text-[#3B82F6] hover:text-[#1E3A8A]"
                       >
                         <X className="size-3" />
                       </button>
@@ -1560,33 +1759,30 @@ export default function PageScannerSearch() {
                         <button
                           type="button"
                           onClick={() => setUploadFilterTab("ALL")}
-                          className={`rounded-full px-2.5 py-0.5 font-bold ${
-                            uploadFilterTab === "ALL"
-                              ? "bg-[#DBEAFE] text-[#1D4ED8]"
-                              : "bg-[#F1F5F9] text-[#64748B]"
-                          }`}
+                          className={`rounded-full px-2.5 py-0.5 font-bold ${uploadFilterTab === "ALL"
+                            ? "bg-[#DBEAFE] text-[#1D4ED8]"
+                            : "bg-[#F1F5F9] text-[#64748B]"
+                            }`}
                         >
                           Tất cả ({uploadPreviewRows.length})
                         </button>
                         <button
                           type="button"
                           onClick={() => setUploadFilterTab("VALID")}
-                          className={`rounded-full px-2.5 py-0.5 font-bold ${
-                            uploadFilterTab === "VALID"
-                              ? "bg-[#D1FAE5] text-[#059669]"
-                              : "bg-[#F1F5F9] text-[#64748B]"
-                          }`}
+                          className={`rounded-full px-2.5 py-0.5 font-bold ${uploadFilterTab === "VALID"
+                            ? "bg-[#D1FAE5] text-[#059669]"
+                            : "bg-[#F1F5F9] text-[#64748B]"
+                            }`}
                         >
                           Hợp lệ ({validRows.length})
                         </button>
                         <button
                           type="button"
                           onClick={() => setUploadFilterTab("DUP")}
-                          className={`rounded-full px-2.5 py-0.5 font-bold ${
-                            uploadFilterTab === "DUP"
-                              ? "bg-[#FEF3C7] text-[#D97706]"
-                              : "bg-[#FEF3C7]/60 text-[#D97706]"
-                          }`}
+                          className={`rounded-full px-2.5 py-0.5 font-bold ${uploadFilterTab === "DUP"
+                            ? "bg-[#FEF3C7] text-[#D97706]"
+                            : "bg-[#FEF3C7]/60 text-[#D97706]"
+                            }`}
                         >
                           Trùng lặp ({dupRows.length})
                         </button>
@@ -1657,13 +1853,13 @@ export default function PageScannerSearch() {
         {/* ═══ Card 2 ═══ */}
         <SectionCard number="2" title="Thiết lập cấu hình quét mục tiêu">
           {sourceMode === "keyword" && (
-            <div className="mb-4 space-y-2">
+            <div className="space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-[11px] font-semibold text-[#64748B]">
+                <p className="text-xs font-semibold text-[#1E293B]">
                   Cấu hình số nhóm mục tiêu theo từng hashtag
                 </p>
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] text-[#94A3B8]">Áp dụng tất cả:</span>
+                <div className="flex items-center gap-1.5 rounded-md border border-[#E2E8F0]/90 bg-[#F8FAFC] px-2 py-1">
+                  <span className="text-[11px] font-medium text-[#64748B]">Áp dụng tất cả:</span>
                   <input
                     type="number"
                     min={1}
@@ -1673,7 +1869,7 @@ export default function PageScannerSearch() {
                     onChange={(e) =>
                       setApplyAllTarget(Math.min(500, Math.max(1, Number(e.target.value) || 1)))
                     }
-                    className={`${FIGMA.input} w-14`}
+                    className={`${FIGMA.input} !h-[22px] w-10 !rounded !px-0.5`}
                   />
                   <button
                     type="button"
@@ -1685,50 +1881,45 @@ export default function PageScannerSearch() {
                       });
                       setKeywordTargets(next);
                     }}
-                    className="inline-flex h-8 items-center rounded-lg bg-[#2563EB] px-3 text-[11px] font-bold text-white disabled:opacity-50"
+                    className="inline-flex h-5 items-center rounded bg-[#2563EB] px-3.5 text-[11px] font-medium text-white hover:bg-[#1D4ED8] disabled:opacity-50"
                   >
                     Áp dụng
                   </button>
+                </div>
               </div>
-            </div>
               {derivedHashtags.length === 0 ? (
                 <p className="text-xs text-[#94A3B8]">Thêm hashtag ở cột trái để đặt hạn mức.</p>
               ) : (
-                derivedHashtags.map((tag) => (
-                  <div
-                    key={tag}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-[#F1F5F9] bg-[#F8FAFC] px-3 py-2"
-                  >
-                    <span className="truncate text-xs font-medium text-[#0F172A]">{tag}</span>
-                    <div className="flex items-center gap-1.5">
-                      <NumCtrl
-                        value={keywordTargets[tag] || applyAllTarget}
-                        onChange={(v) => setKeywordTargets((prev) => ({ ...prev, [tag]: v }))}
-                        min={1}
-                        max={500}
-                        step={10}
-                        disabled={isBusy}
-                      />
-                      <span className="text-[11px] text-[#94A3B8]">page</span>
-              </div>
-            </div>
-                ))
+                <div className="max-h-[240px] overflow-y-auto rounded-lg border border-[#E2E8F0] bg-white">
+                  {derivedHashtags.map((tag, i) => (
+                    <div
+                      key={tag}
+                      className="flex items-center justify-between gap-3 border-t border-[#F1F5F9] px-3 py-2 first:border-t-0"
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className={`size-1.5 shrink-0 rounded-full ${i % 2 ? "bg-[#F59E0B]" : "bg-[#2563EB]"}`} />
+                        <span className="truncate text-xs font-medium text-[#1E293B]">{tag}</span>
+                      </span>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <NumCtrl
+                          value={keywordTargets[tag] || applyAllTarget}
+                          onChange={(v) => setKeywordTargets((prev) => ({ ...prev, [tag]: v }))}
+                          min={1}
+                          max={500}
+                          step={10}
+                          disabled={isBusy}
+                        />
+                        <span className="min-w-9 text-xs text-[#64748B]">nhóm</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           )}
 
-          {sourceMode === "keyword" && (
-            <div className="mb-4 flex items-start gap-2.5 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] px-3 py-2.5">
-              <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
-              <p className="min-w-0 flex-1 text-[11px] leading-5 text-[#92400E]">
-                Kết quả đứng top thường có tương tác tốt hơn. Đặt hạn mức vừa phải theo từng hashtag để ưu
-                tiên page chất lượng.
-              </p>
-            </div>
-          )}
-
-          <div className="space-y-3.5 border-t border-[#F1F5F9] pt-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#0F172A]">
+          <div className={`max-w-[473px] space-y-4 ${sourceMode === "keyword" ? "p-5 pb-0" : ""}`}>
+            <div className="flex flex-wrap items-center justify-between gap-2 py-1 text-xs font-medium text-[#334155]">
               <span>Đổi tài khoản mới khi quét được</span>
               <div className="flex items-center gap-2">
                 <NumCtrl
@@ -1739,13 +1930,13 @@ export default function PageScannerSearch() {
                   step={10}
                   disabled={isBusy}
                 />
-                <span className="text-[#64748B]">page / tài khoản</span>
+                <span className="font-normal text-[#64748B]">page / tài khoản</span>
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#0F172A]">
+            <div className="flex flex-wrap items-center justify-between gap-2 py-1 text-xs font-medium text-[#334155]">
               <span>Khoảng cách giữa các lần quét</span>
-              <div className="flex flex-wrap items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-2">
                 <NumCtrl
                   value={delayMin}
                   onChange={(v) => {
@@ -1766,7 +1957,7 @@ export default function PageScannerSearch() {
                   step={1}
                   disabled={isBusy}
                 />
-                <span className="text-[#64748B]">giây</span>
+                <span className="font-normal text-[#64748B]">giây</span>
               </div>
             </div>
 
@@ -1798,373 +1989,265 @@ export default function PageScannerSearch() {
               </label>
             )}
 
-            <label className="flex cursor-pointer flex-wrap items-center justify-between gap-2 text-xs text-[#0F172A]">
-              <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 border-t border-[#F1F5F9] pt-3 text-xs font-medium text-[#334155]">
+              <label className="flex cursor-pointer items-center gap-2">
                 <Checkbox
                   checked={minFollowersEnabled}
                   disabled={isBusy}
                   onCheckedChange={(c) => setMinFollowersEnabled(!!c)}
                 />
                 <span>Chỉ quét page có số lượng followers lớn hơn</span>
-              </div>
+              </label>
               <div className="flex items-center gap-2">
                 <input
-                  type="number"
-                  min={0}
+                  type="text"
+                  inputMode="numeric"
+                  aria-label="Số followers tối thiểu"
                   disabled={isBusy || !minFollowersEnabled}
-                  value={minFollowers}
-                  onChange={(e) => setMinFollowers(Math.max(0, Number(e.target.value) || 0))}
+                  value={Number(minFollowers || 0).toLocaleString("vi-VN")}
+                  onChange={(e) => setMinFollowers(Number(e.target.value.replace(/\D/g, "").slice(0, 9)) || 0)}
                   className={`${FIGMA.input} w-20`}
                 />
-                <span className="text-[#64748B]">Followers</span>
+                <span className="font-normal text-[#64748B]">Followers</span>
               </div>
-            </label>
-                </div>
+            </div>
+          </div>
         </SectionCard>
-              </div>
+      </div>
 
       {/* Controls: idle = Start; đang chạy = Pause + Emergency */}
-      <div className="space-y-3">
-        {!isBusy && (
-          <button
-          type="button"
-          onClick={handleStart}
-            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#2563EB] text-sm font-bold tracking-wide text-white hover:bg-blue-600"
-          >
-            <Play className="size-4 fill-current" />
-            BẮT ĐẦU THỰC THI
-          </button>
-        )}
-        {isBusy && (
-          <div className="grid gap-3 sm:grid-cols-2">
-            <button
-            type="button"
-              onClick={handlePauseResume}
-              className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-[#FECACA] bg-white text-sm font-bold tracking-wide text-[#DC2626]"
-            >
-              {isPaused ? <Play className="size-4" /> : <Pause className="size-4 fill-current" />}
-              {isPaused ? "TIẾP TỤC" : "TẠM DỪNG"}
-            </button>
-            <button
-              type="button"
-              onClick={handleEmergencyStop}
-              className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#EF4444] text-sm font-bold tracking-wide text-white"
-            >
-              <Square className="size-4 fill-current" />
-              DỪNG KHẨN CẤP
-            </button>
-          </div>
-        )}
-      </div>
+      <ScanActionButtons
+        live={isBusy}
+        paused={isPaused}
+        stopping={isStopping}
+        showNewScan={showResults}
+        startDisabled={startLocked}
+        onStart={() => runStartLocked(handleStart)}
+        onPauseResume={handlePauseResume}
+        onStop={handleEmergencyStop}
+        onNewScan={handleNewScan}
+      />
 
       {/* Kết quả + log: chỉ hiện sau khi bắt đầu chạy */}
       {showResults && (
         <>
-      <section className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] px-5 py-4">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="font-heading text-sm font-bold text-[#0B1C30]">Kết quả quét thông tin Page</h2>
-              <span className="rounded-full bg-[#EFF6FF] px-2 py-0.5 text-[11px] font-semibold text-[#2563EB]">
-                {totalCount.toLocaleString("vi-VN")} page
-              </span>
-            </div>
-            {keywordProgress.length > 0 && (
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                <span className="text-[11px] text-[#64748B]">Đã quét được:</span>
-                {keywordProgress.map((row) => {
-                  const target = row.target || keywordTargets[row.keyword] || applyAllTarget;
-                  const count = Number(row.count) || 0;
-                  const done = row.status === "done" || (target > 0 && count >= target);
-                  return (
-                    <span
-                      key={row.keyword}
-                      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${
-                        done
-                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                          : row.status === "scanning"
-                            ? "border-amber-200 bg-amber-50 text-amber-700"
-                            : row.status === "error"
-                              ? "border-rose-200 bg-rose-50 text-rose-700"
-                              : "border-[#E2E8F0] bg-[#F8FAFC] text-[#64748B]"
-                      }`}
-                    >
-                      {row.keyword}{" "}
-                      <span className="tabular-nums">
-                        {count}/{target}
-                      </span>
-                    </span>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={!pages.length}
-              onClick={handleExportCSV}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-40"
-            >
-              <Download className="size-3.5" />
-              Xuất toàn bộ file
-            </button>
-              <button
-                type="button"
-              disabled={!pages.length && !totalCount}
-              onClick={handleSaveList}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#2563EB] px-3 text-xs font-bold text-white disabled:opacity-40"
-            >
-              <Save className="size-3.5" />
-              Lưu danh sách
-              </button>
-          </div>
-          </div>
-
-        <div className="flex flex-wrap items-center gap-2 border-b border-[#F1F5F9] px-5 py-3">
-          <div className="relative min-w-[220px] flex-1">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-[#94A3B8]" />
-            <input
-              value={resultSearch}
-              onChange={(e) => setResultSearch(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && applyResultFilters(1)}
-              placeholder="Tìm Tên, Link, SĐT, Email, Tỉnh thành..."
-              className="h-8 w-full rounded-lg border border-[#E2E8F0] pl-8 pr-3 text-xs outline-none focus:border-[#2563EB]"
-            />
-          </div>
-          <select
-            value={filterKeyword}
-            onChange={(e) => setFilterKeyword(e.target.value)}
-            className="h-8 rounded-lg border border-[#E2E8F0] bg-white px-2 text-xs text-[#64748B] outline-none"
-          >
-            <option value="ALL">Tất cả từ khóa</option>
-            {keywordOptions.map((kw) => (
-              <option key={kw} value={kw}>
-                {kw}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[1100px] text-left text-xs">
-            <thead className="bg-[#F8FAFC] text-[10px] font-bold uppercase tracking-wide text-[#64748B]">
-              <tr>
-                <th className="w-10 px-4 py-2.5">
-                  <Checkbox
-                    checked={pages.length > 0 && selectedPageKeys.length === pages.length}
-                    onCheckedChange={(c) => setSelectedPageKeys(c ? pages.map((p) => p.page_key) : [])}
-                  />
-                </th>
-                <th className="w-14 px-2 py-2.5">STT</th>
-                <th className="px-3 py-2.5">Từ khóa</th>
-                <th className="px-3 py-2.5">Tên page</th>
-                <th className="px-3 py-2.5">Link page</th>
-                <th className="px-3 py-2.5">Số điện thoại</th>
-                <th className="px-3 py-2.5">Email</th>
-                <th className="px-3 py-2.5">Website</th>
-                <th className="px-3 py-2.5">Vị trí / Địa chỉ</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loadingResults ? (
-                <tr>
-                  <td colSpan={9} className="px-4 py-14 text-center text-sm text-[#94A3B8]">
-                    <Loader2 className="mx-auto mb-2 size-6 animate-spin text-[#2563EB]" />
-                    Đang tải kết quả…
-                  </td>
-                </tr>
-              ) : pages.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="px-4 py-14 text-center text-sm text-[#94A3B8]">
-                    Chưa có page trong kết quả (hoặc đang lọc follower).
-                  </td>
-                </tr>
-              ) : (
-                pages.map((page, idx) => {
-                  const globalIdx = (currentPage - 1) * pageSize + idx + 1;
-                  const selected = selectedPageKeys.includes(page.page_key);
-                  const kwLabel = pageKeywordLabel(page);
-                  return (
-                    <tr
-                      key={page.page_key || page.id || idx}
-                      className={`border-t border-[#F1F5F9] ${
-                        selected ? "bg-[#EFF6FF]/60" : "hover:bg-[#F8FAFC]/60"
-                      }`}
-                    >
-                      <td className="px-4 py-2.5">
-                        <Checkbox
-                          checked={selected}
-                          onCheckedChange={(c) =>
-                            setSelectedPageKeys((prev) =>
-                              c ? [...prev, page.page_key] : prev.filter((k) => k !== page.page_key),
-                            )
-                          }
+          <section className="space-y-4 rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="font-heading text-base font-bold text-[#0F172A]">Kết quả quét thông tin Page</h2>
+              {keywordProgress.length > 0 && (
+                <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-bold">
+                  <span className="text-[#696E7A]">Đã quét được:</span>
+                  {keywordProgress.map((row) => {
+                    const target = row.target || keywordTargets[row.keyword] || applyAllTarget;
+                    const count = Number(row.count) || 0;
+                    const error = row.status === "error";
+                    return (
+                      <span
+                        key={row.keyword}
+                        title={error ? "Hashtag quét lỗi" : undefined}
+                        className={`inline-flex items-center gap-1.5 ${error ? "text-rose-600" : "text-[#1D4ED8]"}`}
+                      >
+                        <span
+                          className={`size-1 rounded-full bg-current ${row.status === "scanning" ? "animate-pulse" : ""}`}
                         />
-                      </td>
-                      <td className="px-2 py-2.5 tabular-nums text-[#64748B]">#{globalIdx}</td>
-                      <td className="px-3 py-2.5 text-[#64748B]">{kwLabel}</td>
-                      <td className="px-3 py-2.5">
-                        <div className="flex items-center gap-2">
-                          <Avatar className="size-8 border border-[#E2E8F0]">
-                            {page.avatar_url && <AvatarImage src={page.avatar_url} />}
-                            <AvatarFallback className={AVATAR_COLORS[idx % AVATAR_COLORS.length]}>
-                              {initialsOf(page.page_name || "FB")}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div className="flex min-w-0 items-center gap-1">
-                            <span className="max-w-[180px] truncate font-semibold text-[#0F172A]">
-                                {page.page_name || "—"}
-                              </span>
-                              {page.is_verified === true && (
-                              <BadgeCheck className="size-3.5 shrink-0 text-[#2563EB]" />
-                            )}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-3 py-2.5">
-                        {page.page_url ? (
-                          <a
-                            href={page.page_url}
-                                target="_blank"
-                                rel="noreferrer"
-                            className="inline-flex max-w-[180px] items-center gap-1 truncate text-[#2563EB] hover:underline"
-                              >
-                            {page.page_url.replace(/^https?:\/\/(m\.|www\.)?facebook\.com\//, "fb.com/")}
-                            <ExternalLink className="size-3 shrink-0" />
-                              </a>
-                        ) : (
-                          <span className="text-[#CBD5E1]">—</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5">
-                        {page.phone ? (
-                          <span className="inline-flex items-center gap-1 font-semibold text-emerald-600">
-                            <Phone className="size-3 shrink-0" />
-                            {page.phone}
-                          </span>
-                        ) : (
-                          <span className="italic text-[#CBD5E1]">Chưa cập nhật</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5 text-[#0F172A]">
-                        {page.email || <span className="italic text-[#CBD5E1]">Chưa cập nhật</span>}
-                      </td>
-                      <td className="px-3 py-2.5">
-                        {page.website ? (
-                          <a
-                            href={page.website.startsWith("http") ? page.website : `https://${page.website}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-block max-w-[140px] truncate text-[#2563EB] hover:underline"
-                          >
-                            {page.website.replace(/^https?:\/\//, "")}
-                          </a>
-                        ) : (
-                          <span className="italic text-[#CBD5E1]">Chưa cập nhật</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5 text-[#0F172A]">
-                        {page.address || <span className="italic text-[#CBD5E1]">Chưa cập nhật</span>}
+                        {row.keyword}{" "}
+                        <span className="tabular-nums">
+                          {count}/{target}
+                        </span>
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={!pages.length}
+                  onClick={handleExportCSV}
+                  className="inline-flex h-[34px] items-center gap-2 rounded-lg border border-[#A7F3D0] bg-[#ECFDF5] px-3.5 text-xs font-semibold text-[#047857] hover:bg-emerald-100 disabled:opacity-40"
+                >
+                  <Download className="size-4" />
+                  Xuất toàn bộ file
+                </button>
+                <button
+                  type="button"
+                  disabled={!pages.length && !totalCount}
+                  onClick={handleSaveList}
+                  className="inline-flex h-[34px] items-center gap-2 rounded-lg bg-[#2563EB] px-3.5 text-xs font-semibold text-white hover:bg-[#1D4ED8] disabled:opacity-40"
+                >
+                  <Save className="size-3.5" />
+                  Lưu danh sách
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="relative min-w-[220px] flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#94A3B8]" />
+                <input
+                  value={resultSearch}
+                  onChange={(e) => setResultSearch(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && applyResultFilters(1)}
+                  placeholder="Tìm Tên, Link, SĐT, Email, Tỉnh thành..."
+                  className="h-[34px] w-full rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] pl-9 pr-3 text-xs outline-none placeholder:text-[#64748B] focus:border-[#2563EB]"
+                />
+              </div>
+              <CustomSelect
+                className="w-44"
+                buttonClassName="!h-[34px] !border-[#E2E8F0] !shadow-none"
+                value={filterKeyword}
+                onChange={setFilterKeyword}
+                options={[
+                  { value: "ALL", label: "Tất cả từ khóa" },
+                  ...keywordOptions.map((kw) => ({ value: kw, label: kw })),
+                ]}
+              />
+            </div>
+
+            <div className="overflow-x-auto rounded-lg border border-[#E2E8F0]">
+              <table className="w-full min-w-[1180px] text-left text-xs">
+                <thead className="border-b border-[#E2E8F0] bg-[#F8FAFC] text-xs uppercase tracking-[0.3px] text-[#64748B] [&_th]:py-3 [&_th]:font-semibold">
+                  <tr>
+                    <th className="w-10 px-4 py-2.5">
+                      <Checkbox
+                        checked={pages.length > 0 && selectedPageKeys.length === pages.length}
+                        onCheckedChange={(c) => setSelectedPageKeys(c ? pages.map((p) => p.page_key) : [])}
+                      />
+                    </th>
+                    <th className="w-14 px-2 py-2.5">STT</th>
+                    <th className="px-3 py-2.5">Từ khóa</th>
+                    <th className="px-3 py-2.5">Tên page</th>
+                    <th className="px-3 py-2.5">Link page</th>
+                    <th className="px-3 py-2.5">Số điện thoại</th>
+                    <th className="px-3 py-2.5">Email</th>
+                    <th className="px-3 py-2.5">Website</th>
+                    <th className="px-3 py-2.5">Vị trí / Địa chỉ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loadingResults ? (
+                    <tr>
+                      <td colSpan={9} className="px-4 py-14 text-center text-sm text-[#94A3B8]">
+                        <Loader2 className="mx-auto mb-2 size-6 animate-spin text-[#2563EB]" />
+                        Đang tải kết quả…
                       </td>
                     </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="flex items-center justify-between border-t border-[#F1F5F9] px-5 py-3">
-          <span className="text-[11px] text-[#94A3B8]">
-            Hiển thị {totalCount === 0 ? 0 : (currentPage - 1) * pageSize + 1} -{" "}
-            {Math.min(currentPage * pageSize, totalCount)} của {totalCount.toLocaleString("vi-VN")} Page
-            </span>
-            <Pager page={currentPage} totalPages={totalPages} onChange={(p) => applyResultFilters(p)} />
-          </div>
-      </section>
-
-      {/* Live log — khung trắng ngoài như Figma/scan-info */}
-      <section className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="font-heading text-sm font-bold text-[#0F172A]">Theo dõi tiến trình</h2>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                if (!logs.length) {
-                  toast.warning("Chưa có log để sao chép.");
-                  return;
-                }
-                const text = logs.map((l) => `[${l.timestamp}] ${l.message}`).join("\n");
-                navigator.clipboard
-                  ?.writeText(text)
-                  .then(() => toast.success(`Đã sao chép ${logs.length} dòng log`))
-                  .catch(() => toast.error("Không thể sao chép log"));
-              }}
-              disabled={!logs.length}
-              className="inline-flex items-center gap-1.5 rounded-md border border-[#E2E8F0] px-2.5 py-1 text-[10px] font-semibold text-[#64748B] hover:bg-slate-50 disabled:opacity-40"
-            >
-              <Copy className="size-3.5" />
-              Copy log
-            </button>
-            <span
-              className={`inline-flex items-center gap-1.5 rounded px-2.5 py-0.5 font-mono text-[10px] font-semibold ${
-                isPaused
-                  ? "bg-amber-500/10 text-amber-600"
-                  : isRunning
-                    ? "bg-emerald-500/10 text-emerald-600"
-                    : "bg-slate-100 text-slate-500"
-              }`}
-            >
-              <span
-                className={`size-1.5 rounded-full ${
-                  isPaused ? "bg-amber-500" : isRunning ? "animate-pulse bg-emerald-500" : "bg-slate-400"
-                }`}
-              />
-              {isPaused ? "PAUSED" : isRunning ? "RUNNING" : "IDLE"}
-            </span>
-          </div>
-        </div>
-        <div className="overflow-hidden rounded-xl border border-slate-800 bg-[#1e293b] shadow-inner">
-          <div className="flex items-center justify-between border-b border-slate-800 bg-[#0f172a] px-4 py-2.5">
-            <div className="flex items-center gap-2.5">
-              <div className="flex items-center gap-1.5">
-                <span className="size-2.5 rounded-full bg-rose-500" />
-                <span className="size-2.5 rounded-full bg-amber-500" />
-                <span className="size-2.5 rounded-full bg-emerald-500" />
-              </div>
-              <span className="font-mono text-xs font-semibold text-slate-300">
-                Live Automation Log Console [Thread-01 - Quét Page]
-              </span>
+                  ) : pages.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="px-4 py-14 text-center text-sm text-[#94A3B8]">
+                        Chưa có page trong kết quả (hoặc đang lọc follower).
+                      </td>
+                    </tr>
+                  ) : (
+                    pages.map((page, idx) => {
+                      const globalIdx = (currentPage - 1) * pageSize + idx + 1;
+                      const selected = selectedPageKeys.includes(page.page_key);
+                      const kwLabel = pageKeywordLabel(page);
+                      return (
+                        <tr
+                          key={page.page_key || page.id || idx}
+                          className={`border-t border-[#F1F5F9] ${selected ? "bg-[#EFF6FF]/60" : "hover:bg-[#F8FAFC]/60"
+                            }`}
+                        >
+                          <td className="px-4 py-3">
+                            <Checkbox
+                              checked={selected}
+                              onCheckedChange={(c) =>
+                                setSelectedPageKeys((prev) =>
+                                  c ? [...prev, page.page_key] : prev.filter((k) => k !== page.page_key),
+                                )
+                              }
+                            />
+                          </td>
+                          <td className="px-2 py-3 tabular-nums font-mono text-[#94A3B8]">{String(globalIdx).padStart(2, "0")}</td>
+                          <td className="px-3 py-3 font-bold text-[#94A3B8]">{kwLabel}</td>
+                          <td className="px-3 py-3">
+                            <div className="flex items-center gap-2.5">
+                              <Avatar className="size-7">
+                                {page.avatar_url && <AvatarImage src={page.avatar_url} />}
+                                <AvatarFallback className={AVATAR_COLORS[idx % AVATAR_COLORS.length]}>
+                                  {initialsOf(page.page_name || "FB")}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div className="flex min-w-0 items-center gap-1">
+                                <span className="max-w-[180px] truncate font-semibold text-[#0F172A]">
+                                  {page.page_name || "—"}
+                                </span>
+                                {page.is_verified === true && (
+                                  <BadgeCheck className="size-4 shrink-0 fill-[#3B82F6] text-white" />
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-3 py-3">
+                            {page.page_url ? (
+                              <a
+                                href={page.page_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex max-w-[200px] items-center gap-1 font-mono text-[#2563EB] hover:underline"
+                              >
+                                <span className="truncate">
+                                  {page.page_url.replace(/^https?:\/\/(m\.|www\.)?facebook\.com\//, "fb.com/")}
+                                </span>
+                                <ExternalLink className="size-3 shrink-0 text-[#94A3B8]" />
+                              </a>
+                            ) : (
+                              <span className="text-[#CBD5E1]">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-3">
+                            {page.phone ? (
+                              <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded border border-[#A7F3D0] bg-[#ECFDF5] px-2.5 py-1 font-mono font-bold text-[#047857]">
+                                <Phone className="size-3 shrink-0 fill-current" />
+                                {page.phone}
+                              </span>
+                            ) : (
+                              <span className="font-sans italic text-[#94A3B8]">Chưa cập nhật</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-3 font-mono text-[#475569]">
+                            {page.email || <span className="font-sans italic text-[#94A3B8]">Chưa cập nhật</span>}
+                          </td>
+                          <td className="px-3 py-3">
+                            {page.website ? (
+                              <a
+                                href={page.website.startsWith("http") ? page.website : `https://${page.website}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-block max-w-[140px] truncate font-medium text-[#2563EB] hover:underline"
+                              >
+                                {page.website.replace(/^https?:\/\//, "")}
+                              </a>
+                            ) : (
+                              <span className="font-sans italic text-[#94A3B8]">Chưa cập nhật</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-3 font-medium text-[#475569]">
+                            {page.address || <span className="font-sans italic text-[#94A3B8]">Chưa cập nhật</span>}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
             </div>
-          </div>
-          <div className="max-h-52 space-y-1.5 overflow-y-auto px-4 py-3 font-mono text-[11px] leading-relaxed">
-            {logs.length === 0 ? (
-              <p className="text-slate-500">Chờ log phiên quét…</p>
-            ) : (
-              logs.map((log) => (
-                <div key={log.id} className="flex items-start gap-2 text-slate-300">
-                  <span className="shrink-0 text-slate-500">[{log.timestamp}]</span>
-                  <span
-                    className={
-                      log.type === "success"
-                        ? "text-emerald-400"
-                        : log.type === "warn"
-                          ? "text-amber-400"
-                          : log.type === "error"
-                            ? "text-rose-400"
-                            : "text-slate-200"
-                    }
-                  >
-                    {log.message}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </section>
+
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className="text-xs text-[#64748B]">
+                Hiển thị{" "}
+                <b className="text-[#0F172A]">
+                  {totalCount === 0 ? 0 : (currentPage - 1) * pageSize + 1} -{" "}
+                  {Math.min(currentPage * pageSize, totalCount)}
+                </b>{" "}
+                của <b className="text-[#0F172A]">{totalCount.toLocaleString("vi-VN")}</b> Page
+              </span>
+              <Pager page={currentPage} totalPages={totalPages} onChange={(p) => applyResultFilters(p)} />
+            </div>
+          </section>
+
+          <LiveLogConsole task="Quét Page" logs={logs} phase={runPhase} />
         </>
       )}
 
@@ -2175,7 +2258,18 @@ export default function PageScannerSearch() {
         accounts={accounts}
         loading={accountsLoading}
         selectedUids={selectedUids}
-        onConfirm={(uids) => setSelectedUids(uids)}
+        onConfirm={(uids) => {
+          setSelectedUids(uids);
+          saveSelectedAccountUids("search", uids);
+        }}
+      />
+
+      {/* Modal xác nhận DỪNG KHẨN CẤP */}
+      <EmergencyStopModal
+        isOpen={showEmergencyModal}
+        onClose={() => setShowEmergencyModal(false)}
+        onConfirm={handleConfirmEmergencyStop}
+        isStopping={isStopping}
       />
 
       <SavePageListModal

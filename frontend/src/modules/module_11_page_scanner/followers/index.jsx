@@ -2,17 +2,11 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Play,
-  Pause,
-  Square,
   Search,
   Download,
   ExternalLink,
-  ChevronLeft,
-  ChevronRight,
   Trash2,
-  Users,
-  Layers,
+  Plus,
   ListChecks,
   SlidersHorizontal,
   FolderInput,
@@ -23,7 +17,7 @@ import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
 import { normalizeAccount, initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   createFollowerSession,
@@ -36,22 +30,31 @@ import {
   resumeScanSession,
   getScanSessionDetail,
 } from "../service";
-import { LiveLogConsole, nowStamp, LIVE_STATUSES, parseJsonField, runDelete } from "../_shared";
-import { SelectAccountsModal, SelectPagesModal } from "../shared/SelectPagesModal";
+import { LiveLogConsole, Pager, nowStamp, LIVE_STATUSES, parseJsonField, runDelete } from "../_shared";
+import { SelectAccountsModal, SelectPagesModal, isAccountUsable } from "../shared/SelectPagesModal";
+import {
+  loadSavedAccountUids,
+  saveSelectedAccountUids,
+  resolveUsableSavedUids,
+} from "../shared/accountStorage";
+import { ScanActionButtons } from "../shared/ScanActionButtons";
+import { clearScanState, fetchSavedSessions, loadScanState, saveScanState } from "../shared/scanStateStorage";
+import { useClickLock } from "../shared/useClickLock";
 
 const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
 const PAGE_SIZE = 10;
 
 function StepperBox({ value, onChange, min = 1, max = 5000, step = 1, disabled }) {
   return (
-    <div className="inline-flex h-8 items-center overflow-hidden rounded-lg border border-[#E2E8F0] bg-[#F8FAFC]">
+    <div className="inline-flex h-[30px] items-center overflow-hidden rounded-md border border-[#E2E8F0] bg-white">
       <button
         type="button"
+        aria-label="Giảm"
         disabled={disabled || value <= min}
-        onClick={() => onChange(Math.max(min, Number(value || min) - step))}
-        className="flex h-full w-7 items-center justify-center text-xs font-bold text-[#64748B] hover:bg-[#E2E8F0]/60 disabled:opacity-40"
+        onClick={() => onChange(Math.max(min, value - step))}
+        className="flex h-full w-7 items-center justify-center border-r border-[#E2E8F0] text-xs font-bold text-[#94A3B8] hover:bg-slate-50 hover:text-[#475569] disabled:opacity-40"
       >
-        −
+        -
       </button>
       <input
         type="number"
@@ -59,17 +62,15 @@ function StepperBox({ value, onChange, min = 1, max = 5000, step = 1, disabled }
         max={max}
         value={value}
         disabled={disabled}
-        onChange={(e) => {
-          const v = Number(e.target.value);
-          if (!Number.isNaN(v)) onChange(Math.min(max, Math.max(min, v)));
-        }}
-        className="h-full w-12 border-x border-[#E2E8F0] bg-white text-center text-xs font-bold text-[#0F172A] outline-none disabled:opacity-50"
+        onChange={(e) => onChange(Math.min(max, Math.max(min, Number(e.target.value) || min)))}
+        className="h-full w-10 bg-white text-center text-xs font-semibold text-[#1E293B] outline-none [appearance:textfield] disabled:bg-slate-100 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
       />
       <button
         type="button"
+        aria-label="Tăng"
         disabled={disabled || value >= max}
-        onClick={() => onChange(Math.min(max, Number(value || min) + step))}
-        className="flex h-full w-7 items-center justify-center text-xs font-bold text-[#64748B] hover:bg-[#E2E8F0]/60 disabled:opacity-40"
+        onClick={() => onChange(Math.min(max, value + step))}
+        className="flex h-full w-7 items-center justify-center border-l border-[#E2E8F0] text-xs font-bold text-[#94A3B8] hover:bg-slate-50 hover:text-[#475569] disabled:opacity-40"
       >
         +
       </button>
@@ -77,24 +78,28 @@ function StepperBox({ value, onChange, min = 1, max = 5000, step = 1, disabled }
   );
 }
 
-function SelectedBadge({ children }) {
-  return (
-    <span className="inline-flex items-center gap-2 rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] px-3.5 py-2 text-xs font-medium text-[#334155]">
-      <span className="size-2 shrink-0 rounded-full bg-[#10B981]" />
-      {children}
+function SelectedBadge({ count, unit, emptyText }) {
+  return count > 0 ? (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-[#A7F3D0] bg-[#ECFDF5] px-3 py-1 text-xs font-medium text-[#047857]">
+      <span className="size-2 rounded-full bg-[#10B981]" />
+      Đã chọn: <strong className="font-bold">{count} {unit}</strong>
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
+      <span className="size-2 rounded-full bg-amber-500" />
+      {emptyText}
     </span>
   );
 }
 
 function exportFollowersCsv(rows, filename) {
-  const headers = ["STT", "Họ và tên", "UID / Key", "Profile", "Địa chỉ", "Bạn bè", "Page"];
+  const headers = ["STT", "Họ và tên", "UID / Key", "Profile", "Avatar", "Page"];
   const body = rows.map((u, i) => [
     i + 1,
     u.name || "",
     u.uid || "",
     u.profile_url || "",
-    u.location || "",
-    u.friends || "",
+    u.avatar_url || "",
     u.page_name || u.page_key || "",
   ]);
   const csv = [headers, ...body]
@@ -118,11 +123,10 @@ function mapFollowerRow(row, idx = 0) {
     uid,
     follower_key: key,
     profile_url: row.profile_url || (uid ? `https://www.facebook.com/${uid}` : ""),
-    location: row.location || "—",
-    friends: row.friend_count != null ? `${Number(row.friend_count).toLocaleString("vi-VN")} bạn bè` : "—",
     time: row.updated_at || row.created_at || "",
     page_key: row.page_key || "",
     page_name: row.page_name || row.page_key || "",
+    avatar_url: row.avatar_url || "",
   };
 }
 
@@ -140,6 +144,7 @@ function mapKhoToPage(p, idx = 0) {
     follower_count: p.follower_count || 0,
     followers_text: p.follower_count ? Number(p.follower_count).toLocaleString("vi-VN") : "—",
     scanned_post_count: p.scanned_post_count || 0,
+    avatar_url: p.avatar_url || "",
     avatar_initials: initialsOf(p.page_name || p.page_key || "PG"),
     avatar_color: AVATAR_COLORS[idx % AVATAR_COLORS.length],
   };
@@ -177,6 +182,8 @@ export default function PageScannerFollowers() {
   const [logs, setLogs] = useState([]);
   const logId = useRef(0);
   const pollRef = useRef(null);
+  const [startLocked, runStartLocked] = useClickLock(1000); // chống bấm liên tục nút BẮT ĐẦU
+  const restoreSeqRef = useRef(0); // tăng khi bắt đầu / quét mới / rời trang → bỏ kết quả khôi phục về muộn
 
   const [resultPages, setResultPages] = useState([]);
   const [followersByPage, setFollowersByPage] = useState({});
@@ -238,7 +245,7 @@ export default function PageScannerFollowers() {
   );
 
   const refreshResults = useCallback(
-    async (sid, pageKeys) => {
+    async (sid, pageKeys, phase = runPhase) => {
       const keys = pageKeys?.length ? pageKeys : scanPageKeysRef.current;
       if (!sid && !keys.length) return;
       try {
@@ -268,10 +275,10 @@ export default function PageScannerFollowers() {
             const fromSel = selectedPages.find((p) => p.page_key === pk);
             const fromKho = khoPages.find((p) => p.page_key === pk);
             const count = (byPage[pk] || []).length;
-            const isActive = runPhase === "running" || runPhase === "paused";
+            const isActive = phase === "running" || phase === "paused";
             let status = "QUEUE";
             let status_label = "Đang chờ hàng đợi";
-            if (runPhase === "done") {
+            if (phase === "done") {
               status = count > 0 ? "DONE" : "QUEUE";
               status_label = count > 0 ? "Hoàn tất quét" : "Chưa có dữ liệu";
             } else if (isActive && (idx === 0 || count > 0)) {
@@ -323,7 +330,7 @@ export default function PageScannerFollowers() {
           if (DONE_STATUSES.includes(session.status)) {
             stopPolling();
             setRunPhase("done");
-            await refreshResults(sid, scanPageKeysRef.current);
+            await refreshResults(sid, scanPageKeysRef.current, "done");
             toast.success(
               `Phiên FOLLOW #${sid} · ${session.status}/${session.stop_reason || "—"} · ${count} FL`,
             );
@@ -347,9 +354,13 @@ export default function PageScannerFollowers() {
           normalizeAccount(a, i),
         );
         setAccounts(normalized);
-        setSelectedUids(
-          normalized.filter((a) => LIVE_STATUSES.has(String(a.status))).map((a) => a.uid),
-        );
+        const saved = loadSavedAccountUids("followers");
+        if (saved && saved.length) {
+          const usable = resolveUsableSavedUids(saved, normalized);
+          setSelectedUids(usable);
+        } else {
+          setSelectedUids([]);
+        }
       } catch (err) {
         toast.error(`Lỗi tải tài khoản: ${err.message}`);
       } finally {
@@ -376,16 +387,23 @@ export default function PageScannerFollowers() {
     };
   }, []);
 
-  /* Khôi phục phiên FOLLOW đang chạy / tạm dừng khi quay lại trang hoặc reload */
+  /* Khôi phục phiên FOLLOW đang chạy; không có thì phiên quét xong gần nhất (giống Module 3) */
   useEffect(() => {
-    let cancelled = false;
+    const seq = ++restoreSeqRef.current;
+    const stale = () => seq !== restoreSeqRef.current;
     (async () => {
       try {
-        const data = await getActiveCampaign("FOLLOW");
-        if (cancelled || !data?.active || !(data.sessions || []).length) return;
-        const top =
-          data.sessions.find((s) => s.id === data.primary_session_id) ||
-          data.sessions[data.sessions.length - 1];
+        const saved = loadScanState("followers");
+        const data = await getActiveCampaign("FOLLOW").catch(() => null);
+        if (stale()) return;
+        const sessions =
+          data?.active && data.sessions?.length
+            ? data.sessions
+            : await fetchSavedSessions("followers", saved?.sessionIds);
+        if (stale() || !sessions.length) return;
+        const top = sessions.find((s) => s.id === data?.primary_session_id) || sessions[sessions.length - 1];
+        const isDone = DONE_STATUSES.includes(top.status);
+        const cfg = (saved?.sessionIds || []).includes(top.id) ? saved.config || {} : {};
         const settings = parseJsonField(top.settings, {});
         const pageKeys = (settings.page_keys || []).filter(Boolean);
         let kho = [];
@@ -394,8 +412,9 @@ export default function PageScannerFollowers() {
         } catch {
           kho = [];
         }
-        if (cancelled) return;
-        const byKey = new Map(kho.map((p) => [p.page_key, p]));
+        if (stale()) return;
+        // Page ngoài 200 dòng đầu của kho: lấy thông tin từ lựa chọn đã lưu
+        const byKey = new Map([...(cfg.selectedPages || []), ...kho].map((p) => [p.page_key, p]));
         const pages = pageKeys.map((pk, i) => mapKhoToPage(byKey.get(pk) || { page_key: pk }, i));
 
         setSelectedPages(pages);
@@ -416,38 +435,68 @@ export default function PageScannerFollowers() {
           })),
         );
         setActivePageKey(pageKeys[0] || "");
+        if (cfg.selectedPages !== undefined) {
+          // Lựa chọn lưu cũ chưa có avatar / link ảnh có thể hết hạn → ưu tiên avatar trong kho
+          setSelectedPages(
+            cfg.selectedPages.map((p) => ({
+              ...p,
+              avatar_url: byKey.get(p.page_key)?.avatar_url || p.avatar_url || "",
+            })),
+          );
+        }
+        if (cfg.delayMin !== undefined) setDelayMin(cfg.delayMin);
+        if (cfg.delayMax !== undefined) setDelayMax(cfg.delayMax);
+        if (cfg.rotateEvery !== undefined) setRotateEvery(cfg.rotateEvery);
+        if (cfg.maxPerPage !== undefined) setMaxPerPage(cfg.maxPerPage);
+        if (cfg.prioritizeRecent !== undefined) setPrioritizeRecent(cfg.prioritizeRecent);
+        if (cfg.dedupAcrossPages !== undefined) setDedupAcrossPages(cfg.dedupAcrossPages);
+        if (cfg.activePageKey !== undefined) setActivePageKey(cfg.activePageKey);
         setSessionId(top.id);
         setResultCount(top.total_unique || 0);
-        setRunPhase(top.status === "PAUSED" ? "paused" : "running");
+        setRunPhase(isDone ? "done" : top.status === "PAUSED" ? "paused" : "running");
         syncSessionLogs(top);
+        saveScanState("followers", { sessionIds: [top.id] });
         pushLog(`Khôi phục phiên FOLLOW #${top.id} · ${top.status}`, "warn");
-        startPoll(top.id);
+        if (isDone) refreshResults(top.id, pageKeys, "done");
+        else startPoll(top.id);
       } catch {
         /* không có phiên đang chạy */
       }
     })();
     return () => {
-      cancelled = true;
+      restoreSeqRef.current += 1;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleStart = async () => {
     try {
-      if (!selectedPages.length) throw new Error("Chọn ít nhất 1 Page muốn quét.");
+      if (!selectedUids || !selectedUids.length) {
+        toast.warning("Chưa chọn tài khoản");
+        return;
+      }
+      const usable = accounts.filter((a) => selectedUids.includes(a.uid) && isAccountUsable(a));
+      if (!usable.length) {
+        toast.warning("Không có tài khoản khả dụng (Live & Đã đăng nhập) trong danh sách đã chọn.");
+        return;
+      }
+      if (!selectedPages.length) {
+        toast.warning("Chọn ít nhất 1 Page muốn quét.");
+        return;
+      }
       const pageKeys = selectedPages.map((p) => p.page_key).filter(Boolean);
-      if (!pageKeys.length) throw new Error("Danh sách page thiếu page_key.");
+      if (!pageKeys.length) {
+        toast.warning("Danh sách page thiếu page_key.");
+        return;
+      }
 
-      const live = accounts.filter(
-        (a) => selectedUids.includes(a.uid) && LIVE_STATUSES.has(String(a.status)),
-      );
-      // Thứ tự xoay vòng = thứ tự acc Live đã chọn (không có acc Live → gửi acc đã chọn, BE kiểm tra)
-      const accountUids = live.length ? live.map((a) => a.uid) : [...selectedUids];
-      const accountUid = accountUids[0] || null;
-      if (!accountUid) throw new Error("Chọn ít nhất 1 tài khoản Live.");
+      // Thứ tự xoay vòng = thứ tự acc Live đã chọn
+      const accountUids = usable.map((a) => a.uid);
+      const accountUid = accountUids[0];
 
       const targetFollowers = Math.max(pageKeys.length * maxPerPage, maxPerPage);
 
+      restoreSeqRef.current += 1;
       stopPolling();
       setRunPhase("running");
       setLogs([]);
@@ -492,6 +541,7 @@ export default function PageScannerFollowers() {
         page_delay_max_s: delayMax,
       });
 
+      saveScanState("followers", { sessionIds: [res.session_id] });
       setSessionId(res.session_id);
       pushLog(`Session #${res.session_id} · ${res.status || "RUNNING"} · ${res.message || "OK"}`, "success");
       if (prioritizeRecent) {
@@ -508,6 +558,39 @@ export default function PageScannerFollowers() {
       toast.error(msg);
       pushLog(msg, "error");
     }
+  };
+
+  /* Lưu cấu hình kèm phiên đang xem để vào lại trang vẫn còn */
+  const configJson = JSON.stringify({
+    selectedPages,
+    delayMin,
+    delayMax,
+    rotateEvery,
+    maxPerPage,
+    prioritizeRecent,
+    dedupAcrossPages,
+    activePageKey,
+  });
+  useEffect(() => {
+    if (runPhase !== "idle") saveScanState("followers", { config: JSON.parse(configJson) });
+  }, [runPhase, configJson]);
+
+  /** "Quét mới": bỏ phiên đang xem (dữ liệu trong kho không bị xóa). */
+  const handleNewScan = () => {
+    restoreSeqRef.current += 1;
+    stopPolling();
+    clearScanState("followers");
+    setRunPhase("idle");
+    setSessionId(null);
+    setLogs([]);
+    setResultCount(0);
+    setSelectedPages([]);
+    setResultPages([]);
+    setFollowersByPage({});
+    setActivePageKey("");
+    setSelectedRowIds([]);
+    setTablePage(1);
+    scanPageKeysRef.current = [];
   };
 
   const handlePauseResume = async () => {
@@ -537,7 +620,7 @@ export default function PageScannerFollowers() {
       pushLog("Dừng khẩn cấp.", "warn");
       stopPolling();
       setRunPhase("done");
-      await refreshResults(sessionId, scanPageKeysRef.current);
+      await refreshResults(sessionId, scanPageKeysRef.current, "done");
     } catch (err) {
       toast.error(err.message);
     }
@@ -567,7 +650,7 @@ export default function PageScannerFollowers() {
     const q = rightSearch.trim().toLowerCase();
     if (q) {
       list = list.filter((u) =>
-        `${u.name} ${u.uid} ${u.location} ${u.profile_url}`.toLowerCase().includes(q),
+        `${u.name} ${u.uid} ${u.profile_url}`.toLowerCase().includes(q),
       );
     }
     if (sortBy === "NAME") {
@@ -630,12 +713,12 @@ export default function PageScannerFollowers() {
   const handleDeleteSelected = () => deleteFollowerRows(selectedRowIds);
 
   return (
-    <div className="space-y-5 pb-10">
+    <div className="-m-6 min-h-full space-y-6 bg-[#F4F7FC] p-6">
       <div>
-        <h1 className="font-heading text-[22px] font-bold tracking-tight text-[#0F172A]">
+        <h1 className="font-heading text-xl font-bold text-[#0F172A]">
           Quét danh sách theo dõi page
         </h1>
-        <p className="mt-1.5 max-w-3xl text-[13px] leading-relaxed text-[#64748B]">
+        <p className="mt-1 max-w-3xl text-xs text-[#64748B]">
           Thu thập danh sách người thích hoặc theo dõi trang, lọc thành viên mới và trích xuất
           UID/Profile tự động
           {sessionId ? (
@@ -646,27 +729,27 @@ export default function PageScannerFollowers() {
           ) : (
             ". "
           )}
-          <Link href="/scanner/list-followers" className="font-medium text-[#1877F2] hover:underline">
+          <Link href="/scanner/list-followers" className="font-medium text-[#2563EB] hover:underline">
             Xem DS followers
           </Link>
         </p>
       </div>
 
       {/* Figma 2890-35336 — 2 config cards */}
-      <div className="grid grid-cols-1 items-stretch gap-5 lg:grid-cols-2">
-        <div className="flex flex-col rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
-          <div className="mb-5 flex items-center gap-3">
-            <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[#1877F2] text-xs font-bold text-white">
+      <div className="grid items-stretch gap-6 xl:grid-cols-2">
+        <div className="flex flex-col rounded-xl border border-[#E2E8F0] bg-white p-6 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
+          <div className="mb-5 flex items-center gap-2.5 border-b border-[#F1F5F9] pb-2">
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[#2563EB] text-xs font-bold text-white">
               1
             </span>
-            <h3 className="font-heading text-[15px] font-bold text-[#0F172A]">
+            <h3 className="font-heading text-base font-semibold text-[#0F172A]">
               Cấu hình chung, Chọn tài khoản &amp; Nhóm quét
             </h3>
           </div>
 
           <div className="space-y-5">
             <div>
-              <p className="mb-2.5 text-[11px] font-bold tracking-wider text-[#64748B] uppercase">
+              <p className="mb-2.5 text-xs font-semibold uppercase tracking-[0.6px] text-[#64748B]">
                 TÀI KHOẢN THỰC THI QUÉT
               </p>
               <div className="flex flex-wrap items-center gap-3">
@@ -674,23 +757,17 @@ export default function PageScannerFollowers() {
                   type="button"
                   disabled={isBusy}
                   onClick={() => setShowAccountModal(true)}
-                  className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#1877F2] px-4 text-xs font-bold text-white shadow-sm transition hover:bg-[#166FE5] disabled:opacity-50"
+                  className="inline-flex h-8 items-center gap-2 rounded-lg bg-[#2563EB] px-4 text-xs font-semibold text-white shadow-sm transition hover:bg-[#1D4ED8] disabled:opacity-60"
                 >
-                  <Users className="size-4" />
+                  <Plus className="size-3.5 stroke-[2.5]" />
                   Chọn tài khoản
                 </button>
-                <SelectedBadge>
-                  Đã chọn:{" "}
-                  <strong className="font-bold text-[#0F172A]">
-                    {selectedUids.length} / {Math.max(accounts.length, 1)}
-                  </strong>{" "}
-                  tài khoản
-                </SelectedBadge>
+                <SelectedBadge count={selectedUids.length} unit="tài khoản" emptyText="Chưa chọn tài khoản" />
               </div>
             </div>
 
             <div>
-              <p className="mb-2.5 text-[11px] font-bold tracking-wider text-[#64748B] uppercase">
+              <p className="mb-2.5 text-xs font-semibold uppercase tracking-[0.6px] text-[#64748B]">
                 CHỈ ĐỊNH NHÓM CẦN QUÉT
               </p>
               <div className="flex flex-wrap items-center gap-3">
@@ -698,21 +775,18 @@ export default function PageScannerFollowers() {
                   type="button"
                   disabled={isBusy}
                   onClick={() => setShowPageModal(true)}
-                  className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#1877F2] px-4 text-xs font-bold text-white shadow-sm transition hover:bg-[#166FE5] disabled:opacity-50"
+                  className="inline-flex h-8 items-center gap-2 rounded-lg bg-[#2563EB] px-4 text-xs font-semibold text-white shadow-sm transition hover:bg-[#1D4ED8] disabled:opacity-60"
                 >
-                  <Layers className="size-4" />
+                  <Plus className="size-3.5 stroke-[2.5]" />
                   Chọn page muốn quét
                 </button>
-                <SelectedBadge>
-                  Đã chọn:{" "}
-                  <strong className="font-bold text-[#0F172A]">{selectedPages.length} nhóm</strong>
-                </SelectedBadge>
+                <SelectedBadge count={selectedPages.length} unit="page" emptyText="Chưa chọn page" />
               </div>
             </div>
 
             <div className="pt-0.5">
-              <p className="mb-2.5 text-xs font-semibold text-[#1E293B]">
-                Khoảng cách giữa các lần quét:
+              <p className="mb-2.5 text-xs font-medium text-[#334155]">
+                Khoảng cách giữa các lần quét
               </p>
               <div className="flex items-center gap-2">
                 <StepperBox
@@ -725,7 +799,7 @@ export default function PageScannerFollowers() {
                   max={180}
                   disabled={isBusy}
                 />
-                <span className="text-xs text-[#64748B]">-</span>
+                <span className="text-xs text-[#64748B]">đến</span>
                 <StepperBox
                   value={delayMax}
                   onChange={(v) => setDelayMax(Math.max(delayMin, v))}
@@ -739,20 +813,20 @@ export default function PageScannerFollowers() {
           </div>
         </div>
 
-        <div className="flex flex-col rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
-          <div className="mb-5 flex items-center gap-3">
-            <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[#1877F2] text-xs font-bold text-white">
+        <div className="flex flex-col rounded-xl border border-[#E2E8F0] bg-white p-6 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
+          <div className="mb-5 flex items-center gap-2.5 border-b border-[#F1F5F9] pb-2">
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[#2563EB] text-xs font-bold text-white">
               2
             </span>
-            <h3 className="font-heading text-[15px] font-bold text-[#0F172A]">
+            <h3 className="font-heading text-base font-semibold text-[#0F172A]">
               Cấu hình quét nâng cao &amp; Bộ lọc
             </h3>
           </div>
 
           <div className="flex flex-1 flex-col space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="text-xs font-semibold text-[#1E293B]">
-                Đổi tài khoản mới khi quét được:
+              <span className="text-xs font-medium text-[#334155]">
+                Đổi tài khoản mới khi quét được
               </span>
               <div className="flex items-center gap-2">
                 <StepperBox
@@ -768,7 +842,7 @@ export default function PageScannerFollowers() {
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="text-xs font-semibold text-[#1E293B]">Mỗi nhóm quét tối đa:</span>
+              <span className="text-xs font-medium text-[#334155]">Mỗi page quét tối đa</span>
               <div className="flex items-center gap-2">
                 <StepperBox
                   value={maxPerPage}
@@ -783,23 +857,23 @@ export default function PageScannerFollowers() {
             </div>
 
             <div className="mt-auto space-y-3.5 pt-2">
-              <label className="flex cursor-pointer items-center gap-2.5 select-none">
+              <label className="flex cursor-pointer items-center gap-2 select-none">
                 <Checkbox
                   checked={prioritizeRecent}
                   disabled={isBusy}
                   onCheckedChange={(c) => setPrioritizeRecent(!!c)}
                 />
-                <span className="text-xs font-medium text-[#1E293B]">
+                <span className="text-xs font-medium text-[#334155]">
                   Ưu tiên quét người mới theo dõi gần đây
                 </span>
               </label>
-              <label className="flex cursor-pointer items-center gap-2.5 select-none">
+              <label className="flex cursor-pointer items-center gap-2 select-none">
                 <Checkbox
                   checked={dedupAcrossPages}
                   disabled={isBusy}
                   onCheckedChange={(c) => setDedupAcrossPages(!!c)}
                 />
-                <span className="text-xs font-medium text-[#1E293B]">
+                <span className="text-xs font-medium text-[#334155]">
                   Tự động kiểm tra trùng UID giữa các page
                 </span>
               </label>
@@ -809,22 +883,22 @@ export default function PageScannerFollowers() {
       </div>
 
       {/* Preview — Figma */}
-      <div className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+      <div className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E2E8F0] bg-[#F0F7FF] px-6 py-4">
           <div className="flex items-center gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white text-[#1877F2] shadow-sm">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white text-[#2563EB] shadow-sm">
               <ListChecks className="size-4" />
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2.5">
-                <h3 className="font-heading text-sm font-bold text-[#0F172A]">
+                <h3 className="font-heading text-base font-semibold text-[#0F172A]">
                   Xem trước danh sách page muốn quét
                 </h3>
-                <span className="rounded-full bg-[#EFF6FF] px-2.5 py-0.5 text-[11px] font-bold text-[#1877F2]">
+                <span className="rounded-full bg-[#EFF6FF] px-2.5 py-0.5 text-[11px] font-bold text-[#2563EB]">
                   {selectedPages.length} page hợp lệ
                 </span>
               </div>
-              <p className="mt-0.5 text-[11px] text-[#64748B]">
+              <p className="mt-0.5 text-xs text-[#64748B]">
                 Danh sách các trang đã sẵn sàng cào danh sách followers
               </p>
             </div>
@@ -833,7 +907,7 @@ export default function PageScannerFollowers() {
 
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] text-left text-xs">
-            <thead className="bg-[#F8FAFC] text-[11px] font-bold text-[#64748B] uppercase">
+            <thead className="bg-[#F8FAFC] text-xs uppercase tracking-[0.3px] text-[#64748B] [&_th]:py-3 [&_th]:font-semibold">
               <tr className="border-b border-[#E2E8F0]">
                 <th className="w-16 px-6 py-3">STT</th>
                 <th className="px-4 py-3">TÊN FANPAGE &amp; ID</th>
@@ -856,14 +930,21 @@ export default function PageScannerFollowers() {
                     <td className="px-4 py-3.5">
                       <div className="flex items-center gap-3">
                         <div
-                          className={`flex size-9 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                          className={`relative flex overflow-hidden size-9 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
                             page.avatar_color || "bg-indigo-100 text-indigo-700"
                           }`}
                         >
                           {page.avatar_initials || initialsOf(page.name || page.page_name)}
+                          <AvatarImage
+                            src={page.avatar_url}
+                            className="absolute inset-0"
+                            onError={(e) => {
+                              e.currentTarget.style.display = "none";
+                            }}
+                          />
                         </div>
                         <div className="min-w-0">
-                          <p className="font-bold text-[#0F172A]">
+                          <p className="font-semibold text-[#0F172A]">
                             {page.name || page.page_name}
                           </p>
                           <p className="font-mono text-[11px] text-[#94A3B8]">
@@ -900,49 +981,17 @@ export default function PageScannerFollowers() {
       </div>
 
       {/* CTA */}
-      <div className="space-y-2.5">
-        <button
-          type="button"
-          onClick={handleToggleExecution}
-          disabled={!isBusy && accountsLoading}
-          className={`flex h-12 w-full items-center justify-center gap-2 rounded-xl text-sm font-bold tracking-wide text-white shadow-sm transition ${
-            isBusy
-              ? "bg-[#DC2626] hover:bg-rose-700"
-              : "bg-[#1877F2] hover:bg-[#166FE5] disabled:opacity-60"
-          }`}
-        >
-          {isBusy ? (
-            <>
-              <Square className="size-4 fill-white" />
-              <span>DỪNG THỰC THI QUÉT FOLLOWERS</span>
-            </>
-          ) : (
-            <>
-              <Play className="size-4 fill-white" />
-              <span>BẮT ĐẦU THỰC THI</span>
-            </>
-          )}
-        </button>
-        {isBusy && (
-          <button
-            type="button"
-            onClick={handlePauseResume}
-            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[#F59E0B] bg-white text-xs font-bold text-[#D97706] hover:bg-amber-50"
-          >
-            {isPaused ? (
-              <>
-                <Play className="size-3.5 fill-current" />
-                TIẾP TỤC QUÉT
-              </>
-            ) : (
-              <>
-                <Pause className="size-3.5" />
-                TẠM DỪNG QUÉT
-              </>
-            )}
-          </button>
-        )}
-      </div>
+      <ScanActionButtons
+        live={isBusy}
+        paused={isPaused}
+        showNewScan={showResults}
+        startDisabled={startLocked || accountsLoading}
+        controlDisabled={startLocked}
+        onStart={() => runStartLocked(handleToggleExecution)}
+        onPauseResume={handlePauseResume}
+        onStop={() => runStartLocked(handleToggleExecution)}
+        onNewScan={handleNewScan}
+      />
 
       {/* Results — Figma master-detail, chỉ hiện khi quét xong */}
       {showResults ? (
@@ -952,23 +1001,23 @@ export default function PageScannerFollowers() {
               <h3 className="font-heading text-base font-bold text-[#0F172A]">
                 Kết quả quét người theo dõi
               </h3>
-              <span className="rounded-full bg-[#EFF6FF] px-3 py-0.5 text-xs font-bold text-[#1877F2]">
+              <span className="rounded-full bg-[#EFF6FF] px-3 py-0.5 text-xs font-bold text-[#2563EB]">
                 {fmtNum(resultCount)} UID thu thập
               </span>
             </div>
             <button
               type="button"
               onClick={handleExportAll}
-              className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-xl border border-[#E2E8F0] bg-white px-3.5 text-xs font-bold text-[#1E293B] shadow-sm hover:bg-[#F8FAFC]"
+              className="inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-lg border border-[#A7F3D0] bg-[#ECFDF5] px-3.5 text-xs font-semibold text-[#047857] hover:bg-emerald-100"
             >
-              <Download className="size-3.5 text-[#1877F2]" />
-              Xuất toàn bộ file (Excel/CSV)
+              <Download className="size-4" />
+              Xuất toàn bộ file
             </button>
           </div>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
             {/* Left — Danh mục Page mục tiêu */}
-            <div className="flex flex-col rounded-2xl border border-[#E2E8F0] bg-white p-4 shadow-sm lg:col-span-4">
+            <div className="flex flex-col rounded-xl border border-[#E2E8F0] bg-white p-4 shadow-sm lg:col-span-4">
               <div className="mb-3 flex items-center justify-between">
                 <span className="text-xs font-bold text-[#0F172A]">
                   Danh mục Page mục tiêu ({filteredLeftPages.length})
@@ -982,13 +1031,13 @@ export default function PageScannerFollowers() {
                   value={leftSearch}
                   onChange={(e) => setLeftSearch(e.target.value)}
                   placeholder="Tìm tên Page, UID..."
-                  className="h-9 w-full rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] pr-3 pl-9 text-xs text-[#0F172A] outline-none focus:border-[#1877F2] focus:bg-white"
+                  className="h-[34px] w-full rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] pr-3 pl-9 text-xs text-[#0F172A] outline-none focus:border-[#2563EB] focus:bg-white"
                 />
               </div>
 
               <div className="max-h-[440px] flex-1 space-y-2.5 overflow-y-auto pr-1">
                 {filteredLeftPages.length === 0 ? (
-                  <p className="py-8 text-center text-[11px] text-[#94A3B8]">Chưa có page trong phiên</p>
+                  <p className="py-8 text-center text-xs text-[#94A3B8]">Chưa có page trong phiên</p>
                 ) : (
                   filteredLeftPages.map((pg, idx) => {
                     const active = activePage?.page_key === pg.page_key;
@@ -1003,7 +1052,7 @@ export default function PageScannerFollowers() {
                         }}
                         className={`w-full cursor-pointer rounded-xl border p-3.5 text-left transition ${
                           active
-                            ? "border-2 border-[#1877F2] bg-[#EFF6FF]/30 shadow-sm"
+                            ? "border-2 border-[#2563EB] bg-[#EFF6FF]/30 shadow-sm"
                             : "border-[#E2E8F0] bg-white hover:bg-[#F8FAFC]"
                         }`}
                       >
@@ -1028,7 +1077,7 @@ export default function PageScannerFollowers() {
                           <span
                             className={
                               active
-                                ? "font-bold text-[#1877F2]"
+                                ? "font-bold text-[#2563EB]"
                                 : "font-semibold text-[#334155]"
                             }
                           >
@@ -1043,14 +1092,14 @@ export default function PageScannerFollowers() {
 
               <div className="mt-4 flex items-center justify-between border-t border-[#F1F5F9] pt-3 text-xs">
                 <span className="text-[#64748B]">Tổng UID đã xử lý:</span>
-                <strong className="font-mono font-bold text-[#1877F2]">
+                <strong className="font-mono font-bold text-[#2563EB]">
                   {fmtNum(resultCount)} UID
                 </strong>
               </div>
             </div>
 
             {/* Right — chi tiết UID */}
-            <div className="flex flex-col rounded-2xl border border-[#E2E8F0] bg-white p-5 shadow-sm lg:col-span-8">
+            <div className="flex flex-col rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-sm lg:col-span-8">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] pb-3.5">
                 <div>
                   <h4 className="font-heading text-sm font-bold text-[#0F172A]">
@@ -1062,7 +1111,7 @@ export default function PageScannerFollowers() {
                       {fmtNum(activePage?.follower_count)}
                     </strong>{" "}
                     Followers • Đã thu thập:{" "}
-                    <strong className="font-mono text-[#1877F2]">
+                    <strong className="font-mono text-[#2563EB]">
                       {fmtNum(activeFollowers.length)}
                     </strong>{" "}
                     UID
@@ -1072,7 +1121,7 @@ export default function PageScannerFollowers() {
                 <button
                   type="button"
                   onClick={handleExportPage}
-                  className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-xl bg-[#1877F2] px-4 text-xs font-bold text-white shadow-sm hover:bg-[#166FE5]"
+                  className="inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-lg bg-[#2563EB] px-3.5 text-xs font-semibold text-white hover:bg-[#1D4ED8]"
                 >
                   <Download className="size-3.5" />
                   Xuất UID Page này
@@ -1087,14 +1136,14 @@ export default function PageScannerFollowers() {
                     setRightSearch(e.target.value);
                     resetResultSelection();
                   }}
-                  placeholder="Tìm UID, Tên, Vị trí..."
-                  className="h-9 w-full rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] pr-4 pl-10 text-xs text-[#0F172A] outline-none focus:border-[#1877F2] focus:bg-white"
+                  placeholder="Tìm UID, Tên..."
+                  className="h-[34px] w-full rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] pr-4 pl-10 text-xs text-[#0F172A] outline-none focus:border-[#2563EB] focus:bg-white"
                 />
               </div>
 
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-[#F8FAFC] px-3.5 py-2">
-                <div className="flex items-center gap-2 text-xs font-bold text-[#1877F2]">
-                  <span className="flex size-5 items-center justify-center rounded-full bg-[#1877F2] text-[10px] text-white">
+                <div className="flex items-center gap-2 text-xs font-bold text-[#2563EB]">
+                  <span className="flex size-5 items-center justify-center rounded-full bg-[#2563EB] text-[10px] text-white">
                     {selectedRowIds.length}
                   </span>
                   Đã chọn: {selectedRowIds.length} UID
@@ -1119,7 +1168,7 @@ export default function PageScannerFollowers() {
                       exportFollowersCsv(rows, "followers_selected.csv");
                       toast.success(`Đã xuất ${rows.length} UID đã chọn.`);
                     }}
-                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-3 py-1.5 text-xs font-bold text-[#1877F2] hover:bg-[#DBEAFE]"
+                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-3 py-1.5 text-xs font-semibold text-[#2563EB] hover:bg-[#DBEAFE]"
                   >
                     <Download className="size-3.5" />
                     Xuất file chọn
@@ -1127,7 +1176,7 @@ export default function PageScannerFollowers() {
                   <button
                     type="button"
                     onClick={handleDeleteSelected}
-                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-[#FECACA] bg-[#FEF2F2] px-3 py-1.5 text-xs font-bold text-[#DC2626] hover:bg-[#FEE2E2]"
+                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-[#FECACA] bg-[#FEF2F2] px-3 py-1.5 text-xs font-semibold text-[#DC2626] hover:bg-[#FEE2E2]"
                   >
                     <Trash2 className="size-3.5" />
                     Xóa
@@ -1137,7 +1186,7 @@ export default function PageScannerFollowers() {
 
               <div className="flex-1 overflow-x-auto">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-[#F8FAFC] text-[11px] font-bold text-[#64748B] uppercase">
+                  <thead className="bg-[#F8FAFC] text-xs uppercase tracking-[0.3px] text-[#64748B] [&_th]:py-3 [&_th]:font-semibold">
                     <tr className="border-b border-[#E2E8F0]">
                       <th className="w-8 px-3 py-2.5">
                         <Checkbox
@@ -1160,8 +1209,6 @@ export default function PageScannerFollowers() {
                       <th className="w-12 px-2 py-2.5">STT</th>
                       <th className="px-3 py-2.5">HỌ VÀ TÊN</th>
                       <th className="px-3 py-2.5">UID / PROFILE LINK</th>
-                      <th className="px-3 py-2.5">ĐỊA CHỈ</th>
-                      <th className="px-3 py-2.5">SỐ BẠN BÈ</th>
                       <th className="px-3 py-2.5 text-right">THỜI GIAN</th>
                       <th className="px-3 py-2.5 text-right">THAO TÁC</th>
                     </tr>
@@ -1169,7 +1216,7 @@ export default function PageScannerFollowers() {
                   <tbody className="divide-y divide-[#F1F5F9]">
                     {pagedFollowers.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="px-3 py-10 text-center text-[#94A3B8]">
+                        <td colSpan={6} className="px-3 py-10 text-center text-[#94A3B8]">
                           Không có UID nào được thu thập cho page này.
                         </td>
                       </tr>
@@ -1192,14 +1239,21 @@ export default function PageScannerFollowers() {
                             <td className="px-2 py-3 font-mono text-[#64748B]">{padStt(stt)}</td>
                             <td className="px-3 py-3">
                               <div className="flex items-center gap-2.5">
-                                <Avatar className="size-7">
+                                <Avatar className="relative size-7">
+                                  <AvatarImage
+                                    src={u.avatar_url}
+                                    className="absolute inset-0 z-10"
+                                    onError={(e) => {
+                                      e.currentTarget.style.display = "none";
+                                    }}
+                                  />
                                   <AvatarFallback
                                     className={AVATAR_COLORS[idx % AVATAR_COLORS.length]}
                                   >
                                     {initialsOf(u.name)}
                                   </AvatarFallback>
                                 </Avatar>
-                                <span className="font-bold text-[#0F172A]">{u.name}</span>
+                                <span className="font-semibold text-[#0F172A]">{u.name}</span>
                               </div>
                             </td>
                             <td className="px-3 py-3">
@@ -1207,14 +1261,12 @@ export default function PageScannerFollowers() {
                                 href={u.profile_url || `https://www.facebook.com/${u.uid}`}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="inline-flex items-center gap-1 font-mono font-medium text-[#1877F2] hover:underline"
+                                className="inline-flex items-center gap-1 font-mono font-medium text-[#2563EB] hover:underline"
                               >
                                 {u.uid}
                                 <ExternalLink className="size-3" />
                               </a>
                             </td>
-                            <td className="px-3 py-3 text-[#475569]">{u.location}</td>
-                            <td className="px-3 py-3 font-semibold text-[#1E293B]">{u.friends}</td>
                             <td className="px-3 py-3 text-right font-mono text-[#64748B]">
                               {u.time ? String(u.time).replace("T", " ").slice(0, 19) : "—"}
                             </td>
@@ -1225,7 +1277,7 @@ export default function PageScannerFollowers() {
                                   target="_blank"
                                   rel="noreferrer"
                                   title="Xem trang cá nhân"
-                                  className="rounded p-1 text-[#94A3B8] hover:bg-slate-100 hover:text-[#1877F2]"
+                                  className="rounded p-1 text-[#94A3B8] hover:bg-slate-100 hover:text-[#2563EB]"
                                 >
                                   <Eye className="size-3.5" />
                                 </a>
@@ -1260,50 +1312,7 @@ export default function PageScannerFollowers() {
                   </strong>{" "}
                   của <strong className="text-[#0F172A]">{fmtNum(activeFollowers.length)}</strong> UID
                 </span>
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    disabled={tablePage <= 1}
-                    onClick={() => setTablePage((p) => Math.max(1, p - 1))}
-                    className="flex size-7 items-center justify-center rounded-lg border border-[#E2E8F0] text-[#64748B] hover:bg-[#F8FAFC] disabled:opacity-40"
-                  >
-                    <ChevronLeft className="size-3.5" />
-                  </button>
-                  {Array.from({ length: Math.min(3, totalPages) }, (_, i) => i + 1).map((p) => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setTablePage(p)}
-                      className={`flex size-7 items-center justify-center rounded-lg text-xs font-bold ${
-                        tablePage === p
-                          ? "bg-[#1877F2] text-white"
-                          : "border border-[#E2E8F0] text-[#475569] hover:bg-[#F8FAFC]"
-                      }`}
-                    >
-                      {p}
-                    </button>
-                  ))}
-                  {totalPages > 3 ? (
-                    <>
-                      <span className="px-1 text-[#94A3B8]">...</span>
-                      <button
-                        type="button"
-                        onClick={() => setTablePage(totalPages)}
-                        className="flex h-7 items-center justify-center rounded-lg border border-[#E2E8F0] px-2 text-xs font-semibold text-[#475569]"
-                      >
-                        {totalPages}
-                      </button>
-                    </>
-                  ) : null}
-                  <button
-                    type="button"
-                    disabled={tablePage >= totalPages}
-                    onClick={() => setTablePage((p) => Math.min(totalPages, p + 1))}
-                    className="flex size-7 items-center justify-center rounded-lg border border-[#E2E8F0] text-[#64748B] hover:bg-[#F8FAFC] disabled:opacity-40"
-                  >
-                    <ChevronRight className="size-3.5" />
-                  </button>
-                </div>
+                <Pager page={tablePage} totalPages={totalPages} onChange={setTablePage} />
               </div>
             </div>
           </div>
@@ -1322,6 +1331,7 @@ export default function PageScannerFollowers() {
         selectedUids={selectedUids}
         onConfirm={(uids) => {
           setSelectedUids(uids);
+          saveSelectedAccountUids("followers", uids);
           setShowAccountModal(false);
         }}
       />

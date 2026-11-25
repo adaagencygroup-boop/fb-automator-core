@@ -49,6 +49,11 @@ MODULE_REGISTRY = [
     "title": "Quét Dữ Liệu Page",
     "author": "Trần Cường",
   },
+  {
+    "id": "module_13_profile_scan",
+    "title": "Quét Profile",
+    "author": "Trần Cường",
+  },
 ]
 __all__ = ["MODULE_REGISTRY", "load_backend_modules"]
 def load_backend_modules():

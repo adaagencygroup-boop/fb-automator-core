@@ -23,9 +23,11 @@ from .browser_session import (
 )
 from .page_source import extract_page_identifier
 from .scanner import (
+    _PICK_AVATAR_JS,
     _ACTIVE_PAUSE_EVENTS,
     _ACTIVE_SESSIONS_LOCK,
     _ACTIVE_STOP_EVENTS,
+    ScanStopped,
     _wait_if_paused,
     _wait_if_paused_timed,
     append_session_log,
@@ -175,7 +177,7 @@ return {
 """
 
 # Chọn đúng khung list followers (tab panel / dialog) — không quét tab All / body lung tung.
-_EXTRACT_FOLLOWERS_JS = r"""
+_EXTRACT_FOLLOWERS_JS = _PICK_AVATAR_JS + r"""
 const pickFollowersRoot = () => {
   const labelRe = /followers|người\s*theo\s*dõi|nguoi\s*theo\s*doi/i;
   const url = (location.href || '').toLowerCase();
@@ -238,6 +240,35 @@ const hrefToKey = (href) => {
 };
 
 const { root, root_kind } = pickFollowersRoot();
+
+// Facebook vẽ avatar bằng <svg><image> trong link riêng (không chữ), tách khỏi link tên
+const avatarOf = (box) => {
+  for (const im of Array.from(box.querySelectorAll('image, img'))) {
+    const src = _cleanImgSrc(im);
+    if (src && _isAvatarSrc(src)) return src;
+  }
+  return null;
+};
+const linkKey = (a) => hrefToKey(a.getAttribute('href') || '');
+const avatarByKey = new Map();
+for (const a of Array.from(root.querySelectorAll('a[href]'))) {
+  const key = linkKey(a);
+  if (!key || avatarByKey.has(key)) continue;
+  const src = avatarOf(a);
+  if (src) avatarByKey.set(key, src);
+}
+// Ảnh không nằm trong link: leo lên khung hàng, dừng khi khung chứa người khác
+const avatarFor = (el, key) => {
+  if (avatarByKey.has(key)) return avatarByKey.get(key);
+  let box = el;
+  for (let i = 0; i < 5 && box && box !== root; i++, box = box.parentElement) {
+    if (Array.from(box.querySelectorAll('a[href]')).some((a) => { const k = linkKey(a); return k && k !== key; })) break;
+    const src = avatarOf(box);
+    if (src) return src;
+  }
+  return null;
+};
+
 const out = [];
 const seen = new Set();
 const nodes = Array.from(root.querySelectorAll(
@@ -263,9 +294,7 @@ for (const el of nodes) {
   if (!name || name.length > 120) continue;
   if (/^(người theo dõi|followers|following|bạn bè|friends|theo dõi|follow)$/i.test(name)) continue;
   seen.add(key);
-  let avatar = null;
-  const img = el.querySelector && (el.querySelector('img') || (el.parentElement && el.parentElement.querySelector('img')));
-  if (img) avatar = img.getAttribute('src') || img.getAttribute('xlink:href') || null;
+  const avatar = avatarFor(el, key);
   out.push({
     follower_key: key,
     follower_name: name.slice(0, 120),
@@ -286,7 +315,9 @@ return {
 };
 """
 
-# Cuộn khung list lớn nhất trong view followers (tab panel / dialog) — không cuộn All.
+# Cuộn view followers: window → [role=main] → hàng cuối (scrollIntoView) → div overflow.
+# arguments[0] = target thử đầu tiên. Dialog: cuộn window chỉ động trang nền → bỏ window/main.
+_SCROLL_TARGETS = ("window", "main", "last_row", "overflow")
 _SCROLL_DIALOG_JS = r"""
 const pickFollowersRoot = () => {
   const labelRe = /followers|người\s*theo\s*dõi|nguoi\s*theo\s*doi/i;
@@ -317,31 +348,80 @@ const pickFollowersRoot = () => {
   return document.body;
 };
 const root = pickFollowersRoot();
-let best = null;
-let bestDelta = 0;
-const walk = [root, ...Array.from(root.querySelectorAll('div'))];
-for (const d of walk) {
-  const st = window.getComputedStyle(d);
-  const oy = st.overflowY;
-  if (!(oy === 'auto' || oy === 'scroll' || oy === 'overlay')) continue;
-  const delta = d.scrollHeight - d.clientHeight;
-  if (delta > bestDelta + 40) {
-    bestDelta = delta;
-    best = d;
+const inDialog = !!root.closest('[role="dialog"]');
+const ORDER = inDialog ? ['last_row', 'overflow'] : ['window', 'main', 'last_row', 'overflow'];
+const start = Math.max(0, ORDER.indexOf(arguments[0] || ''));
+const order = ORDER.slice(start).concat(ORDER.slice(0, start));
+
+const pageEl = document.scrollingElement || document.documentElement;
+const pageState = () => ({
+  top: Math.round(window.scrollY || pageEl.scrollTop || 0),
+  height: pageEl.scrollHeight, client: window.innerHeight,
+});
+const elState = (el) => ({ top: Math.round(el.scrollTop), height: el.scrollHeight, client: el.clientHeight });
+// Chỉ tính là cuộn được khi đi XUỐNG hoặc list dài thêm
+const moved = (x, y) => y.top > x.top || y.height > x.height;
+const biggestOverflow = () => {
+  let best = null, bestDelta = 40;
+  for (const d of [root, ...Array.from(root.querySelectorAll('div'))]) {
+    if (!/^(auto|scroll|overlay)$/.test(getComputedStyle(d).overflowY)) continue;
+    const delta = d.scrollHeight - d.clientHeight;
+    if (delta > bestDelta) { bestDelta = delta; best = d; }
   }
-}
-const el = best || root;
-const before = { scrollTop: el.scrollTop || 0, scrollHeight: el.scrollHeight || 0, clientHeight: el.clientHeight || 0 };
-el.scrollBy(0, Math.floor((el.clientHeight || 400) * 0.9) || 400);
-const after = { scrollTop: el.scrollTop || 0, scrollHeight: el.scrollHeight || 0, clientHeight: el.clientHeight || 0 };
-return {
-  before,
-  after,
-  changed: after.scrollTop !== before.scrollTop || after.scrollHeight !== before.scrollHeight,
-  used_best: !!best,
-  best_delta: bestDelta,
-  root_tag: root === document.body ? 'body' : (root.getAttribute('aria-label') || 'dialog').slice(0, 60),
+  return best;
 };
+const scrollEl = (el) => {
+  if (!el) return null;
+  const before = elState(el);
+  el.scrollBy({ top: Math.floor((el.clientHeight || 400) * 0.9), behavior: 'instant' });
+  return { before, after: elState(el) };
+};
+const RUN = {
+  window: () => {
+    const before = pageState();
+    window.scrollBy({ top: Math.floor(window.innerHeight * 0.85), behavior: 'instant' });
+    return { before, after: pageState() };
+  },
+  main: () => scrollEl(document.querySelector('[role="main"]')),
+  last_row: () => {
+    const links = Array.from(root.querySelectorAll('a[href]'));
+    const rows = links.filter((x) => x.querySelector('image, img'));
+    const last = (rows.length ? rows : links).pop();
+    if (!last) return null;
+    // Khung cuộn chứa hàng cuối; không có → đo theo trang
+    let box = last.parentElement;
+    while (box && !(/^(auto|scroll|overlay)$/.test(getComputedStyle(box).overflowY)
+                    && box.scrollHeight > box.clientHeight)) box = box.parentElement;
+    const state = () => (box && box !== pageEl && box !== document.body ? elState(box) : pageState());
+    const before = state();
+    last.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+    return { before, after: state() };
+  },
+  overflow: () => scrollEl(biggestOverflow()),
+};
+
+const tried = [];
+let result = null;
+for (const target of order) {
+  const r = RUN[target]();
+  tried.push(target);
+  if (!r) continue;
+  const changed = moved(r.before, r.after);
+  if (changed || !result) result = { changed, target, ...r };
+  if (changed) break;
+}
+const none = pageState();
+return Object.assign(result || { changed: false, target: order[0], before: none, after: none },
+                     { tried, in_dialog: inDialog });
+"""
+
+_SCROLL_WINDOW_JS = r"""
+const el = document.scrollingElement || document.documentElement;
+const st = () => ({ top: Math.round(window.scrollY || el.scrollTop || 0), height: el.scrollHeight, client: window.innerHeight });
+const before = st();
+window.scrollBy({ top: Math.floor(window.innerHeight * 0.85), behavior: 'instant' });
+const after = st();
+return { changed: after.top > before.top || after.height > before.height, before, after };
 """
 
 _DETECT_PRIVATE_JS = r"""
@@ -524,7 +604,7 @@ def open_followers_list(driver, page_url: str, page_key: str) -> Dict[str, Any]:
         if clicked and clicked.get("ok"):
             view = _wait_followers_view(driver, timeout_s=6.0)
             time.sleep(0.8)
-            probe = extract_followers_batch(driver)
+            probe = extract_followers_batch(driver, page_key, page_url)
             attempts[-1].update(
                 {
                     "view": view,
@@ -556,7 +636,7 @@ def open_followers_list(driver, page_url: str, page_key: str) -> Dict[str, Any]:
         if clicked and clicked.get("ok"):
             time.sleep(1.5)
             view = _wait_followers_view(driver, timeout_s=4.0)
-            probe = extract_followers_batch(driver)
+            probe = extract_followers_batch(driver, page_key, page_url)
             attempts[-1].update(
                 {
                     "view": view,
@@ -606,7 +686,7 @@ def open_followers_list(driver, page_url: str, page_key: str) -> Dict[str, Any]:
         if priv == "private":
             return {"ok": False, "reason": REASON_LIST_PRIVATE, "attempts": attempts}
         view = _wait_followers_view(driver, timeout_s=4.0)
-        probe = extract_followers_batch(driver)
+        probe = extract_followers_batch(driver, page_key, page_url)
         raw = int(probe.get("raw_count") or 0)
         attempts.append(
             {
@@ -649,9 +729,46 @@ def open_followers_list(driver, page_url: str, page_key: str) -> Dict[str, Any]:
         }
 
 
-def extract_followers_batch(driver) -> Dict[str, Any]:
+# Link giao diện (tab, ảnh bìa...) lọt vào vùng list — không phải người theo dõi
+_UI_LINK_SLUGS = {
+    "photo", "photos", "media", "story", "stories", "reel", "reels", "videos", "share", "sharer",
+    "help", "policies", "privacy", "settings", "messages", "notifications", "bookmarks", "ads",
+    "business", "hashtag", "events", "groups", "marketplace", "watch", "gaming", "login",
+}
+_UI_LINK_NAME_RE = re.compile(
+    r"^(all|tất cả)$|^(view |xem )?(profile )?cover photo|^xem ảnh (bìa|đại diện)|^view profile (picture|cover)",
+    re.I,
+)
+
+
+def is_ui_link_row(row: Dict[str, Any], self_keys: Set[str]) -> bool:
+    """True nếu hàng là link giao diện hoặc link về chính Page đang quét."""
+    key = str(row.get("follower_key") or "").strip().lower()
+    if key in self_keys:
+        return True
+    if key.startswith("user:") and key[5:] in _UI_LINK_SLUGS:
+        return True
+    return bool(_UI_LINK_NAME_RE.search(str(row.get("follower_name") or "").strip()))
+
+
+def page_self_keys(driver, page_key: str = "", page_url: str = "") -> Set[str]:
+    """Các key trỏ về chính Page (key trong kho, URL kho, URL đang mở: slug ↔ id)."""
+    keys = {str(page_key or "").strip().lower()}
+    try:
+        current = driver.current_url
+    except Exception:
+        current = ""
+    for url in (page_url, current):
+        if isinstance(url, str) and url:
+            keys.add(normalize_follower_key_from_url(url).lower())
+    keys.discard("")
+    return keys
+
+
+def extract_followers_batch(driver, page_key: str = "", page_url: str = "") -> Dict[str, Any]:
     """
-    Trả {items, raw_count, meta} — raw_count = số hàng trước khi Python lọc trùng.
+    Trả {items, raw_count, meta} — raw_count = số hàng JS đọc được (gồm link giao diện, giữ nguyên
+    nghĩa cho bước xác nhận mở list / chẩn đoán kẹt); items đã bỏ link giao diện.
     """
     empty = {"items": [], "raw_count": 0, "meta": {}}
     try:
@@ -665,9 +782,14 @@ def extract_followers_batch(driver) -> Dict[str, Any]:
         else:
             return empty
         cleaned = []
+        raw_count = 0
+        self_keys = page_self_keys(driver, page_key, page_url)
         for r in rows:
             key = (r.get("follower_key") or "").strip()
             if not key:
+                continue
+            raw_count += 1
+            if is_ui_link_row(r, self_keys):
                 continue
             cleaned.append(
                 {
@@ -677,26 +799,51 @@ def extract_followers_batch(driver) -> Dict[str, Any]:
                     "avatar_url": r.get("avatar_url"),
                 }
             )
-        meta.setdefault("raw_count", len(cleaned))
-        return {"items": cleaned, "raw_count": len(cleaned), "meta": meta}
+        meta["ui_links"] = raw_count - len(cleaned)
+        meta.setdefault("raw_count", raw_count)
+        return {"items": cleaned, "raw_count": raw_count, "meta": meta}
     except Exception as exc:
         logger.debug(f"[FOLLOW] extract: {exc}")
         return empty
 
 
-def scroll_followers_list(driver) -> Dict[str, Any]:
-    """Trả metrics scroll để phân biệt cuộn đúng khung vs stuck."""
+def scroll_followers_list(driver, state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Cuộn 1 nhịp, trả {changed, target, before, after, tried, in_dialog}.
+    state (giữ theo từng Page): target thử trước; kẹt 2 lần liên tiếp → lần sau bắt đầu từ target kế tiếp.
+    """
+    state = state if state is not None else {}
+    first = state.get("target")
+    metrics: Dict[str, Any] = {}
     try:
-        metrics = driver.execute_script(_SCROLL_DIALOG_JS) or {}
-        if isinstance(metrics, dict):
-            return metrics
-    except Exception:
-        pass
-    try:
-        driver.execute_script("window.scrollBy(0, window.innerHeight * 0.85);")
-        return {"changed": True, "used_best": False, "fallback": "window"}
-    except Exception:
-        return {"changed": False, "error": "scroll_failed"}
+        res = driver.execute_script(_SCROLL_DIALOG_JS, first)
+        if isinstance(res, dict):
+            metrics = res
+    except Exception as exc:
+        logger.debug(f"[FOLLOW] scroll: {exc}")
+
+    tried = metrics.get("tried") or []
+    first_stuck = bool(tried) and not (metrics.get("changed") and metrics.get("target") == tried[0])
+    if tried and tried[0] != state.get("target"):
+        state["target"], state["stuck"] = tried[0], 0
+    state["stuck"] = int(state.get("stuck") or 0) + 1 if first_stuck else 0
+    if state["stuck"] >= 2:
+        order = ("last_row", "overflow") if metrics.get("in_dialog") else _SCROLL_TARGETS
+        nxt = order[(order.index(tried[0]) + 1) % len(order)]
+        if metrics.get("changed"):
+            nxt = metrics["target"]
+        metrics["switched_to"] = nxt
+        state["target"], state["stuck"] = nxt, 0
+
+    if not metrics.get("changed") and not metrics.get("in_dialog"):
+        try:
+            fb = driver.execute_script(_SCROLL_WINDOW_JS) or {}
+            if not metrics or fb.get("changed"):
+                metrics.update(fb, target="window_fallback")
+        except Exception as exc:
+            metrics.setdefault("error", f"scroll_failed: {exc}"[:200])
+    metrics.setdefault("changed", False)
+    return metrics
 
 
 def upsert_followers_batch(
@@ -781,6 +928,24 @@ def upsert_followers_batch(
             except Exception as exc2:
                 logger.warning(f"[FOLLOW] upsert fallback: {exc2}")
     return inserted, updated
+
+
+def backfill_follower_avatars(owner_key: str, page_key: str, avatars: Dict[str, str]) -> None:
+    """Cập nhật avatar cho follower đã có trong kho (link CDN hết hạn nên luôn thay bằng link mới)."""
+    if not avatars:
+        return
+    try:
+        db.execute(
+            """
+            UPDATE scanned_page_followers f
+            SET avatar_url = v.avatar_url
+            FROM unnest(%s::text[], %s::text[]) AS v(follower_key, avatar_url)
+            WHERE f.owner_key = %s AND f.page_key = %s AND f.follower_key = v.follower_key
+            """,
+            (list(avatars.keys()), list(avatars.values()), owner_key, page_key),
+        )
+    except Exception as exc:
+        logger.warning(f"[FOLLOW] backfill avatar: {exc}")
 
 
 def existing_follower_keys(owner_key: str, page_key: str) -> Set[str]:
@@ -885,7 +1050,8 @@ def run_follower_scan_flow(
     total_dup = 0
     batches = 0
     start_time = time.time()
-    session_keys: Set[str] = set()
+    session_keys: Set[str] = set()  # UID đã lưu trong phiên, dùng lọc trùng giữa các Page
+    cross_skipped = 0
     final_status = "COMPLETED"
 
     driver = None
@@ -1006,7 +1172,8 @@ def run_follower_scan_flow(
                     break
                 continue
 
-            known = existing_follower_keys(owner_key, page_key) if skip_existing else set()
+            # Quét lại cùng Page luôn bỏ qua người đã lưu; skip_existing chỉ quyết định lọc trùng giữa các Page
+            known = existing_follower_keys(owner_key, page_key)
             known_n = len(known)
             view = opened.get("view") or {}
             append_session_log(
@@ -1025,6 +1192,8 @@ def run_follower_scan_flow(
 
             page_got = 0
             page_seen: Set[str] = set()
+            avatar_saved: Set[str] = set()
+            page_cross = 0  # UID bỏ qua vì đã lưu ở Page khác trong phiên
             known_passed = 0
             known_logged = 0
             last_new_at = time.time()
@@ -1034,6 +1203,8 @@ def run_follower_scan_flow(
             dup_streak = 0
             scroll_stuck_streak = 0
             page_stop = REASON_LIST_EXHAUSTED
+            scroll_state: Dict[str, Any] = {}
+            scroll_meta: Dict[str, Any] = {}
 
             # Seed từ probe đã verified khi mở (tab/dialog/url)
             seed_items = opened.get("probe_items") or None
@@ -1051,16 +1222,17 @@ def run_follower_scan_flow(
 
                 if seed_items is not None:
                     batch_items = list(seed_items)
-                    raw_count = len(batch_items)
+                    raw_count = int(opened.get("probe_raw") or len(batch_items))
                     meta = opened.get("probe_meta") or {}
                     seed_items = None
                 else:
-                    extracted = extract_followers_batch(driver)
+                    extracted = extract_followers_batch(driver, page_key, page_url)
                     batch_items = extracted.get("items") or []
                     raw_count = int(extracted.get("raw_count") or 0)
                     meta = extracted.get("meta") or {}
 
                 new_items = []
+                late_avatars: Dict[str, str] = {}
                 dup_this = 0
                 fresh_known = 0  # UID đã có trong kho nhưng LẦN ĐẦU hiện ra ở lượt quét Page này
                 for item in batch_items:
@@ -1068,22 +1240,34 @@ def run_follower_scan_flow(
                     total_seen += 1
                     first_seen_on_page = fk not in page_seen
                     page_seen.add(fk)
-                    if fk in session_keys or fk in known:
+                    has_new_avatar = bool(item.get("avatar_url")) and fk not in avatar_saved
+                    if has_new_avatar:
+                        avatar_saved.add(fk)
+                    # Bỏ tick kiểm tra trùng → mỗi Page lưu đủ follower, chỉ lọc trong chính Page
+                    cross_page = skip_existing and fk in session_keys and fk not in known
+                    if cross_page or fk in known:
                         total_dup += 1
                         dup_this += 1
+                        if cross_page and first_seen_on_page:
+                            page_cross += 1
                         if first_seen_on_page:
                             fresh_known += 1
+                        # Đã có trong kho (quét lại) hoặc avatar hiện muộn → bổ sung avatar
+                        if has_new_avatar:
+                            late_avatars[fk] = item["avatar_url"]
                         continue
                     new_items.append(item)
                     session_keys.add(fk)
                     known.add(fk)
+
+                backfill_follower_avatars(owner_key, page_key, late_avatars)
 
                 if new_items:
                     ins, upd = upsert_followers_batch(
                         owner_key, page_key, new_items, session_id
                     )
                     page_got += len(new_items)
-                    total_unique = len(session_keys)
+                    total_unique += len(new_items)
                     batches += 1
                     last_new_at = time.time()
                     stagnant = 0
@@ -1101,7 +1285,7 @@ def run_follower_scan_flow(
                         "success",
                     )
                 elif fresh_known:
-                    # Quét lại (skip_existing): danh sách vẫn đang cuộn qua UID đã có trong kho
+                    # Quét lại: danh sách vẫn đang cuộn qua UID đã có trong kho
                     # → coi là tiến triển để đi tiếp tới UID mới phía dưới, không dừng "all_duplicates".
                     known_passed += fresh_known
                     last_new_at = time.time()
@@ -1162,10 +1346,10 @@ def run_follower_scan_flow(
                 if stagnant >= 8 and not new_items:
                     if empty_streak >= 8:
                         page_stop = "extract_empty"
+                    elif scroll_stuck_streak >= 4 and raw_count > 0:
+                        page_stop = "scroll_stuck"
                     elif dup_streak >= 8:
                         page_stop = "all_duplicates"
-                    elif scroll_stuck_streak >= 4:
-                        page_stop = "scroll_stuck"
                     else:
                         page_stop = REASON_LIST_EXHAUSTED
                     append_session_log(
@@ -1174,34 +1358,47 @@ def run_follower_scan_flow(
                             f"{page_key}: stop={page_stop}"
                             f" · empty_streak={empty_streak} dup_streak={dup_streak}"
                             f" · scroll_stuck={scroll_stuck_streak} · got={page_got}"
+                            f" · target={scroll_meta.get('target') or '—'}"
+                            f" · top={(scroll_meta.get('after') or {}).get('top', '?')}"
+                            f" · h={(scroll_meta.get('after') or {}).get('height', '?')}"
                         ),
                         "warn" if page_got == 0 else "info",
                     )
                     break
 
-                scroll_meta = scroll_followers_list(driver)
+                scroll_meta = scroll_followers_list(driver, scroll_state)
                 if not scroll_meta.get("changed"):
                     scroll_stuck_streak += 1
                 else:
                     scroll_stuck_streak = 0
-                if stagnant <= 2 or stagnant % 2 == 0:
-                    before = scroll_meta.get("before") or {}
-                    after = scroll_meta.get("after") or {}
-                    append_session_log(
-                        session_id,
-                        (
-                            f"{page_key}: scroll changed={scroll_meta.get('changed')}"
-                            f" · top {before.get('scrollTop', '?')}→{after.get('scrollTop', '?')}"
-                            f" · h {before.get('scrollHeight', '?')}→{after.get('scrollHeight', '?')}"
-                            f" · best={scroll_meta.get('used_best')} Δ={scroll_meta.get('best_delta', '?')}"
-                        ),
-                        "info",
-                    )
+                before = scroll_meta.get("before") or {}
+                after = scroll_meta.get("after") or {}
+                switched = scroll_meta.get("switched_to")
+                append_session_log(
+                    session_id,
+                    (
+                        f"{page_key}: scroll changed={scroll_meta.get('changed')}"
+                        f" · target={scroll_meta.get('target') or '—'}"
+                        f" · top {before.get('top', '?')}→{after.get('top', '?')}"
+                        f" · h {before.get('height', '?')}→{after.get('height', '?')}"
+                        f" · tried={'>'.join(scroll_meta.get('tried') or []) or '—'}"
+                        f"{f' · kẹt 2 lần, lần sau thử {switched} trước' if switched else ''}"
+                    ),
+                    "info",
+                )
                 time.sleep(max(0.3, float(scroll_delay_s)))
                 try:
                     human_sleep(0.2, 0.5)
                 except Exception:
                     pass
+
+            if page_cross:
+                cross_skipped += page_cross
+                append_session_log(
+                    session_id,
+                    f"{page_key}: bỏ qua {page_cross} follower trùng với Page khác trong phiên",
+                    "info",
+                )
 
             bump_account_usage(rotation.uid, "FOLLOW", 1)
             pages_quota_left -= 1
@@ -1239,7 +1436,7 @@ def run_follower_scan_flow(
         if stop_reason == "COMPLETED" and total_unique >= target_followers:
             stop_reason = "TARGET_REACHED"
 
-    except Exception as exc:
+    except (Exception, ScanStopped) as exc:
         if stop_event.is_set():
             # Dừng khẩn cấp đóng Chrome giữa chừng → lỗi WebDriver là hệ quả của việc dừng
             logger.info(f"[FOLLOW] #{session_id} dừng giữa thao tác trình duyệt: {exc}")
@@ -1250,6 +1447,8 @@ def run_follower_scan_flow(
             error_message = str(exc)[:500]
             append_session_log(session_id, f"Lỗi: {error_message}", "error")
     finally:
+        # Nhả trước khi ghi DB để DB lỗi không làm kẹt khóa profile
+        rotation.release(stop_reason, keep_browser)
         duration = int(time.time() - start_time)
         final_status = {
             "USER_STOPPED": "STOPPED",
@@ -1275,10 +1474,12 @@ def run_follower_scan_flow(
         )
         append_session_log(
             session_id,
-            f"Kết thúc FOLLOW · {final_status}/{stop_reason} · unique={total_unique}",
+            (
+                f"Kết thúc FOLLOW · {final_status}/{stop_reason} · unique={total_unique}"
+                f"{f' · bỏ {cross_skipped} follower trùng Page khác' if cross_skipped else ''}"
+            ),
             "success" if final_status == "COMPLETED" else "warn",
         )
-        rotation.release(stop_reason, keep_browser)
         with _ACTIVE_SESSIONS_LOCK:
             _ACTIVE_STOP_EVENTS.pop(session_id, None)
             _ACTIVE_PAUSE_EVENTS.pop(session_id, None)

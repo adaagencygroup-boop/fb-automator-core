@@ -503,8 +503,8 @@ def open_browser(
   options.add_argument("--profile-directory=Default")
   # Luồng chạy nhiều Chrome cùng lúc / cuộn trang dài: cửa sổ bị che hoặc thu nhỏ vẫn phải chạy trang,
   # nếu không Facebook ngừng tải thêm kết quả khi cuộn (Module 10 quét nhóm / thành viên song song).
-  if scope in ("page_scanner", "post", "group-scan", "group-members", "post-engagement"):
-    if scope == "page_scanner":
+  if scope in ("page_scanner", "profile_scan", "post", "group-scan", "group-members", "post-engagement"):
+    if scope in ("page_scanner", "profile_scan"):
       options.page_load_strategy = "eager"
     for _arg in (
       "--disable-background-timer-throttling",

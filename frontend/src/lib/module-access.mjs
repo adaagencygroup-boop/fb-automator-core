@@ -10,6 +10,7 @@ export const NAV_FEATURE_KEYS = Object.freeze({
   scan: "scan_group",
   scanner: "scan_page",
   engage: "scan_post",
+  profile_scan: "scan_profile",
 });
 
 /** Shared by the sidebar and the route guard, including history/placeholder pages. */
