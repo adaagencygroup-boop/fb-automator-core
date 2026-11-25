@@ -38,7 +38,8 @@ import {
 } from "../shared/accountStorage";
 import { ScanActionButtons } from "../shared/ScanActionButtons";
 import { clearScanState, fetchSavedSessions, loadScanState, saveScanState } from "../shared/scanStateStorage";
-import { useClickLock } from "../shared/useClickLock";
+import { useActionLock } from "../shared/useActionLock";
+import { pickSelectedPagesForSave, saveCsvContent } from "../shared/saveFile.mjs";
 import {
   searchPages,
   searchPagesByHashtag,
@@ -66,7 +67,7 @@ import {
   newCampaignId,
 } from "./campaignUtils";
 import { filterScanResults, toCsv } from "../utils.mjs";
-import { LiveLogConsole, Pager } from "../_shared";
+import { LiveLogConsole, Pager, notifyExportResult } from "../_shared";
 
 /* ─── Figma tokens (khớp scan-info / node 2889-27377) ─── */
 const FIGMA = {
@@ -299,7 +300,6 @@ export default function PageScannerSearch() {
   const pollRef = useRef(null);
   const ownsCampaignRef = useRef(false); // vòng runMixedCampaign thuộc chính lần mở trang này
   const mountedRef = useRef(true);
-  const [startLocked, runStartLocked] = useClickLock(1000); // chống bấm liên tục nút BẮT ĐẦU
   const restoreSeqRef = useRef(0); // tăng khi bắt đầu / quét mới / rời trang → bỏ kết quả khôi phục về muộn
   const restoreScanRef = useRef(null);
   const sessionMetaRef = useRef({}); // sessionId -> { channel, label, kind }
@@ -308,7 +308,15 @@ export default function PageScannerSearch() {
   const lastLoadedRef = useRef(0);
   const [poolStats, setPoolStats] = useState({ pool: 0, aboveMin: 0, showing: 0 });
   const [showEmergencyModal, setShowEmergencyModal] = useState(false);
-  const [isStopping, setIsStopping] = useState(false);
+
+  // Khoá nút trong lúc xử lý: bấm liên tục chỉ chạy 1 lần, không bắn ra nhiều thông báo / yêu cầu
+  const [isDeduping, guardDedupe] = useActionLock();
+  const [isDownloadingTemplate, guardTemplate] = useActionLock();
+  const [isStarting, guardStart] = useActionLock();
+  const [isPausing, guardPause] = useActionLock();
+  const [isStopping, guardStop, isStoppingApi] = useActionLock();
+  const [isExporting, guardExport] = useActionLock();
+  const [isSavingList, guardSaveList] = useActionLock();
 
   /** Đặt phiên của đợt đang xem — cập nhật ref ngay để loadResults không đọc phiên của đợt trước. */
   const setActiveSessionIds = useCallback((ids) => {
@@ -321,64 +329,34 @@ export default function PageScannerSearch() {
   const isPaused = runPhase === "paused";
   const isBusy = isRunning || isPaused;
 
-  // "Kiểm tra & Lọc trùng lặp": khóa nút tạm thời trong lúc xử lý để bấm liên tục không bắn ra nhiều thông báo.
-  // Ref chặn cú bấm thứ 2 trong cùng nhịp render (trước khi state isDeduping kịp cập nhật).
-  const DEDUPE_LOCK_MS = 1500;
-  const [isDeduping, setIsDeduping] = useState(false);
-  const dedupeLockRef = useRef(false);
-  const dedupeTimerRef = useRef(null);
-  useEffect(() => () => clearTimeout(dedupeTimerRef.current), []);
-
   const handleCheckAndDedupe = () => {
-    if (dedupeLockRef.current) return;
-    dedupeLockRef.current = true;
-    setIsDeduping(true);
-    try {
-      const uniqueLines = [];
-      const seen = new Set();
-      pasteContent
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter(Boolean)
-        .forEach((l) => {
-          const k = l.toLowerCase().replace(/\/+$/, "");
-          if (!seen.has(k)) {
-            seen.add(k);
-            uniqueLines.push(l);
-          }
-        });
-      const removed = pastePreviewRows.length - uniqueLines.length;
-      setPasteContent(uniqueLines.join("\n"));
-      // Cùng key: nếu vẫn có thông báo cũ thì thay thế, không xếp chồng thêm
-      toast.success(
-        removed > 0
-          ? `Đã lọc bỏ ${removed} link trùng lặp, còn ${uniqueLines.length} link hợp lệ.`
-          : `Tất cả ${uniqueLines.length} link đều không trùng lặp.`,
-        { key: "m11-paste-dedupe" },
-      );
-    } finally {
-      clearTimeout(dedupeTimerRef.current);
-      dedupeTimerRef.current = setTimeout(() => {
-        dedupeLockRef.current = false;
-        setIsDeduping(false);
-      }, DEDUPE_LOCK_MS);
-    }
+    const uniqueLines = [];
+    const seen = new Set();
+    pasteContent
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .forEach((l) => {
+        const k = l.toLowerCase().replace(/\/+$/, "");
+        if (!seen.has(k)) {
+          seen.add(k);
+          uniqueLines.push(l);
+        }
+      });
+    const removed = pastePreviewRows.length - uniqueLines.length;
+    setPasteContent(uniqueLines.join("\n"));
+    // Cùng key: nếu vẫn có thông báo cũ thì thay thế, không xếp chồng thêm
+    toast.success(
+      removed > 0
+        ? `Đã lọc bỏ ${removed} link trùng lặp, còn ${uniqueLines.length} link hợp lệ.`
+        : `Tất cả ${uniqueLines.length} link đều không trùng lặp.`,
+      { key: "m11-paste-dedupe" },
+    );
   };
 
-  // "Tải file mẫu": báo kết quả cho người dùng; khoá nút trong lúc tải để bấm liên tục không tải / báo nhiều lần
-  const TEMPLATE_LOCK_MS = 1500;
-  const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
-  const templateLockRef = useRef(false);
-  const templateTimerRef = useRef(null);
-  useEffect(() => () => clearTimeout(templateTimerRef.current), []);
-
+  // "Tải file mẫu": chỉ báo "thành công" khi người dùng đã chọn nơi lưu và bấm Lưu (khoá nút bằng guardTemplate)
   const handleDownloadTemplate = async () => {
-    if (templateLockRef.current) return;
-    templateLockRef.current = true;
-    setIsDownloadingTemplate(true);
-    const startedAt = Date.now();
     try {
-      // Chỉ báo "thành công" khi người dùng đã chọn nơi lưu, bấm Lưu và file đã ghi xong
       const { status, fileName } = await downloadPageTemplate();
       if (status === "saved") {
         toast.success(`Đã tải file mẫu "${fileName}" thành công!`, {
@@ -404,12 +382,6 @@ export default function PageScannerSearch() {
         title: "LỖI TẢI FILE",
         key: "m11-template-download",
       });
-    } finally {
-      clearTimeout(templateTimerRef.current);
-      templateTimerRef.current = setTimeout(() => {
-        templateLockRef.current = false;
-        setIsDownloadingTemplate(false);
-      }, Math.max(0, TEMPLATE_LOCK_MS - (Date.now() - startedAt)));
     }
   };
 
@@ -931,12 +903,14 @@ export default function PageScannerSearch() {
   /* Validate trước khi Bắt đầu (không còn nút Kiểm tra riêng) */
   const validateBeforeStart = () => {
     if (!selectedUids || selectedUids.length === 0) {
-      toast.warning("Chưa chọn tài khoản");
+      toast.warning("Chưa chọn tài khoản", { key: "m11-search-start" });
       return false;
     }
     const usable = accounts.filter((a) => selectedUids.includes(a.uid) && isAccountUsable(a));
     if (!usable.length) {
-      toast.warning("Không có tài khoản khả dụng (Live & Đã đăng nhập) trong danh sách đã chọn.");
+      toast.warning("Không có tài khoản khả dụng (Live & Đã đăng nhập) trong danh sách đã chọn.", {
+        key: "m11-search-start",
+      });
       return false;
     }
 
@@ -964,7 +938,7 @@ export default function PageScannerSearch() {
     if (delayMin > delayMax) errors.push("Khoảng giãn cách không hợp lệ (từ > đến).");
 
     if (errors.length) {
-      toast.error(errors[0]);
+      toast.error(errors[0], { key: "m11-search-start" });
       return false;
     }
     return true;
@@ -1175,14 +1149,14 @@ export default function PageScannerSearch() {
       pushLog("Đã dừng khẩn cấp toàn bộ đợt quét.", "error");
     } else {
       pushLog(`Đợt [${modeLabel}] hoàn tất — đang xếp hạng pool chung.`, "success");
-      toast.success(`Hoàn thành đợt ${modeLabel}.`);
+      toast.success(`Hoàn thành đợt ${modeLabel}.`, { key: "m11-search-start" });
       if (collectedIds.length) {
         await loadResults(collectedIds[collectedIds.length - 1], 1, collectedIds);
       }
     }
   };
 
-  const handleStart = async () => {
+  const handleStart = () => {
     if (!validateBeforeStart()) return;
     restoreSeqRef.current += 1;
     setLogs([]);
@@ -1197,11 +1171,10 @@ export default function PageScannerSearch() {
     filteredAllRef.current = [];
 
     if (sourceMode === "keyword") {
-      await runMixedCampaign();
-      return;
+      return runMixedCampaign();
     }
     if (sourceMode === "paste" || sourceMode === "upload") {
-      await runDetailScan();
+      return runDetailScan();
     }
   };
 
@@ -1238,7 +1211,7 @@ export default function PageScannerSearch() {
       const usable = accounts.filter((a) => selectedUids.includes(a.uid) && isAccountUsable(a));
       const accountUids = usable.map((a) => a.uid);
       if (!accountUids.length) {
-        toast.warning("Chưa chọn tài khoản");
+        toast.warning("Chưa chọn tài khoản", { key: "m11-search-start" });
         setRunPhase("idle");
         return;
       }
@@ -1277,12 +1250,12 @@ export default function PageScannerSearch() {
       setActiveSessionIds([sid]);
       setKeywordProgress([{ keyword: label, count: 0, status: "scanning", target }]);
       pushLog(res.message || `Đã khởi động phiên #${sid}`, "success");
-      toast.success(`Bắt đầu quét thông tin ${target} page.`);
+      toast.success(`Bắt đầu quét thông tin ${target} page.`, { key: "m11-search-start" });
       startPoll(sid);
     } catch (err) {
       setRunPhase("idle");
       pushLog(err.message || "Lỗi khởi động phiên", "error");
-      toast.error(err.message || "Lỗi khởi động phiên");
+      toast.error(err.message || "Lỗi khởi động phiên", { key: "m11-search-start" });
     }
   };
 
@@ -1299,7 +1272,7 @@ export default function PageScannerSearch() {
         }
       }
       pushLog("Tiếp tục phiên đang tạm dừng.", "success");
-      toast.info("Đã tiếp tục.");
+      toast.info("Đã tiếp tục.", { key: "m11-search-pause" });
       return;
     }
     campaignRef.current.paused = true;
@@ -1312,7 +1285,7 @@ export default function PageScannerSearch() {
       }
     }
     pushLog("Tạm dừng phiên tại điểm an toàn.", "warn");
-    toast.info("Đã tạm dừng.");
+    toast.info("Đã tạm dừng.", { key: "m11-search-pause" });
   };
 
   const handleEmergencyStop = () => {
@@ -1320,7 +1293,6 @@ export default function PageScannerSearch() {
   };
 
   const handleConfirmEmergencyStop = async () => {
-    setIsStopping(true);
     campaignRef.current.abort = true;
     campaignRef.current.paused = false;
     stopPolling();
@@ -1334,10 +1306,9 @@ export default function PageScannerSearch() {
     } catch (err) {
       pushLog(`Lỗi dừng: ${err.message}`, "error");
     } finally {
-      setIsStopping(false);
       setShowEmergencyModal(false);
       setRunPhase("done");
-      toast.warning("Đã dừng khẩn cấp.");
+      toast.warning("Đã dừng khẩn cấp.", { key: "m11-search-stop" });
     }
   };
 
@@ -1377,11 +1348,12 @@ export default function PageScannerSearch() {
     }
   };
 
-  /* "Xuất toàn bộ file" = TOÀN BỘ kết quả đang lọc của đợt (mọi phiên, mọi trang), không chỉ trang đang xem */
-  const handleExportCSV = () => {
+  /* "Xuất toàn bộ file" = TOÀN BỘ kết quả đang lọc của đợt (mọi phiên, mọi trang), không chỉ trang đang xem.
+     Dùng showSaveFilePicker (giống Tải file mẫu): chỉ báo thành công sau khi người dùng chọn nơi lưu và bấm Lưu. */
+  const handleExportCSV = async () => {
     const rowsSrc = filteredAllRef.current;
     if (!rowsSrc.length) {
-      toast.warning("Chưa có page để xuất.");
+      toast.warning("Chưa có page để xuất.", { key: "m11-search-export" });
       return;
     }
     const headers = [
@@ -1398,27 +1370,34 @@ export default function PageScannerSearch() {
       p.website || "",
       p.address || "",
     ]);
-    const blob = new Blob(["\uFEFF" + toCsv(headers, rows)], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `quet_page_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success(`Đã xuất ${rowsSrc.length.toLocaleString("vi-VN")} page ra file CSV.`);
+    try {
+      const res = await saveCsvContent(
+        toCsv(headers, rows),
+        `quet_page_${new Date().toISOString().slice(0, 10)}.csv`,
+      );
+      notifyExportResult(res, {
+        successMessage: `Đã xuất ${rowsSrc.length.toLocaleString("vi-VN")} page ra file "${res.fileName}".`,
+        key: "m11-search-export",
+      });
+    } catch (err) {
+      toast.error(`Lỗi xuất file: ${err?.message || "Không lưu được file."}`, { key: "m11-search-export" });
+    }
   };
 
-  /* "Lưu danh sách": có tick → các page đã tick (ở mọi trang); không tick → toàn bộ kết quả đang lọc của đợt.
+  /* "Lưu danh sách": BẮT BUỘC phải tick chọn ít nhất 1 page trong bảng kết quả — không tự lấy toàn bộ.
      Mở modal chọn / tạo danh mục (lưu DB). */
   const handleSaveList = () => {
-    const all = filteredAllRef.current;
-    const picked = selectedPageKeys.length ? all.filter((p) => selectedPageKeys.includes(p.page_key)) : all;
-    const keys = [...new Set(picked.map((p) => p.page_key).filter(Boolean))];
-    if (!keys.length) {
-      toast.warning("Không có page để lưu.");
+    const picked = pickSelectedPagesForSave(filteredAllRef.current, selectedPageKeys);
+    if (!picked.ok) {
+      toast.warning(
+        picked.reason === "no_matching_pages"
+          ? "Các page đã chọn không còn trong kết quả đang lọc — vui lòng chọn lại."
+          : "Vui lòng chọn ít nhất 1 page để lưu vào danh sách.",
+        { key: "m11-search-save-list" },
+      );
       return;
     }
-    setSaveListKeys(keys);
+    setSaveListKeys(picked.keys);
   };
 
   const handleListSaved = (res) => {
@@ -1615,7 +1594,7 @@ export default function PageScannerSearch() {
                   type="button"
                   disabled={isBusy || isDeduping || !pasteContent.trim()}
                   aria-busy={isDeduping}
-                  onClick={handleCheckAndDedupe}
+                  onClick={() => guardDedupe(handleCheckAndDedupe)}
                   className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#1877F2] px-3.5 text-xs font-bold text-white shadow-sm hover:bg-[#166FE5] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isDeduping && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
@@ -1834,7 +1813,7 @@ export default function PageScannerSearch() {
 
               <button
                 type="button"
-                onClick={handleDownloadTemplate}
+                onClick={() => guardTemplate(handleDownloadTemplate)}
                 disabled={isDownloadingTemplate}
                 aria-busy={isDownloadingTemplate}
                 className="flex items-center gap-1.5 text-[11px] font-semibold text-[#1877F2] hover:underline disabled:cursor-not-allowed disabled:opacity-60 disabled:no-underline"
@@ -2019,11 +1998,12 @@ export default function PageScannerSearch() {
       <ScanActionButtons
         live={isBusy}
         paused={isPaused}
-        stopping={isStopping}
+        stopping={isStoppingApi}
         showNewScan={showResults}
-        startDisabled={startLocked}
-        onStart={() => runStartLocked(handleStart)}
-        onPauseResume={handlePauseResume}
+        startDisabled={isStarting}
+        controlDisabled={isPausing || isStopping}
+        onStart={() => guardStart(handleStart)}
+        onPauseResume={() => guardPause(handlePauseResume)}
         onStop={handleEmergencyStop}
         onNewScan={handleNewScan}
       />
@@ -2062,8 +2042,8 @@ export default function PageScannerSearch() {
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  disabled={!pages.length}
-                  onClick={handleExportCSV}
+                  disabled={!pages.length || isExporting}
+                  onClick={() => guardExport(handleExportCSV)}
                   className="inline-flex h-[34px] items-center gap-2 rounded-lg border border-[#A7F3D0] bg-[#ECFDF5] px-3.5 text-xs font-semibold text-[#047857] hover:bg-emerald-100 disabled:opacity-40"
                 >
                   <Download className="size-4" />
@@ -2071,12 +2051,12 @@ export default function PageScannerSearch() {
                 </button>
                 <button
                   type="button"
-                  disabled={!pages.length && !totalCount}
-                  onClick={handleSaveList}
+                  disabled={(!pages.length && !totalCount) || isSavingList}
+                  onClick={() => guardSaveList(handleSaveList)}
                   className="inline-flex h-[34px] items-center gap-2 rounded-lg bg-[#2563EB] px-3.5 text-xs font-semibold text-white hover:bg-[#1D4ED8] disabled:opacity-40"
                 >
                   <Save className="size-3.5" />
-                  Lưu danh sách
+                  {selectedPageKeys.length > 0 ? `Lưu danh sách (${selectedPageKeys.length})` : "Lưu danh sách"}
                 </button>
               </div>
             </div>
@@ -2268,8 +2248,8 @@ export default function PageScannerSearch() {
       <EmergencyStopModal
         isOpen={showEmergencyModal}
         onClose={() => setShowEmergencyModal(false)}
-        onConfirm={handleConfirmEmergencyStop}
-        isStopping={isStopping}
+        onConfirm={() => guardStop(handleConfirmEmergencyStop)}
+        isStopping={isStoppingApi}
       />
 
       <SavePageListModal

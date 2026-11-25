@@ -30,7 +30,7 @@ import {
   resumeScanSession,
   getScanSessionDetail,
 } from "../service";
-import { LiveLogConsole, Pager, nowStamp, LIVE_STATUSES, parseJsonField, runDelete } from "../_shared";
+import { LiveLogConsole, Pager, nowStamp, LIVE_STATUSES, parseJsonField, runDelete, notifyExportResult } from "../_shared";
 import { SelectAccountsModal, SelectPagesModal, isAccountUsable } from "../shared/SelectPagesModal";
 import {
   loadSavedAccountUids,
@@ -39,7 +39,8 @@ import {
 } from "../shared/accountStorage";
 import { ScanActionButtons } from "../shared/ScanActionButtons";
 import { clearScanState, fetchSavedSessions, loadScanState, saveScanState } from "../shared/scanStateStorage";
-import { useClickLock } from "../shared/useClickLock";
+import { useActionLock } from "../shared/useActionLock";
+import { saveCsvContent } from "../shared/saveFile.mjs";
 
 const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
 const PAGE_SIZE = 10;
@@ -105,13 +106,7 @@ function exportFollowersCsv(rows, filename) {
   const csv = [headers, ...body]
     .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
     .join("\n");
-  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
+  return saveCsvContent(csv, filename);
 }
 
 function mapFollowerRow(row, idx = 0) {
@@ -182,7 +177,14 @@ export default function PageScannerFollowers() {
   const [logs, setLogs] = useState([]);
   const logId = useRef(0);
   const pollRef = useRef(null);
-  const [startLocked, runStartLocked] = useClickLock(1000); // chống bấm liên tục nút BẮT ĐẦU
+  // Khoá nút trong lúc xử lý: bấm liên tục chỉ chạy 1 lần, không bắn ra nhiều thông báo / yêu cầu
+  const [isToggling, guardToggle] = useActionLock();
+  const [isPausing, guardPause] = useActionLock();
+  const [isExportingAll, guardExportAll] = useActionLock();
+  const [isExportingPage, guardExportPage] = useActionLock();
+  const [isExportingSelected, guardExportSelected] = useActionLock();
+  const [isMovingCategory, guardMoveCategory] = useActionLock();
+  const [isDeleting, guardDelete] = useActionLock();
   const restoreSeqRef = useRef(0); // tăng khi bắt đầu / quét mới / rời trang → bỏ kết quả khôi phục về muộn
 
   const [resultPages, setResultPages] = useState([]);
@@ -469,95 +471,99 @@ export default function PageScannerFollowers() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleStart = async () => {
-    try {
-      if (!selectedUids || !selectedUids.length) {
-        toast.warning("Chưa chọn tài khoản");
-        return;
-      }
-      const usable = accounts.filter((a) => selectedUids.includes(a.uid) && isAccountUsable(a));
-      if (!usable.length) {
-        toast.warning("Không có tài khoản khả dụng (Live & Đã đăng nhập) trong danh sách đã chọn.");
-        return;
-      }
-      if (!selectedPages.length) {
-        toast.warning("Chọn ít nhất 1 Page muốn quét.");
-        return;
-      }
-      const pageKeys = selectedPages.map((p) => p.page_key).filter(Boolean);
-      if (!pageKeys.length) {
-        toast.warning("Danh sách page thiếu page_key.");
-        return;
-      }
-
-      // Thứ tự xoay vòng = thứ tự acc Live đã chọn
-      const accountUids = usable.map((a) => a.uid);
-      const accountUid = accountUids[0];
-
-      const targetFollowers = Math.max(pageKeys.length * maxPerPage, maxPerPage);
-
-      restoreSeqRef.current += 1;
-      stopPolling();
-      setRunPhase("running");
-      setLogs([]);
-      setResultCount(0);
-      setFollowersByPage({});
-      setSelectedRowIds([]);
-      setTablePage(1);
-      scanPageKeysRef.current = pageKeys;
-      setResultPages(
-        selectedPages.map((p, idx) => ({
-          page_key: p.page_key,
-          page_name: p.page_name || p.name || p.page_key,
-          page_url: p.page_url || "",
-          follower_count: p.follower_count || 0,
-          category: p.category || "Fanpage",
-          scanned_uid_count: 0,
-          status: idx === 0 ? "RUNNING" : "QUEUE",
-          status_label: idx === 0 ? "Đang thu thập..." : "Đang chờ hàng đợi",
-          avatar_initials: p.avatar_initials || initialsOf(p.page_name || p.name || p.page_key),
-        })),
-      );
-      setActivePageKey(pageKeys[0] || "");
-      pushLog(
-        `Tạo phiên FOLLOW · ${pageKeys.length} Page · max/page=${maxPerPage} · delay ${delayMin}-${delayMax}s`,
-        "info",
-      );
-
-      const res = await createFollowerSession({
-        page_keys: pageKeys,
-        account_uid: accountUid,
-        account_uids: accountUids,
-        rotate_every: rotateEvery,
-        rotate_on_checkpoint: true,
-        keep_browser: keepBrowser,
-        target_followers: targetFollowers,
-        max_per_page: maxPerPage,
-        idle_timeout_s: 90,
-        skip_existing: dedupAcrossPages,
-        source_list_id: null,
-        // "Khoảng cách giữa các lần quét" = giãn cách ngẫu nhiên giữa 2 Page
-        page_delay_min_s: delayMin,
-        page_delay_max_s: delayMax,
-      });
-
-      saveScanState("followers", { sessionIds: [res.session_id] });
-      setSessionId(res.session_id);
-      pushLog(`Session #${res.session_id} · ${res.status || "RUNNING"} · ${res.message || "OK"}`, "success");
-      if (prioritizeRecent) {
-        pushLog("Ưu tiên người theo dõi gần đây: Facebook liệt kê người theo dõi mới nhất trước.", "info");
-      }
-      if (accountUids.length > 1) {
-        pushLog(`Xoay vòng ${accountUids.length} tài khoản · đổi sau ${rotateEvery} page / tài khoản`, "info");
-      }
-      toast.success(`Đã khởi động FOLLOW #${res.session_id}`);
-      startPoll(res.session_id);
-    } catch (err) {
-      setRunPhase("idle");
-      const msg = err.message || "Lỗi tạo phiên";
-      toast.error(msg);
-      pushLog(msg, "error");
+  const handleStart = () => {
+    if (!selectedUids || !selectedUids.length) {
+      toast.warning("Chưa chọn tài khoản", { key: "m11-followers-start" });
+      return;
     }
+    const usable = accounts.filter((a) => selectedUids.includes(a.uid) && isAccountUsable(a));
+    if (!usable.length) {
+      toast.warning("Không có tài khoản khả dụng (Live & Đã đăng nhập) trong danh sách đã chọn.", {
+        key: "m11-followers-start",
+      });
+      return;
+    }
+    if (!selectedPages.length) {
+      toast.warning("Chọn ít nhất 1 Page muốn quét.", { key: "m11-followers-start" });
+      return;
+    }
+    const pageKeys = selectedPages.map((p) => p.page_key).filter(Boolean);
+    if (!pageKeys.length) {
+      toast.warning("Danh sách page thiếu page_key.", { key: "m11-followers-start" });
+      return;
+    }
+
+    return (async () => {
+      try {
+        // Thứ tự xoay vòng = thứ tự acc Live đã chọn
+        const accountUids = usable.map((a) => a.uid);
+        const accountUid = accountUids[0];
+
+        const targetFollowers = Math.max(pageKeys.length * maxPerPage, maxPerPage);
+
+        restoreSeqRef.current += 1;
+        stopPolling();
+        setRunPhase("running");
+        setLogs([]);
+        setResultCount(0);
+        setFollowersByPage({});
+        setSelectedRowIds([]);
+        setTablePage(1);
+        scanPageKeysRef.current = pageKeys;
+        setResultPages(
+          selectedPages.map((p, idx) => ({
+            page_key: p.page_key,
+            page_name: p.page_name || p.name || p.page_key,
+            page_url: p.page_url || "",
+            follower_count: p.follower_count || 0,
+            category: p.category || "Fanpage",
+            scanned_uid_count: 0,
+            status: idx === 0 ? "RUNNING" : "QUEUE",
+            status_label: idx === 0 ? "Đang thu thập..." : "Đang chờ hàng đợi",
+            avatar_initials: p.avatar_initials || initialsOf(p.page_name || p.name || p.page_key),
+          })),
+        );
+        setActivePageKey(pageKeys[0] || "");
+        pushLog(
+          `Tạo phiên FOLLOW · ${pageKeys.length} Page · max/page=${maxPerPage} · delay ${delayMin}-${delayMax}s`,
+          "info",
+        );
+
+        const res = await createFollowerSession({
+          page_keys: pageKeys,
+          account_uid: accountUid,
+          account_uids: accountUids,
+          rotate_every: rotateEvery,
+          rotate_on_checkpoint: true,
+          keep_browser: keepBrowser,
+          target_followers: targetFollowers,
+          max_per_page: maxPerPage,
+          idle_timeout_s: 90,
+          skip_existing: dedupAcrossPages,
+          source_list_id: null,
+          // "Khoảng cách giữa các lần quét" = giãn cách ngẫu nhiên giữa 2 Page
+          page_delay_min_s: delayMin,
+          page_delay_max_s: delayMax,
+        });
+
+        saveScanState("followers", { sessionIds: [res.session_id] });
+        setSessionId(res.session_id);
+        pushLog(`Session #${res.session_id} · ${res.status || "RUNNING"} · ${res.message || "OK"}`, "success");
+        if (prioritizeRecent) {
+          pushLog("Ưu tiên người theo dõi gần đây: Facebook liệt kê người theo dõi mới nhất trước.", "info");
+        }
+        if (accountUids.length > 1) {
+          pushLog(`Xoay vòng ${accountUids.length} tài khoản · đổi sau ${rotateEvery} page / tài khoản`, "info");
+        }
+        toast.success(`Đã khởi động FOLLOW #${res.session_id}`, { key: "m11-followers-start" });
+        startPoll(res.session_id);
+      } catch (err) {
+        setRunPhase("idle");
+        const msg = err.message || "Lỗi tạo phiên";
+        toast.error(msg, { key: "m11-followers-start" });
+        pushLog(msg, "error");
+      }
+    })();
   };
 
   /* Lưu cấu hình kèm phiên đang xem để vào lại trang vẫn còn */
@@ -606,7 +612,7 @@ export default function PageScannerFollowers() {
         pushLog("Tạm dừng phiên.", "warn");
       }
     } catch (err) {
-      toast.error(err.message);
+      toast.error(err.message, { key: "m11-followers-pause" });
     }
   };
 
@@ -622,14 +628,11 @@ export default function PageScannerFollowers() {
       setRunPhase("done");
       await refreshResults(sessionId, scanPageKeysRef.current, "done");
     } catch (err) {
-      toast.error(err.message);
+      toast.error(err.message, { key: "m11-followers-stop" });
     }
   };
 
-  const handleToggleExecution = () => {
-    if (isBusy) handleStop();
-    else handleStart();
-  };
+  const handleToggleExecution = () => (isBusy ? handleStop() : handleStart());
 
   const filteredLeftPages = useMemo(() => {
     const q = leftSearch.trim().toLowerCase();
@@ -677,24 +680,38 @@ export default function PageScannerFollowers() {
     setSelectedRowIds([]);
   };
 
-  const handleExportAll = () => {
+  const handleExportAll = async () => {
     const all = Object.values(followersByPage).flat();
     if (!all.length) {
-      toast.warning("Chưa có UID để xuất.");
+      toast.warning("Chưa có UID để xuất.", { key: "m11-followers-export" });
       return;
     }
-    exportFollowersCsv(all, `followers_all_${new Date().toISOString().slice(0, 10)}.csv`);
-    toast.success(`Đã xuất ${all.length} UID.`);
+    try {
+      const res = await exportFollowersCsv(all, `followers_all_${new Date().toISOString().slice(0, 10)}.csv`);
+      notifyExportResult(res, {
+        successMessage: `Đã xuất ${all.length} UID thành công.`,
+        key: "m11-followers-export",
+      });
+    } catch (err) {
+      toast.error(`Lỗi xuất file: ${err?.message || "Không lưu được file."}`, { key: "m11-followers-export" });
+    }
   };
 
-  const handleExportPage = () => {
+  const handleExportPage = async () => {
     if (!activeFollowers.length) {
-      toast.warning("Page này chưa có UID.");
+      toast.warning("Page này chưa có UID.", { key: "m11-followers-export" });
       return;
     }
     const slug = (activePage?.page_key || "page").replace(/[:/\\]/g, "_");
-    exportFollowersCsv(activeFollowers, `followers_${slug}.csv`);
-    toast.success(`Đã xuất ${activeFollowers.length} UID của page.`);
+    try {
+      const res = await exportFollowersCsv(activeFollowers, `followers_${slug}.csv`);
+      notifyExportResult(res, {
+        successMessage: `Đã xuất ${activeFollowers.length} UID của page thành công.`,
+        key: "m11-followers-export",
+      });
+    } catch (err) {
+      toast.error(`Lỗi xuất file: ${err?.message || "Không lưu được file."}`, { key: "m11-followers-export" });
+    }
   };
 
   /** Xóa UID khỏi kho followers (DB) rồi tải lại kết quả phiên. */
@@ -985,11 +1002,11 @@ export default function PageScannerFollowers() {
         live={isBusy}
         paused={isPaused}
         showNewScan={showResults}
-        startDisabled={startLocked || accountsLoading}
-        controlDisabled={startLocked}
-        onStart={() => runStartLocked(handleToggleExecution)}
-        onPauseResume={handlePauseResume}
-        onStop={() => runStartLocked(handleToggleExecution)}
+        startDisabled={isToggling || accountsLoading}
+        controlDisabled={isToggling || isPausing}
+        onStart={() => guardToggle(handleToggleExecution)}
+        onPauseResume={() => guardPause(handlePauseResume)}
+        onStop={() => guardToggle(handleToggleExecution)}
         onNewScan={handleNewScan}
       />
 
@@ -1007,8 +1024,9 @@ export default function PageScannerFollowers() {
             </div>
             <button
               type="button"
-              onClick={handleExportAll}
-              className="inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-lg border border-[#A7F3D0] bg-[#ECFDF5] px-3.5 text-xs font-semibold text-[#047857] hover:bg-emerald-100"
+              onClick={() => guardExportAll(handleExportAll)}
+              disabled={isExportingAll}
+              className="inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-lg border border-[#A7F3D0] bg-[#ECFDF5] px-3.5 text-xs font-semibold text-[#047857] hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Download className="size-4" />
               Xuất toàn bộ file
@@ -1120,8 +1138,9 @@ export default function PageScannerFollowers() {
                 </div>
                 <button
                   type="button"
-                  onClick={handleExportPage}
-                  className="inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-lg bg-[#2563EB] px-3.5 text-xs font-semibold text-white hover:bg-[#1D4ED8]"
+                  onClick={() => guardExportPage(handleExportPage)}
+                  disabled={isExportingPage}
+                  className="inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-lg bg-[#2563EB] px-3.5 text-xs font-semibold text-white hover:bg-[#1D4ED8] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Download className="size-3.5" />
                   Xuất UID Page này
@@ -1151,32 +1170,50 @@ export default function PageScannerFollowers() {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => toast.info("Đã mở hộp thoại chuyển danh mục")}
-                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-[#E2E8F0] bg-white px-3 py-1.5 text-xs font-semibold text-[#334155] hover:bg-slate-50"
+                    onClick={() =>
+                      guardMoveCategory(() =>
+                        toast.info("Đã mở hộp thoại chuyển danh mục", { key: "m11-followers-move" }),
+                      )
+                    }
+                    disabled={isMovingCategory}
+                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-[#E2E8F0] bg-white px-3 py-1.5 text-xs font-semibold text-[#334155] hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <FolderInput className="size-3.5" />
                     Chuyển danh mục
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      const rows = activeFollowers.filter((u) => selectedRowIds.includes(u.id));
-                      if (!rows.length) {
-                        toast.warning("Chưa chọn UID nào.");
-                        return;
-                      }
-                      exportFollowersCsv(rows, "followers_selected.csv");
-                      toast.success(`Đã xuất ${rows.length} UID đã chọn.`);
-                    }}
-                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-3 py-1.5 text-xs font-semibold text-[#2563EB] hover:bg-[#DBEAFE]"
+                    onClick={() =>
+                      guardExportSelected(async () => {
+                        const rows = activeFollowers.filter((u) => selectedRowIds.includes(u.id));
+                        if (!rows.length) {
+                          toast.warning("Chưa chọn UID nào.", { key: "m11-followers-export" });
+                          return;
+                        }
+                        try {
+                          const res = await exportFollowersCsv(rows, "followers_selected.csv");
+                          notifyExportResult(res, {
+                            successMessage: `Đã xuất ${rows.length} UID đã chọn thành công.`,
+                            key: "m11-followers-export",
+                          });
+                        } catch (err) {
+                          toast.error(`Lỗi xuất file: ${err?.message || "Không lưu được file."}`, {
+                            key: "m11-followers-export",
+                          });
+                        }
+                      })
+                    }
+                    disabled={isExportingSelected}
+                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-3 py-1.5 text-xs font-semibold text-[#2563EB] hover:bg-[#DBEAFE] disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <Download className="size-3.5" />
                     Xuất file chọn
                   </button>
                   <button
                     type="button"
-                    onClick={handleDeleteSelected}
-                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-[#FECACA] bg-[#FEF2F2] px-3 py-1.5 text-xs font-semibold text-[#DC2626] hover:bg-[#FEE2E2]"
+                    onClick={() => guardDelete(handleDeleteSelected)}
+                    disabled={isDeleting}
+                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-[#FECACA] bg-[#FEF2F2] px-3 py-1.5 text-xs font-semibold text-[#DC2626] hover:bg-[#FEE2E2] disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <Trash2 className="size-3.5" />
                     Xóa
@@ -1284,8 +1321,9 @@ export default function PageScannerFollowers() {
                                 <button
                                   type="button"
                                   title="Xóa UID"
-                                  onClick={() => deleteFollowerRows([u.id])}
-                                  className="rounded p-1 text-[#94A3B8] hover:bg-red-50 hover:text-[#DC2626]"
+                                  onClick={() => guardDelete(() => deleteFollowerRows([u.id]))}
+                                  disabled={isDeleting}
+                                  className="rounded p-1 text-[#94A3B8] hover:bg-red-50 hover:text-[#DC2626] disabled:cursor-not-allowed disabled:opacity-40"
                                 >
                                   <Trash2 className="size-3.5" />
                                 </button>

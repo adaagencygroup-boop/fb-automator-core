@@ -21,8 +21,10 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "@/lib/toast";
 import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
-import { Pager } from "../_shared";
+import { Pager, notifyExportResult } from "../_shared";
 import { askConfirm } from "../shared/askConfirm";
+import { useActionLock } from "../shared/useActionLock";
+import { saveBlobFile } from "../shared/saveFile.mjs";
 import {
   getScanSessions,
   getScanSessionDetail,
@@ -181,7 +183,8 @@ export default function PageScannerHistoryModule() {
   const [range, setRange] = useState("");
 
   const [selected, setSelected] = useState(() => new Map());
-  const [exporting, setExporting] = useState(false);
+  const [exporting, guardExport, exportingApi] = useActionLock();
+  const [isStopping, guardStop] = useActionLock();
 
   /* Detail panel */
   const [detailOpen, setDetailOpen] = useState(false);
@@ -279,8 +282,6 @@ export default function PageScannerHistoryModule() {
 
   /* Xuất Excel: các dòng đã chọn, nếu không chọn thì toàn bộ kết quả lọc */
   const handleExport = async () => {
-    if (exporting) return;
-    setExporting(true);
     try {
       let rows = [...selected.values()];
       if (!rows.length) {
@@ -292,7 +293,7 @@ export default function PageScannerHistoryModule() {
         }
       }
       if (!rows.length) {
-        toast.warning("Không có phiên quét nào để xuất.");
+        toast.warning("Không có phiên quét nào để xuất.", { key: "m11-history-export" });
         return;
       }
       const XLSX = await import("xlsx");
@@ -318,12 +319,25 @@ export default function PageScannerHistoryModule() {
       const book = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(book, sheet, "Lịch sử quét page");
       const suffix = range.from || range.to ? `${range.from || "dau"}_${range.to || "nay"}` : "tat_ca";
-      XLSX.writeFile(book, `Lich_su_quet_page_${suffix}.xlsx`);
-      toast.success(`Đã xuất ${fmtNum(rows.length)} phiên quét.`);
+      const wbout = XLSX.write(book, { bookType: "xlsx", type: "array" });
+      const blob = new Blob([wbout], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      const res = await saveBlobFile(blob, {
+        suggestedName: `Lich_su_quet_page_${suffix}.xlsx`,
+        types: [
+          {
+            description: "Tệp Excel",
+            accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] },
+          },
+        ],
+      });
+      notifyExportResult(res, {
+        successMessage: `Đã xuất ${fmtNum(rows.length)} phiên quét ra file "${res.fileName}".`,
+        key: "m11-history-export",
+      });
     } catch (err) {
-      toast.error(`Lỗi xuất Excel: ${err.message}`);
-    } finally {
-      setExporting(false);
+      toast.error(`Lỗi xuất Excel: ${err.message}`, { key: "m11-history-export" });
     }
   };
 
@@ -390,10 +404,10 @@ export default function PageScannerHistoryModule() {
     if (!ok) return;
     try {
       await stopScanSession(session.id);
-      toast.success("Đã gửi tín hiệu dừng phiên quét");
+      toast.success("Đã gửi tín hiệu dừng phiên quét", { key: "m11-history-stop" });
       loadSessions({ silent: true });
     } catch (err) {
-      toast.error(`Không dừng được: ${err.message}`);
+      toast.error(`Không dừng được: ${err.message}`, { key: "m11-history-stop" });
     }
   };
 
@@ -431,11 +445,12 @@ export default function PageScannerHistoryModule() {
         <DateRangeFilter value={range} onChange={changeFilter(setRange)} />
         <button
           type="button"
-          onClick={handleExport}
+          onClick={() => guardExport(handleExport)}
           disabled={exporting}
+          aria-busy={exportingApi}
           className="inline-flex h-[34px] shrink-0 items-center gap-2 rounded-lg bg-[#059669] px-3.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#047857] disabled:opacity-60"
         >
-          {exporting ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+          {exportingApi ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
           Xuất báo cáo Excel{selected.size > 0 ? ` (${selected.size})` : ""}
         </button>
       </section>
@@ -527,8 +542,9 @@ export default function PageScannerHistoryModule() {
                               type="button"
                               title="Dừng phiên"
                               aria-label="Dừng phiên"
-                              onClick={() => handleStop(s)}
-                              className="rounded-lg p-1.5 text-red-500 hover:bg-red-50"
+                              onClick={() => guardStop(() => handleStop(s))}
+                              disabled={isStopping}
+                              className="rounded-lg p-1.5 text-red-500 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
                             >
                               <CircleStop className="size-4" />
                             </button>

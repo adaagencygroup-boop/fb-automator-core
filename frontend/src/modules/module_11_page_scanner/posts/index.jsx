@@ -29,7 +29,7 @@ import {
   resumeScanSession,
   getScanSessionDetail,
 } from "../service";
-import { LiveLogConsole, nowStamp, LIVE_STATUSES, Pager, parseJsonField, runDelete } from "../_shared";
+import { LiveLogConsole, nowStamp, LIVE_STATUSES, Pager, parseJsonField, runDelete, notifyExportResult } from "../_shared";
 import { SelectAccountsModal, SelectPagesModal, isAccountUsable } from "../shared/SelectPagesModal";
 import {
   loadSavedAccountUids,
@@ -38,7 +38,8 @@ import {
 } from "../shared/accountStorage";
 import { ScanActionButtons } from "../shared/ScanActionButtons";
 import { clearScanState, fetchSavedSessions, loadScanState, saveScanState } from "../shared/scanStateStorage";
-import { useClickLock } from "../shared/useClickLock";
+import { useActionLock } from "../shared/useActionLock";
+import { saveCsvContent } from "../shared/saveFile.mjs";
 import { localIsoDate, toCsv } from "../utils.mjs";
 
 const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
@@ -230,7 +231,11 @@ export default function PageScannerPosts() {
 
   const logId = useRef(0);
   const pollRef = useRef(null);
-  const [startLocked, runStartLocked] = useClickLock(1000); // chống bấm liên tục nút BẮT ĐẦU
+  // Khoá nút trong lúc xử lý: bấm liên tục chỉ chạy 1 lần, không bắn ra nhiều thông báo / yêu cầu
+  const [isToggling, guardToggle] = useActionLock();
+  const [isPausing, guardPause] = useActionLock();
+  const [isExportingPage, guardExportPage, isExportingPageApi] = useActionLock();
+  const [isDeleting, guardDelete] = useActionLock();
   const restoreSeqRef = useRef(0); // tăng khi bắt đầu / quét mới / rời trang → bỏ kết quả khôi phục về muộn
 
   const isBusy = runPhase === "running" || runPhase === "paused";
@@ -440,93 +445,91 @@ export default function PageScannerPosts() {
     return localIsoDate(d); // ngày theo giờ máy (toISOString là UTC → lệch 1 ngày trước 7h sáng)
   };
 
-  const handleStart = async () => {
-    try {
-      if (!selectedUids || !selectedUids.length) {
-        toast.warning("Chưa chọn tài khoản");
-        return;
-      }
-      const usable = accounts.filter((a) => selectedUids.includes(a.uid) && isAccountUsable(a));
-      if (!usable.length) {
-        toast.warning("Không có tài khoản khả dụng (Live & Đã đăng nhập) trong danh sách đã chọn.");
-        return;
-      }
-      if (!selectedPages.length) {
-        toast.warning("Chọn ít nhất 1 Page muốn quét.");
-        return;
-      }
-      const pageKeys = selectedPages.map((p) => p.page_key).filter(Boolean);
-      if (!pageKeys.length) {
-        toast.warning("Danh sách page thiếu page_key.");
-        return;
-      }
-
-      // Thứ tự xoay vòng = thứ tự acc Live đã chọn
-      const accountUids = usable.map((a) => a.uid);
-      const accountUid = accountUids[0];
-
-      restoreSeqRef.current += 1;
-      stopPolling();
-      setRunPhase("running");
-      setLogs([]);
-      setResultCount(0);
-      setPagePostCounts({});
-      setTableRows([]);
-      setTableTotal(0);
-      setPostTablePage(1);
-      setSelectedPostIds(new Set());
-      pushLog(
-        `Tạo phiên POST_SCAN · ${pageKeys.length} Page · max/page=${maxPostsPerPage} · delay ${delayMin}-${delayMax}s`,
-        "info",
-      );
-
-      const res = await createPostScanSession({
-        page_keys: pageKeys,
-        account_uid: accountUid,
-        account_uids: accountUids,
-        rotate_every: postsPerAccountSwitch,
-        rotate_on_checkpoint: autoRotateOnCheckpoint,
-        keep_browser: keepBrowser,
-        max_posts_per_page: maxPostsPerPage,
-        date_from: computeDateFrom(),
-        date_to: null,
-        post_types: ["all"],
-        idle_timeout_s: 90,
-        skip_existing: deduplicatePosts,
-        skip_pinned_posts: skipPinnedPosts,
-        // "Khoảng cách giữa các lần quét" = giãn cách ngẫu nhiên giữa 2 Page (không phải mỗi lần cuộn)
-        page_delay_min_s: delayMin,
-        page_delay_max_s: delayMax,
+  const handleStart = () => {
+    if (!selectedUids || !selectedUids.length) {
+      toast.warning("Chưa chọn tài khoản", { key: "m11-posts-start" });
+      return;
+    }
+    const usable = accounts.filter((a) => selectedUids.includes(a.uid) && isAccountUsable(a));
+    if (!usable.length) {
+      toast.warning("Không có tài khoản khả dụng (Live & Đã đăng nhập) trong danh sách đã chọn.", {
+        key: "m11-posts-start",
       });
+      return;
+    }
+    if (!selectedPages.length) {
+      toast.warning("Chọn ít nhất 1 Page muốn quét.", { key: "m11-posts-start" });
+      return;
+    }
+    const pageKeys = selectedPages.map((p) => p.page_key).filter(Boolean);
+    if (!pageKeys.length) {
+      toast.warning("Danh sách page thiếu page_key.", { key: "m11-posts-start" });
+      return;
+    }
 
-      saveScanState("posts", { sessionIds: [res.session_id] });
-      setSessionId(res.session_id);
-      pushLog(`Session #${res.session_id} · ${res.status || "RUNNING"} · ${res.message || "OK"}`, "success");
-      if (accountUids.length > 1) {
+    return (async () => {
+      try {
+        // Thứ tự xoay vòng = thứ tự acc Live đã chọn
+        const accountUids = usable.map((a) => a.uid);
+        const accountUid = accountUids[0];
+
+        restoreSeqRef.current += 1;
+        stopPolling();
+        setRunPhase("running");
+        setLogs([]);
+        setResultCount(0);
+        setPagePostCounts({});
+        setTableRows([]);
+        setTableTotal(0);
+        setPostTablePage(1);
+        setSelectedPostIds(new Set());
         pushLog(
-          `Xoay vòng ${accountUids.length} tài khoản · đổi sau ${postsPerAccountSwitch} bài/nick` +
-            (autoRotateOnCheckpoint ? " · tự đảo khi checkpoint" : ""),
+          `Tạo phiên POST_SCAN · ${pageKeys.length} Page · max/page=${maxPostsPerPage} · delay ${delayMin}-${delayMax}s`,
           "info",
         );
+
+        const res = await createPostScanSession({
+          page_keys: pageKeys,
+          account_uid: accountUid,
+          account_uids: accountUids,
+          rotate_every: postsPerAccountSwitch,
+          rotate_on_checkpoint: autoRotateOnCheckpoint,
+          keep_browser: keepBrowser,
+          max_posts_per_page: maxPostsPerPage,
+          date_from: computeDateFrom(),
+          date_to: null,
+          post_types: ["all"],
+          idle_timeout_s: 90,
+          skip_existing: deduplicatePosts,
+          skip_pinned_posts: skipPinnedPosts,
+          // "Khoảng cách giữa các lần quét" = giãn cách ngẫu nhiên giữa 2 Page (không phải mỗi lần cuộn)
+          page_delay_min_s: delayMin,
+          page_delay_max_s: delayMax,
+        });
+
+        saveScanState("posts", { sessionIds: [res.session_id] });
+        setSessionId(res.session_id);
+        pushLog(`Session #${res.session_id} · ${res.status || "RUNNING"} · ${res.message || "OK"}`, "success");
+        if (accountUids.length > 1) {
+          pushLog(
+            `Xoay vòng ${accountUids.length} tài khoản · đổi sau ${postsPerAccountSwitch} bài/nick` +
+              (autoRotateOnCheckpoint ? " · tự đảo khi checkpoint" : ""),
+            "info",
+          );
+        }
+        if (skipPinnedPosts) pushLog("Bỏ qua bài viết ghim của Quản trị viên.", "info");
+        toast.success(`Đã khởi động POST_SCAN #${res.session_id}`, { key: "m11-posts-start" });
+        startPoll(res.session_id);
+      } catch (err) {
+        setRunPhase("idle");
+        const msg = err.message || "Lỗi tạo phiên";
+        toast.error(msg, { key: "m11-posts-start" });
+        pushLog(msg, "error");
       }
-      if (skipPinnedPosts) pushLog("Bỏ qua bài viết ghim của Quản trị viên.", "info");
-      toast.success(`Đã khởi động POST_SCAN #${res.session_id}`);
-      startPoll(res.session_id);
-    } catch (err) {
-      setRunPhase("idle");
-      const msg = err.message || "Lỗi tạo phiên";
-      toast.error(msg);
-      pushLog(msg, "error");
-    }
+    })();
   };
 
-  const handleToggleExecution = () => {
-    if (isExecuting) {
-      handleStop();
-    } else {
-      handleStart();
-    }
-  };
+  const handleToggleExecution = () => (isExecuting ? handleStop() : handleStart());
 
   /* Lưu cấu hình kèm phiên đang xem để vào lại trang vẫn còn */
   const configJson = JSON.stringify({
@@ -575,7 +578,7 @@ export default function PageScannerPosts() {
         pushLog("Tạm dừng phiên.", "warn");
       }
     } catch (err) {
-      toast.error(err.message);
+      toast.error(err.message, { key: "m11-posts-pause" });
     }
   };
 
@@ -590,7 +593,7 @@ export default function PageScannerPosts() {
       stopPolling();
       setRunPhase("done");
     } catch (err) {
-      toast.error(err.message);
+      toast.error(err.message, { key: "m11-posts-stop" });
     }
   };
 
@@ -682,22 +685,20 @@ export default function PageScannerPosts() {
         if (!batch.length || rows.length >= (Number(data.total) || 0)) break;
       }
       if (!rows.length) {
-        toast.info("Page này chưa có bài viết để xuất.");
+        toast.info("Page này chưa có bài viết để xuất.", { key: "m11-posts-export" });
         return;
       }
       const csv = toCsv(
         ["STT", "Nội dung", "Link bài viết", "Ngày đăng", "Thời gian (FB)", "Lượt like", "Bình luận", "Chia sẻ"],
         rows.map((r, i) => [i + 1, r.content, r.post_url, fmtPostDate(r.published_at), r.published_text, r.likes, r.comments, r.shares]),
       );
-      const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `bai_viet_${String(activePage.page_key).replace(/[:/\\]/g, "_")}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
-      toast.success(`Đã xuất ${rows.length.toLocaleString("vi-VN")} bài viết.`);
+      const res = await saveCsvContent(csv, `bai_viet_${String(activePage.page_key).replace(/[:/\\]/g, "_")}.csv`);
+      notifyExportResult(res, {
+        successMessage: `Đã xuất ${rows.length.toLocaleString("vi-VN")} bài viết thành công.`,
+        key: "m11-posts-export",
+      });
     } catch (err) {
-      toast.error(`Lỗi xuất bài viết: ${err.message}`);
+      toast.error(`Lỗi xuất bài viết: ${err.message}`, { key: "m11-posts-export" });
     }
   };
 
@@ -1060,11 +1061,11 @@ export default function PageScannerPosts() {
         live={isBusy}
         paused={isPaused}
         showNewScan={showResults}
-        startDisabled={startLocked || accountsLoading}
-        controlDisabled={startLocked}
-        onStart={() => runStartLocked(handleToggleExecution)}
-        onPauseResume={handlePauseResume}
-        onStop={() => runStartLocked(handleToggleExecution)}
+        startDisabled={isToggling || accountsLoading}
+        controlDisabled={isToggling || isPausing}
+        onStart={() => guardToggle(handleToggleExecution)}
+        onPauseResume={() => guardPause(handlePauseResume)}
+        onStop={() => guardToggle(handleToggleExecution)}
         onNewScan={handleNewScan}
       />
 
@@ -1175,11 +1176,13 @@ export default function PageScannerPosts() {
                     </div>
                     <button
                       type="button"
-                      onClick={handleExportActivePage}
-                      className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#BFDBFE] bg-white px-3.5 py-2 text-xs font-semibold text-[#1D4ED8] transition hover:bg-[#EFF6FF]"
+                      onClick={() => guardExportPage(handleExportActivePage)}
+                      disabled={isExportingPage}
+                      aria-busy={isExportingPageApi}
+                      className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#BFDBFE] bg-white px-3.5 py-2 text-xs font-semibold text-[#1D4ED8] transition hover:bg-[#EFF6FF] disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      <FileSpreadsheet className="size-4" />
-                      Xuất Page này
+                      {isExportingPageApi ? <Loader2 className="size-4 animate-spin" /> : <FileSpreadsheet className="size-4" />}
+                      {isExportingPageApi ? "Đang xuất…" : "Xuất Page này"}
                     </button>
                   </div>
 
@@ -1360,21 +1363,24 @@ export default function PageScannerPosts() {
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={async () => {
-                                        const n = await runDelete({
-                                          count: 1,
-                                          noun: "bài viết",
-                                          request: () => deleteScannedPosts({ post_ids: [post.id] }),
-                                        });
-                                        if (n == null) return;
-                                        setSelectedPostIds((prev) => {
-                                          const next = new Set(prev);
-                                          next.delete(post.id);
-                                          return next;
-                                        });
-                                        refreshPosts(sessionId);
-                                      }}
-                                      className="cursor-pointer rounded p-1 text-[#94A3B8] transition hover:bg-red-50 hover:text-red-600"
+                                      disabled={isDeleting}
+                                      onClick={() =>
+                                        guardDelete(async () => {
+                                          const n = await runDelete({
+                                            count: 1,
+                                            noun: "bài viết",
+                                            request: () => deleteScannedPosts({ post_ids: [post.id] }),
+                                          });
+                                          if (n == null) return;
+                                          setSelectedPostIds((prev) => {
+                                            const next = new Set(prev);
+                                            next.delete(post.id);
+                                            return next;
+                                          });
+                                          refreshPosts(sessionId);
+                                        })
+                                      }
+                                      className="cursor-pointer rounded p-1 text-[#94A3B8] transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
                                       title="Xóa bài viết"
                                     >
                                       <Trash2 className="size-3.5" />
