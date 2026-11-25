@@ -161,14 +161,10 @@ def post_meta(objs: list[Any], *, post_key: str = "", page_url: str = "") -> dic
                               "url": _str(to.get("url"))}
             if "reactions" not in meta and _reaction_total(o) is not None:
                 meta["reactions"] = _reaction_total(o)
-            if "shares" not in meta and isinstance(o.get("share_count"), dict) and _int(o["share_count"].get("count")) is not None:
-                meta["shares"] = _int(o["share_count"].get("count"))
-            if "comments" not in meta:
-                for key in ("comments", "comment_count", "total_comment_count"):
-                    val = o.get(key)
-                    if isinstance(val, dict) and _int(val.get("total_count")) is not None:
-                        meta["comments"] = _int(val.get("total_count"))
-                        break
+            if "shares" not in meta and _share_total(o) is not None:
+                meta["shares"] = _share_total(o)
+            if "comments" not in meta and _comment_total(o) is not None:
+                meta["comments"] = _comment_total(o)
             if "url" not in meta:
                 for key in ("url", "wwwURL", "permalink_url"):
                     u = o.get(key)
@@ -181,14 +177,10 @@ def post_meta(objs: list[Any], *, post_key: str = "", page_url: str = "") -> dic
             for o in walk(root):
                 if "reactions" not in meta and _reaction_total(o) is not None:
                     meta["reactions"] = _reaction_total(o)
-                if "shares" not in meta and isinstance(o.get("share_count"), dict) and _int(o["share_count"].get("count")) is not None:
-                    meta["shares"] = _int(o["share_count"].get("count"))
-                if "comments" not in meta:
-                    for key in ("comments", "comment_count", "total_comment_count"):
-                        val = o.get(key)
-                        if isinstance(val, dict) and _int(val.get("total_count")) is not None:
-                            meta["comments"] = _int(val.get("total_count"))
-                            break
+                if "shares" not in meta and _share_total(o) is not None:
+                    meta["shares"] = _share_total(o)
+                if "comments" not in meta and _comment_total(o) is not None:
+                    meta["comments"] = _comment_total(o)
     # Nguồn: nhóm (to: Group) / page / trang cá nhân
     to, author = meta.get("to") or {}, meta.get("author") or {}
     if to.get("type") == "Group":
@@ -206,9 +198,10 @@ def _reaction_total(o: dict[str, Any]) -> Optional[int]:
     rc = o.get("reaction_count")
     if isinstance(rc, dict) and _int(rc.get("count")) is not None:
         return _int(rc.get("count"))
-    reactors = o.get("reactors")
-    if isinstance(reactors, dict) and _int(reactors.get("count")) is not None:
-        return _int(reactors.get("count"))
+    for key in ("reactors", "unified_reactors"):  # unified_reactors: trang reel
+        reactors = o.get(key)
+        if isinstance(reactors, dict) and _int(reactors.get("count")) is not None:
+            return _int(reactors.get("count"))
     top = o.get("top_reactions")
     if isinstance(top, dict) and isinstance(top.get("edges"), list) and top["edges"]:
         vals = [_int(e.get("reaction_count")) for e in top["edges"] if isinstance(e, dict)]
@@ -216,6 +209,27 @@ def _reaction_total(o: dict[str, Any]) -> Optional[int]:
             return sum(vals)
     if isinstance(o.get("i18n_reaction_count"), str) and "node" not in o:
         return parse_count_text(o["i18n_reaction_count"])
+    return None
+
+
+def _comment_total(o: dict[str, Any]) -> Optional[int]:
+    """Số bình luận: comments / comment_count {total_count} (bài thường) hoặc total_comment_count số nguyên (reel)."""
+    for key in ("comments", "comment_count", "total_comment_count"):
+        val = o.get(key)
+        if isinstance(val, dict) and _int(val.get("total_count")) is not None:
+            return _int(val.get("total_count"))
+    if isinstance(o.get("total_comment_count"), int):
+        return o["total_comment_count"]
+    return None
+
+
+def _share_total(o: dict[str, Any]) -> Optional[int]:
+    """Số chia sẻ: share_count {count} (bài thường) hoặc share_count_reduced "5" / "1,2K" (reel)."""
+    if isinstance(o.get("share_count"), dict) and _int(o["share_count"].get("count")) is not None:
+        return _int(o["share_count"].get("count"))
+    for key in ("share_count_reduced", "i18n_share_count"):
+        if isinstance(o.get(key), str) and parse_count_text(o[key]) is not None:
+            return parse_count_text(o[key])
     return None
 
 

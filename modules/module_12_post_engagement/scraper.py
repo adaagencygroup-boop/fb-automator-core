@@ -148,6 +148,20 @@ for (const b of root.querySelectorAll('[role=button]')) {
 return n;
 """
 
+# Reel: khung bình luận đóng sẵn → bấm nút "Comment, N comments" của reel đang xem (trong khung nhìn; reel kế bên
+# cũng có nút tương tự nhưng nằm dưới). Chỉ bấm khi trang chưa có bình luận nào và nhãn có kèm số bình luận.
+OPEN_COMMENTS_PANEL_JS = r"""
+if (document.querySelector('[role=article]')) return 'present';
+const h = window.innerHeight || 800;
+const b = [...document.querySelectorAll('[role=button][aria-label]')].find(x => {
+  const a = x.getAttribute('aria-label') || '', r = x.getBoundingClientRect();
+  return /^(comment|bình luận)\s*,\s*[\d.,]+\s*[kmKM]?\s*(comments?|bình luận)$/i.test(a.trim()) && r.width > 0 && r.top >= 0 && r.top < h;
+});
+if (!b) return 'none';
+b.click();
+return 'opened';
+"""
+
 SCROLL_COMMENTS_JS = _COMMENT_ROOT_JS + r"""
 const sc = root === document.body ? null : [...root.querySelectorAll('div')]
   .filter(x => x.scrollHeight > x.clientHeight + 30 && /(auto|scroll)/.test(getComputedStyle(x).overflowY))
@@ -354,6 +368,12 @@ def collect_comments(
     """Lấy bình luận (gốc + trả lời, toàn văn) trên bài đang mở. Trả {count, reason, sort}."""
     seen: set[str] = set(known or ())
     got = 0
+    try:
+        if driver.execute_script(OPEN_COMMENTS_PANEL_JS) == "opened":
+            sleep(3.0)
+    except Exception as exc:
+        if _dead(exc):
+            raise
     sort = ensure_all_comments(driver, sleep=sleep)
     if sort == "switched":
         sleep(3.0)

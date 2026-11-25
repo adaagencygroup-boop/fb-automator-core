@@ -629,7 +629,9 @@ def _scan_one(job_id: str, session: dict[str, Any], idx: int, post: dict[str, An
         finally:
             flush()
         msg = f"✅ Bài số {idx + 1}: trích xuất {counter['n']:,} tài khoản đã bày tỏ cảm xúc"
-        if res.get("friends_only"):
+        # Cờ "chỉ bạn bè" có thể bật nhầm (reel / bài công khai vẫn cho xem hết) → chỉ cảnh báo khi lấy thiếu so với số trên bài
+        short = row["fb_like_count"] is None or counter["n"] < int(row["fb_like_count"] or 0)
+        if res.get("friends_only") and short and res.get("reason") != "quota":
             _log(job_id, msg + " — Facebook chỉ cho xem tên người bày tỏ cảm xúc là BẠN BÈ của nick với bài ngoài nhóm.", "warn")
         elif res.get("reason") == "no_dialog":
             _log(job_id, f"⚠️ Bài số {idx + 1}: không mở được danh sách cảm xúc.", "warn")
