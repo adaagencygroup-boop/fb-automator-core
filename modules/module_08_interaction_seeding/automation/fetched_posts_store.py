@@ -183,6 +183,8 @@ def upsert(owner_id: int, source_key: str, job_id: Optional[int], rows: Iterable
                 row = {f: r.get(f) for f in _FIELDS}
                 row["post_key"] = key
                 row["post_type"] = row.get("post_type") or None
+                content = (row.get("content") or "").strip()
+                row["content"] = content if content else "Bài viết không có nội dung"
                 for f in ("reaction_count", "comment_count", "share_count"):
                     row[f] = _int(row.get(f))
                 row["is_pinned"] = bool(row.get("is_pinned"))
@@ -194,9 +196,13 @@ def upsert(owner_id: int, source_key: str, job_id: Optional[int], rows: Iterable
                 continue
             if r.get("post_url"):
                 old["post_url"] = r["post_url"]
-            content = r.get("content")
-            if content and len(content) > len(old.get("content") or ""):
-                old["content"] = content
+            content = (r.get("content") or "").strip()
+            if content:
+                old_content = (old.get("content") or "").strip()
+                if old_content in ("", "Bài viết không có nội dung"):
+                    old["content"] = content
+                elif content != "Bài viết không có nội dung" and (r.get("content_cleaned") or len(content) > len(old_content)):
+                    old["content"] = content
             for f in ("post_type", "published_at", "published_text", "target_url", "target_fb_id"):
                 if r.get(f):
                     old[f] = r[f]
@@ -222,6 +228,16 @@ def available(owner_id: int, source_key: str) -> bool:
     with _lock:
         state = _load(owner_id)
         return bool(state and state["source_key"] == source_key)
+
+
+def clear(owner_id: int, source_key: str) -> bool:
+    """Xóa kho bài quét tạm của đúng nguồn hiện tại."""
+    with _lock:
+        state = _load(owner_id)
+        if state is None or state["source_key"] != source_key:
+            return False
+        _drop(owner_id)
+        return True
 
 
 def _matches(row: Dict[str, Any], needle: str, post_type: str) -> bool:

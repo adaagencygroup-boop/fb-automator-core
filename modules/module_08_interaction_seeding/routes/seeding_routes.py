@@ -25,7 +25,7 @@ from fastapi import (
     Request,
 )
 from pydantic import BaseModel
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, case, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from modules.module_02_account_manager.automation.browser_manager import (
@@ -676,23 +676,20 @@ def _visible_targets_query(
         if not is_admin:
             query = query.filter(SeedingTarget.created_by == current_user["id"])
 
-    # Chỉ loại trừ các link đã chạy THÀNH CÔNG (COMPLETED)
-    # Các link chưa chạy hoặc chạy thất bại (FAILED), bị dừng (STOPPED) vẫn tiếp tục hiển thị
+    # Loại trừ từng bài chỉ khi toàn bộ task của bài đó đã SUCCESS.
+    # Nhờ đọc trạng thái task trực tiếp, bài thành công vẫn được ẩn chính xác
+    # khi chiến dịch dừng giữa chừng và các bài còn lại chưa hoàn tất.
     if not include_completed:
-        completed_stmt = (
-            select(SeedingCampaignTarget.target_id)
-            .join(SeedingCampaign, SeedingCampaignTarget.campaign_id == SeedingCampaign.id)
-            .where(
-                or_(
-                    SeedingCampaign.status == "COMPLETED",
-                    and_(
-                        SeedingCampaignTarget.success_count > 0,
-                        SeedingCampaignTarget.failed_count == 0,
-                    ),
-                )
+        successful_targets = (
+            select(SeedingTask.target_id)
+            .filter(SeedingTask.target_id.isnot(None))
+            .group_by(SeedingTask.campaign_id, SeedingTask.target_id)
+            .having(
+                func.count(SeedingTask.id)
+                == func.sum(case((SeedingTask.status == "SUCCESS", 1), else_=0))
             )
         )
-        query = query.filter(~SeedingTarget.id.in_(completed_stmt))
+        query = query.filter(~SeedingTarget.id.in_(successful_targets))
     return query
 
 

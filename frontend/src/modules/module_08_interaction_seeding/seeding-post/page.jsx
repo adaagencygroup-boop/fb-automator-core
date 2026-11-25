@@ -156,6 +156,11 @@ export default function SeedingPostPage() {
         const detail =
           await seedingApi.getSeedingCampaignDetail(currentCampaignId);
         if (detail) {
+          // Đồng bộ danh sách khi chạy: bài có toàn bộ thao tác thành công sẽ được ẩn ngay.
+          seedingApi
+            .getSeedingTargets("POST")
+            .then((res) => setTargets(res?.targets || []))
+            .catch(() => {});
           const status = detail.status || detail.campaign?.status;
           const isBatchActive = detail.is_batch_active;
           if (
@@ -169,13 +174,6 @@ export default function SeedingPostPage() {
               `Chiến dịch hoàn tất với trạng thái: ${detail.status_display || status}.`,
               status === "COMPLETED" ? "success" : "warn",
             );
-            // Tải lại danh sách bài viết chưa chạy để loại bỏ các link đã hoàn tất
-            seedingApi
-              .getSeedingTargets("POST")
-              .then((res) => {
-                setTargets(res?.targets || []);
-              })
-              .catch(() => {});
           }
         }
       } catch (err) {

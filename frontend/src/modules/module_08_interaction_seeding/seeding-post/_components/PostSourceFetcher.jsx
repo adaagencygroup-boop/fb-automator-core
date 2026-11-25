@@ -2,14 +2,13 @@
 
 /**
  * Nội dung popup "Lấy bài viết từ page/ trang cá nhân": lấy TOÀN BỘ bài (job chạy nền, bài hiện dần),
- * tìm / phân trang, chọn N bài đầu hoặc "Chọn tất cả kết quả lọc", rồi thêm vào danh sách seeding.
+ * tìm trong toàn bộ kết quả, chọn N bài đầu hoặc "Chọn tất cả kết quả lọc", rồi thêm vào danh sách seeding.
  * - Nick quét: nick ĐẦU TIÊN trong các nick đã tích chọn ở mục "Số lượng tài khoản sử dụng" (còn Live + đã đăng nhập).
  *   Chưa tích nick nào thì không cho lấy bài.
  * - Bài lấy về chỉ lưu TẠM (RAM + file trên máy); bấm "Thêm bài viết đã chọn" mới lưu các bài đã chọn vào DB.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Check, CheckCircle2, FileText, Image as ImageIcon, Loader2, Search, Square, ThumbsUp, Video } from "lucide-react";
-import Pagination from "@/components/ui/pagination";
+import { AlertCircle, Check, CheckCircle2, FileText, Image as ImageIcon, Loader2, RefreshCw, Search, Square, Video } from "lucide-react";
 import { toast } from "@/components/ui/toast";
 import { postFetchApi } from "../../service";
 import {
@@ -22,7 +21,7 @@ import {
   toggleOne,
 } from "../postSelection.mjs";
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 100;
 const POLL_MS = 2000;
 const FETCH_ACCOUNT_CURSOR_KEY = "m8-seeding-post-fetch-account-cursor";
 const TYPES = {
@@ -37,6 +36,24 @@ const PRIMARY =
 const CHECKBOX =
   "size-4 shrink-0 cursor-pointer appearance-none rounded-full border-2 border-slate-300 bg-white checked:border-blue-600 checked:bg-blue-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:opacity-50 disabled:checked:border-slate-400 disabled:checked:bg-slate-400 disabled:checked:opacity-100";
 const fmt = (n) => Number(n || 0).toLocaleString("vi-VN");
+function formatDateOnly(value) {
+  if (!value) return "";
+  const raw = String(value).trim();
+  const exact = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  if (exact) return `${exact[1].padStart(2, "0")}-${exact[2].padStart(2, "0")}-${exact[3]}`;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${String(date.getDate()).padStart(2, "0")}-${String(date.getMonth() + 1).padStart(2, "0")}-${date.getFullYear()}`;
+}
+
+function ensureSelected(selection, id) {
+  if (selection.mode === "all") {
+    return selection.exclude.includes(id)
+      ? { ...selection, exclude: selection.exclude.filter((excludedId) => excludedId !== id) }
+      : selection;
+  }
+  return selection.ids.includes(id) ? selection : { ...selection, ids: [...selection.ids, id] };
+}
 
 function isActive(job) {
   return !!job && (job.is_running || job.status === "RUNNING" || job.status === "STOPPING");
@@ -65,7 +82,9 @@ const TONE = {
 
 function splitContent(content) {
   const text = String(content || "").trim();
-  if (!text) return { title: "Bài viết Facebook", desc: "" };
+  if (!text || text === "Bài viết không có nội dung") {
+    return { title: "Bài viết không có nội dung", desc: "" };
+  }
   const [first, ...rest] = text.split(/\r?\n+/);
   if (first.length > 100) return { title: `${first.slice(0, 100)}…`, desc: text };
   return { title: first, desc: rest.join(" ") };
@@ -88,7 +107,6 @@ export default function PostSourceFetcher({
 
   const [qInput, setQInput] = useState("");
   const [q, setQ] = useState("");
-  const [page, setPage] = useState(1);
   const [list, setList] = useState({ items: [], total: 0, available: true });
   const [loadingList, setLoadingList] = useState(false);
   const [sel, setSel] = useState(emptySelection);
@@ -96,8 +114,13 @@ export default function PostSourceFetcher({
   const [adding, setAdding] = useState(false);
 
   const listSeq = useRef(0);
+  const loadingListRef = useRef(false);
+  const listItemsRef = useRef([]);
+  const dragSelectRef = useRef({ active: false, moved: false, startId: null });
+  const terminalToastJobsRef = useRef(new Set());
   const sourceKey = job?.source_key || "";
   const running = isActive(job);
+  const fetchBusy = running || starting;
 
   useEffect(() => {
     try {
@@ -146,66 +169,139 @@ export default function PostSourceFetcher({
     return () => clearTimeout(t);
   }, [qInput]);
 
-  // Đổi nguồn / từ khoá → về trang 1 và bỏ lựa chọn ("tất cả kết quả lọc" gắn với từ khoá lúc chọn)
+  // Đổi nguồn / từ khoá → tải lại từ đầu và bỏ lựa chọn ("tất cả kết quả lọc" gắn với từ khoá lúc chọn)
   useEffect(() => {
-    setPage(1);
+    listItemsRef.current = [];
+    setList({ items: [], total: 0, available: true });
     setSel(emptySelection());
   }, [sourceKey, q]);
 
-  const loadList = useCallback(async () => {
+  const loadList = useCallback(async (allPages = true) => {
     if (!sourceKey) {
+      listItemsRef.current = [];
       setList({ items: [], total: 0, available: true });
       return;
     }
+    if (!allPages && loadingListRef.current) return;
     const seq = ++listSeq.current;
+    loadingListRef.current = true;
     setLoadingList(true);
     try {
-      const res = await postFetchApi.listPosts({ source_key: sourceKey, q: q || undefined, type: "all", page, page_size: PAGE_SIZE });
+      // Khi đang quét, chỉ tải trang có bài mới; không tải lại toàn bộ kho ở mỗi lần heartbeat.
+      const existingItems = allPages ? [] : listItemsRef.current;
+      const firstPage = allPages ? 1 : Math.floor(existingItems.length / PAGE_SIZE) + 1;
+      const res = await postFetchApi.listPosts({
+        source_key: sourceKey,
+        q: q || undefined,
+        type: "all",
+        page: firstPage,
+        page_size: PAGE_SIZE,
+      });
       if (seq !== listSeq.current) return;
-      setList({ items: res?.items || [], total: res?.total || 0, available: res?.available !== false });
+      let total = Number(res?.total || 0);
+      const mergeUnique = (rows) => {
+        const seen = new Set();
+        return rows.filter((item) => {
+          if (seen.has(item.id)) return false;
+          seen.add(item.id);
+          return true;
+        });
+      };
+      let items = mergeUnique(allPages
+        ? (res?.items || [])
+        : [...existingItems, ...(res?.items || [])]);
+      listItemsRef.current = items;
+      setList({ items, total, available: res?.available !== false });
+
+      let pageNumber = firstPage + 1;
+      while (pageNumber <= Math.ceil(total / PAGE_SIZE) && items.length < total) {
+        const pageRes = await postFetchApi.listPosts({
+          source_key: sourceKey,
+          q: q || undefined,
+          type: "all",
+          page: pageNumber,
+          page_size: PAGE_SIZE,
+        });
+        if (seq !== listSeq.current) return;
+        total = Number(pageRes?.total ?? total);
+        items = mergeUnique([...items, ...(pageRes?.items || [])]);
+        listItemsRef.current = items;
+        setList({ items, total, available: pageRes?.available !== false });
+        pageNumber += 1;
+      }
     } catch (err) {
       if (seq === listSeq.current) toast.error(err?.message || "Không tải được danh sách bài viết.", "LỖI TẢI BÀI");
     } finally {
-      if (seq === listSeq.current) setLoadingList(false);
+      if (seq === listSeq.current) {
+        loadingListRef.current = false;
+        setLoadingList(false);
+      }
     }
-  }, [sourceKey, q, page]);
+  }, [sourceKey, q]);
 
   useEffect(() => {
     loadList();
   }, [loadList, targetsVersion]);
 
+  useEffect(() => {
+    const finishDrag = () => {
+      const drag = dragSelectRef.current;
+      drag.active = false;
+      window.setTimeout(() => {
+        dragSelectRef.current = { active: false, moved: false, startId: null };
+      }, 0);
+    };
+    window.addEventListener("mouseup", finishDrag);
+    return () => window.removeEventListener("mouseup", finishDrag);
+  }, []);
+
   // Đang lấy bài: hỏi tiến độ mỗi 2 giây, có bài mới thì tải lại trang đang xem
   const lastFound = useRef(-1);
   useEffect(() => {
     if (!running || !job?.id) return undefined;
-    const timer = setInterval(async () => {
+    let stopped = false;
+    let busy = false;
+    let timer;
+    const poll = async () => {
+      if (stopped || busy) return;
+      busy = true;
+      let retryDelay = POLL_MS;
       try {
         const res = await postFetchApi.getJob(job.id);
         const next = res?.job;
-        if (!next) return;
-        setJob(next);
-        if (next.found_count !== lastFound.current) {
-          lastFound.current = next.found_count;
-          loadList();
-        }
-        if (!isActive(next)) {
-          loadList();
-          const line = statusLine(next);
-          if (next.status === "COMPLETED") toast.success(line.text, "ĐÃ LẤY XONG");
-          else if (next.status === "STOPPED") toast.warning(line.text, "ĐÃ DỪNG");
-          else toast.error(line.text, "LẤY BÀI THẤT BẠI");
+        if (next) {
+          setJob(next);
+          if (!isActive(next)) {
+            const terminalKey = `${next.id || job.id}:${next.status}`;
+            if (!terminalToastJobsRef.current.has(terminalKey)) {
+              terminalToastJobsRef.current.add(terminalKey);
+              loadList(true);
+              if (next.status === "STOPPED") toast.warning(statusLine(next).text, "ĐÃ DỪNG");
+              else if (next.status !== "COMPLETED") toast.error(statusLine(next).text, "LẤY BÀI THẤT BẠI");
+            }
+          } else if (next.found_count !== lastFound.current) {
+            lastFound.current = next.found_count;
+            loadList(false);
+          }
         }
       } catch {
-        /* thử lại ở vòng sau */
+        // Không để request tiến độ chồng lấn khi engine phản hồi chậm hoặc đang khởi động lại.
+        retryDelay = POLL_MS * 2;
+      } finally {
+        busy = false;
+        if (!stopped) timer = window.setTimeout(poll, retryDelay);
       }
-    }, POLL_MS);
-    return () => clearInterval(timer);
+    };
+    poll();
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
   }, [running, job?.id, loadList]);
 
   const chosen = selectedCount(sel, list.total);
-  const totalPages = Math.max(1, Math.ceil(list.total / PAGE_SIZE));
   const pickN = Number(firstN);
-  const pickValid = Number.isInteger(pickN) && pickN >= 1;
+  const pickValid = Number.isInteger(pickN) && pickN >= 1 && pickN <= 5000;
 
   const handleStart = async (event) => {
     event?.preventDefault();
@@ -222,6 +318,10 @@ export default function PostSourceFetcher({
       return;
     }
     setStarting(true);
+    listSeq.current += 1;
+    listItemsRef.current = [];
+    setList({ items: [], total: 0, available: true });
+    setSel(emptySelection());
     try {
       const res = await postFetchApi.startJob(sourceUrl.trim(), accountUid);
       const eligibleCount = selectedUids.filter((uid) => accounts.some((account) => account.uid === uid)).length;
@@ -238,6 +338,7 @@ export default function PostSourceFetcher({
       setJob(res?.job || null);
       toast.info("Đã bắt đầu lấy bài viết — bài sẽ hiện dần bên dưới.", "ĐANG LẤY BÀI");
     } catch (err) {
+      loadList(true);
       toast.error(err?.message || "Không bắt đầu lấy bài được.", "LỖI");
     } finally {
       setStarting(false);
@@ -257,6 +358,24 @@ export default function PostSourceFetcher({
     }
   };
 
+  const handleClearResults = async () => {
+    if (!sourceKey || fetchBusy || loadingList) return;
+    const seq = ++listSeq.current;
+    loadingListRef.current = false;
+    setLoadingList(true);
+    try {
+      await postFetchApi.clearPosts(sourceKey);
+      if (seq !== listSeq.current) return;
+      listItemsRef.current = [];
+      setList({ items: [], total: 0, available: true });
+      setSel(emptySelection());
+    } catch (err) {
+      if (seq === listSeq.current) toast.error(err?.message || "Không xóa được danh sách bài viết.", "LỖI");
+    } finally {
+      if (seq === listSeq.current) setLoadingList(false);
+    }
+  };
+
   const handlePickFirst = async () => {
     if (!pickValid) return;
     const n = Math.min(5000, pickN);
@@ -271,7 +390,7 @@ export default function PostSourceFetcher({
   };
 
   const handleAdd = async () => {
-    if (!chosen || adding) return;
+    if (!chosen || adding || fetchBusy) return;
     setAdding(true);
     try {
       const res = await postFetchApi.addToTargets(toAddPayload(sel, { sourceKey, q, type: "all" }));
@@ -364,7 +483,20 @@ export default function PostSourceFetcher({
             <div className="space-y-3 border-t border-slate-100 pt-4">
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-xs font-bold text-slate-900">Danh sách bài viết</h3>
-                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{fmt(list.total)} kết quả</span>
+                <div className="flex items-center gap-2">
+                  {list.items.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleClearResults}
+                      disabled={fetchBusy || loadingList}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <RefreshCw className={`size-3 ${loadingList ? "animate-spin" : ""}`} aria-hidden="true" />
+                      Làm mới
+                    </button>
+                  )}
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{fmt(list.total)} kết quả</span>
+                </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <input
@@ -378,12 +510,23 @@ export default function PostSourceFetcher({
                 <label className="flex items-center gap-2 text-xs text-slate-500">
                   Số bài
                   <input
-                    type="number"
-                    min="1"
-                    max="5000"
-                    step="1"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={firstN}
-                    onChange={(e) => setFirstN(e.target.value)}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (value === "") {
+                        setFirstN("");
+                        return;
+                      }
+                      if (!/^\d+$/.test(value)) return;
+                      const count = Number(value);
+                      if (count >= 1 && count <= 5000) setFirstN(String(count));
+                    }}
+                    onBlur={() => {
+                      if (!pickValid) setFirstN("1");
+                    }}
                     className={`${INPUT} w-20 px-2 text-center`}
                   />
                 </label>
@@ -418,7 +561,7 @@ export default function PostSourceFetcher({
               </div>
             </div>
 
-            <div className="space-y-2">
+            <div className="max-h-[52vh] space-y-2 overflow-y-auto overscroll-contain pr-1">
               {loadingList && !list.items.length ? (
                 <p className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 p-4 text-xs text-slate-500">
                   <Loader2 className="size-4 animate-spin text-blue-600" aria-hidden="true" /> Đang tải bài viết...
@@ -436,19 +579,38 @@ export default function PostSourceFetcher({
                   const { Icon, label } = TYPES[p.post_type] || TYPES.text;
                   const checked = p.added || isSelected(sel, p.id);
                   const { title, desc } = splitContent(p.content);
-                  const date = p.published_at || p.published_text;
+                    const date = formatDateOnly(p.published_at || p.published_text);
                   return (
                     <label
                       key={p.id}
+                      onMouseDown={(event) => {
+                        if (event.button !== 0 || busy || p.added) return;
+                        dragSelectRef.current = { active: true, moved: false, startId: p.id };
+                      }}
+                      onMouseEnter={() => {
+                        const drag = dragSelectRef.current;
+                        if (!drag.active) return;
+                        if (p.id !== drag.startId) drag.moved = true;
+                        if (!drag.moved) return;
+                        setSel((selection) => ensureSelected(ensureSelected(selection, drag.startId), p.id));
+                      }}
+                      onClick={(event) => {
+                        if (!dragSelectRef.current.moved) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                      }}
                       className={`flex items-center gap-3 rounded-xl border p-3 ${
                         checked && !p.added ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white"
-                      } ${!p.added && !busy ? "cursor-pointer hover:border-blue-300" : ""}`}
+                      } ${!p.added && !busy ? "cursor-pointer select-none hover:border-blue-300" : ""}`}
                     >
                       <input
                         type="checkbox"
                         className={CHECKBOX}
                         checked={checked}
-                        onChange={() => setSel((s) => toggleOne(s, p.id))}
+                        onChange={() => {
+                          if (dragSelectRef.current.moved) return;
+                          setSel((s) => toggleOne(s, p.id));
+                        }}
                         disabled={busy || p.added}
                       />
                       <Icon className="size-4 shrink-0 text-slate-400" aria-hidden="true" />
@@ -458,12 +620,6 @@ export default function PostSourceFetcher({
                         <span className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                           <span className="rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-700">{label}</span>
                           {date && <span>{date}</span>}
-                          {p.reaction_count != null && (
-                            <span className="inline-flex items-center gap-1">
-                              <ThumbsUp className="size-3" aria-label="Lượt tương tác" />
-                              {fmt(p.reaction_count)}
-                            </span>
-                          )}
                           {p.added && <span className="font-medium text-emerald-700">Đã có trong danh sách seeding</span>}
                         </span>
                       </span>
@@ -471,16 +627,13 @@ export default function PostSourceFetcher({
                   );
                 })
               )}
+              {list.items.length > 0 && loadingList && (
+                <div className="flex min-h-9 items-center justify-center gap-2 py-2 text-xs text-slate-500" aria-live="polite">
+                  <Loader2 className="size-3.5 animate-spin text-blue-600" aria-hidden="true" />
+                  Đang tải toàn bộ danh sách bài viết...
+                </div>
+              )}
             </div>
-
-            {totalPages > 1 && (
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-                <span>
-                  Hiển thị {fmt((page - 1) * PAGE_SIZE + 1)}–{fmt(Math.min(page * PAGE_SIZE, list.total))} / {fmt(list.total)} bài
-                </span>
-                <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} siblingCount={1} />
-              </div>
-            )}
           </>
         )}
       </div>
@@ -493,7 +646,7 @@ export default function PostSourceFetcher({
               Bài viết chỉ lưu tạm — bấm &quot;Thêm bài viết đã chọn&quot; mới lưu vào danh sách seeding
             </p>
           </div>
-          <button type="button" disabled={busy || !chosen} onClick={handleAdd} className={PRIMARY}>
+          <button type="button" disabled={busy || fetchBusy || !chosen} onClick={handleAdd} className={PRIMARY}>
             {adding ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Check className="size-4" aria-hidden="true" />}
             {adding ? "Đang thêm bài viết…" : "Thêm bài viết đã chọn"}
           </button>
