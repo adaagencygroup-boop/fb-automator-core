@@ -19,8 +19,10 @@ const TAB_TEXT = { like: "Đã Like", comment: "Bình luận" };
  * Hộp thoại "Xuất toàn bộ file": định dạng + phạm vi (dòng đã chọn / tab đang xem / Like + Bình luận của bài /
  * mọi bài trong danh mục) + lọc mức quan tâm.
  */
-export default function ExportModal({ open, onOpenChange, post, postKeys = [], tab = "like", search = "", tier = null,
-  selectedRows = [], baseName = "Tuong_tac_bai_viet" }) {
+export default function ExportModal({ open, onOpenChange, post, postKeys = [], postTotal = 0, storeFilter = null, tab = "like",
+  search = "", tier = null, selectedRows = [], baseName = "Tuong_tac_bai_viet" }) {
+  // storeFilter ({search, source}): trang Danh sách toàn kho → "Toàn bộ" để Engine tự lấy mọi bài khớp bộ lọc
+  const allCount = storeFilter ? Math.max(postTotal, postKeys.length) : postKeys.length;
   const [format, setFormat] = useState("xlsx");
   const [scope, setScope] = useState("tab");
   const [tierFilter, setTierFilter] = useState(tier ? String(tier) : "all");
@@ -36,7 +38,7 @@ export default function ExportModal({ open, onOpenChange, post, postKeys = [], t
     selectedRows.length ? { id: "selected", label: `Các dòng đã chọn (${selectedRows.length})` } : null,
     post ? { id: "tab", label: `Tab đang xem của bài này (${TAB_TEXT[tab]})` } : null,
     post ? { id: "post", label: "Toàn bộ Like + Bình luận của bài này" } : null,
-    postKeys.length > 1 ? { id: "all", label: `Toàn bộ tương tác của ${postKeys.length} bài trong danh mục` } : null,
+    allCount > 1 ? { id: "all", label: `Toàn bộ tương tác của ${allCount.toLocaleString("vi-VN")} bài trong danh mục` } : null,
   ].filter(Boolean);
 
   const run = async () => {
@@ -47,9 +49,12 @@ export default function ExportModal({ open, onOpenChange, post, postKeys = [], t
       if (scope === "selected") {
         rows = selectedRows.filter((r) => !t || r.tier === t).map((r) => ({ ...r, action: r.action || tab, post_url: post?.post_url }));
       } else {
-        const keys = scope === "all" ? postKeys : [post.post_key];
+        const keys = scope === "all" ? (storeFilter ? [] : postKeys) : [post.post_key];
         const res = await exportEngagements({
           postKeys: keys,
+          allPosts: scope === "all" && Boolean(storeFilter),
+          postSearch: storeFilter?.search || "",
+          postSource: storeFilter?.source || "all",
           scope: scope === "tab" ? "tab" : "all",
           tab,
           search: scope === "tab" ? search : "",
@@ -61,7 +66,7 @@ export default function ExportModal({ open, onOpenChange, post, postKeys = [], t
         toast.warning("Không có dữ liệu tương tác nào để xuất với lựa chọn này.");
         return;
       }
-      const name = scope === "all" ? `${baseName}_${postKeys.length}_bai` : `${baseName}_${post?.post_key || ""}`;
+      const name = scope === "all" ? `${baseName}_${allCount}_bai` : `${baseName}_${post?.post_key || ""}`;
       if (format === "txt") {
         downloadUidText(name, rows.map((r) => r.uid));
       } else {

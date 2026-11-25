@@ -48,6 +48,14 @@ _jobs_lock = threading.Lock()
 _label = threading.local()
 
 
+class JobBusy(Exception):
+    """Đã có phiên Kiểm tra / Quét đang chạy của user (router trả 409)."""
+
+
+class PostReadError(Exception):
+    """Mở được trang nhưng không đọc được dữ liệu bài (tải chậm / Facebook đổi giao diện) — thử lại được."""
+
+
 # ---------------------------------------------------------------------------
 # Job trong RAM
 # ---------------------------------------------------------------------------
@@ -96,6 +104,9 @@ def set_control(job_id: str, action: str, owner: Optional[str]) -> bool:
         job = _jobs.get(job_id)
         if not job or job.get("owner") != owner or job.get("status") in TERMINAL_STATUSES:
             return False
+        if job.get("control") == "abort":
+            # Đã Dừng khẩn cấp: Tạm dừng / Tiếp tục gửi tới sau (bấm nhanh, tab khác) không được huỷ lệnh dừng
+            return True  # bỏ qua lệnh, phiên vẫn đang dừng
         if action == "pause":
             job["control"], job["status"] = "pause", "paused"
         elif action == "resume":
@@ -196,6 +207,10 @@ def _new_job(owner: str, kind: str, uids: list[str], posts: list[dict[str, Any]]
     prefix = "PEC" if kind == "check" else "PES"
     job_id = f"{prefix}-{int(time.time())}-{uuid.uuid4().hex[:6]}"
     with _jobs_lock:
+        # Kiểm tra và đăng ký trong cùng 1 lần khoá: bấm đúp / Chạy tiếp ở 2 tab không tạo được 2 phiên song song
+        busy = next((j for j in _jobs.values() if j.get("owner") == owner and j.get("status") not in TERMINAL_STATUSES), None)
+        if busy:
+            raise JobBusy("Đang có phiên Kiểm tra chạy." if busy.get("kind") == "check" else "Đang có phiên quét chạy.")
         _jobs[job_id] = {
             "job_id": job_id, "kind": kind, "owner": owner, "uids": uids, "posts": posts, "status": "running",
             "control": "run", "logs": [], "progress": {p["post_key"]: {"status": "pending"} for p in posts},
@@ -418,7 +433,9 @@ def _body(job_id: str) -> None:
         _label.name = "System"
         with _jobs_lock:
             prog = dict(_jobs[job_id].get("progress") or {})
-        unfinished = [k for k, v in prog.items() if v.get("status") not in ("done", "unavailable", "error")]
+        # Bài lỗi cũng là chưa xong → phiên kết thúc "dừng giữa chừng" để Chạy tiếp quét lại (không báo Thành công)
+        unfinished = [k for k, v in prog.items() if v.get("status") not in ("done", "unavailable")]
+        failed = sum(1 for v in prog.values() if v.get("status") == "error")
         if stop_requested():
             final = "aborted"
         elif state["opened"] == 0:
@@ -427,9 +444,11 @@ def _body(job_id: str) -> None:
         elif unfinished:
             final = "aborted"
             error = f"Còn {len(unfinished)} bài chưa {'kiểm tra' if kind == 'check' else 'quét'} xong"
+            if failed:
+                error += f" ({failed} bài lỗi)"
             if state["dead_nicks"] and not nick_queue:
                 error += " — hết tài khoản Live khả dụng (nick bị checkpoint / chặn tạm thời)"
-            log(f"⚠️ {error}." + (" Bấm Chạy tiếp để quét nốt." if kind == "scan" else ""), "warn")
+            log(f"⚠️ {error}." + (" Bấm Chạy tiếp để quét nốt." if kind == "scan" else " Bấm Kiểm tra lại các bài này."), "warn")
     except Exception as exc:
         logger.exception("post engagement job %s failed", job_id)
         final, error = "error", str(exc)
@@ -492,7 +511,11 @@ def _short(post: dict[str, Any]) -> str:
 
 def _meta_to_post(post: dict[str, Any], opened: dict[str, Any]) -> dict[str, Any]:
     meta = opened.get("meta") or {}
-    unavailable = bool(opened.get("state", {}).get("unavailable")) or not meta
+    # Chỉ coi là "không khả dụng" khi Facebook BÁO bài không xem được. Không đọc được dữ liệu (trang tải chậm quá
+    # thời gian chờ, giao diện lạ) là lỗi thử lại được — không đánh dấu bài đã xoá / riêng tư.
+    unavailable = bool(opened.get("state", {}).get("unavailable"))
+    if not meta and not unavailable:
+        raise PostReadError("không đọc được dữ liệu bài (trang tải chậm hoặc giao diện Facebook khác thường)")
     return {
         "post_key": post["post_key"],
         # Link chia sẻ (/share/p/…) được Facebook chuyển sang link bài gốc khi mở → lưu link gốc
@@ -514,6 +537,15 @@ def _meta_to_post(post: dict[str, Any], opened: dict[str, Any]) -> dict[str, Any
     }
 
 
+def _fix_source_type(models: Any, owner: str, row: dict[str, Any]) -> None:
+    """Trang reel không cho biết tác giả là fanpage → dùng kết quả đã nhận ở bài khác của cùng nguồn."""
+    try:
+        if row.get("source_type") == "profile" and models.is_known_page(owner, row.get("source_id") or ""):
+            row["source_type"] = "page"
+    except Exception:  # chỉ là nhãn hiển thị, không chặn luồng quét
+        logger.debug("is_known_page lỗi", exc_info=True)
+
+
 def _public_meta(row: dict[str, Any]) -> dict[str, Any]:
     from modules.module_12_post_engagement.models import fmt_dt, utc_from_epoch
 
@@ -524,9 +556,9 @@ def _public_meta(row: dict[str, Any]) -> dict[str, Any]:
         "source_name": row.get("source_name"),
         "author_name": row.get("author_name"),
         "posted_at": fmt_dt(utc_from_epoch(row.get("posted_ts"))),
-        "fb_like_count": int(row.get("fb_like_count") or 0),
-        "fb_comment_count": int(row.get("fb_comment_count") or 0),
-        "fb_share_count": int(row.get("fb_share_count") or 0),
+        "fb_like_count": None if row.get("fb_like_count") is None else int(row["fb_like_count"]),
+        "fb_comment_count": None if row.get("fb_comment_count") is None else int(row["fb_comment_count"]),
+        "fb_share_count": None if row.get("fb_share_count") is None else int(row["fb_share_count"]),
         "availability": row.get("availability"),
         "note": row.get("note") or "",
     }
@@ -542,16 +574,18 @@ def _check_one(job_id: str, session: dict[str, Any], idx: int, post: dict[str, A
     row = _meta_to_post(post, opened)
     with _jobs_lock:
         owner = _jobs[job_id]["owner"]
+    _fix_source_type(models, owner, row)
     models.upsert_post(owner, row)
     meta = _public_meta(row)
+    nf = lambda v: "?" if v is None else f"{v:,}"  # noqa: E731 — Facebook không cho biết số
     if row["availability"] == "unavailable":
         _progress(job_id, post["post_key"], status="unavailable", meta=meta)
         _log(job_id, f"⚠️ [{idx + 1}/{total}] Bài không khả dụng (đã xoá / riêng tư / sai link): {post['post_url']}", "warn")
         return
     _progress(job_id, post["post_key"], status="done", meta=meta)
     src = {"group": "Nhóm", "page": "Page", "profile": "Trang cá nhân"}.get(row["source_type"], "Nguồn")
-    _log(job_id, f"✅ [{idx + 1}/{total}] {src} «{row['source_name'] or '—'}»: {meta['fb_like_count']:,} cảm xúc · "
-                 f"{meta['fb_comment_count']:,} bình luận · {meta['fb_share_count']:,} chia sẻ.", "success")
+    _log(job_id, f"✅ [{idx + 1}/{total}] {src} «{row['source_name'] or '—'}»: {nf(meta['fb_like_count'])} cảm xúc · "
+                 f"{nf(meta['fb_comment_count'])} bình luận · {nf(meta['fb_share_count'])} chia sẻ.", "success")
 
 
 def _scan_one(job_id: str, session: dict[str, Any], idx: int, post: dict[str, Any], total: int) -> None:
@@ -572,6 +606,7 @@ def _scan_one(job_id: str, session: dict[str, Any], idx: int, post: dict[str, An
 
     opened = scraper.open_post(driver, post["post_url"])
     row = _meta_to_post(post, opened)
+    _fix_source_type(models, owner, row)
     models.upsert_post(owner, row)
     if row["availability"] == "unavailable":
         _progress(job_id, key, status="unavailable", meta=_public_meta(row))
@@ -624,14 +659,18 @@ def _scan_one(job_id: str, session: dict[str, Any], idx: int, post: dict[str, An
         _log(job_id, f"👍 Đang quét người bày tỏ cảm xúc bài số {idx + 1} (tối đa {like_quota:,})…", "info")
         sink, flush, counter = make_sink("like", "likes")
         try:
+            known_likes = models.known_uids(owner, key, "like")
             res = scraper.collect_reactions(driver, fb_id, like_quota, on_batch=sink, tick=tick, pause=pause_between,
-                                            known=models.known_uids(owner, key, "like"))
+                                            known=known_likes)
         finally:
             flush()
         msg = f"✅ Bài số {idx + 1}: trích xuất {counter['n']:,} tài khoản đã bày tỏ cảm xúc"
-        # Cờ "chỉ bạn bè" có thể bật nhầm (reel / bài công khai vẫn cho xem hết) → chỉ cảnh báo khi lấy thiếu so với số trên bài
-        short = row["fb_like_count"] is None or counter["n"] < int(row["fb_like_count"] or 0)
-        if res.get("friends_only") and short and res.get("reason") != "quota":
+        # Cờ "chỉ bạn bè" có thể bật nhầm (reel / bài công khai vẫn cho xem hết) → chỉ cảnh báo khi TỔNG đã có
+        # (lưu từ lần quét trước + mới quét) vẫn thiếu so với số trên bài — quét lại bài cũ không báo nhầm
+        short = row["fb_like_count"] is None or len(known_likes) + counter["n"] < int(row["fb_like_count"] or 0)
+        if res.get("reason") == "stalled":
+            _log(job_id, msg + f" — dừng sau {scraper.STALL_ROUNDS} vòng không có người mới, có thể còn sót.", "warn")
+        elif res.get("friends_only") and short and res.get("reason") != "quota":
             _log(job_id, msg + " — Facebook chỉ cho xem tên người bày tỏ cảm xúc là BẠN BÈ của nick với bài ngoài nhóm.", "warn")
         elif res.get("reason") == "no_dialog":
             _log(job_id, f"⚠️ Bài số {idx + 1}: không mở được danh sách cảm xúc.", "warn")
@@ -661,8 +700,12 @@ def _scan_one(job_id: str, session: dict[str, Any], idx: int, post: dict[str, An
                                            post_id=fb_id)
         finally:
             flush()
-        _log(job_id, f"✅ Bài số {idx + 1}: trích xuất {counter['n']:,} bình luận kèm nội dung"
-                     + (" (đã chuyển bộ lọc sang Tất cả bình luận)" if res.get("sort") == "switched" else "") + ".", "success")
+        if res.get("reason") == "stalled":
+            _log(job_id, f"⚠️ Bài số {idx + 1}: trích xuất {counter['n']:,} bình luận — dừng sau {scraper.STALL_ROUNDS} vòng "
+                         f"không có bình luận mới, có thể còn sót.", "warn")
+        else:
+            _log(job_id, f"✅ Bài số {idx + 1}: trích xuất {counter['n']:,} bình luận kèm nội dung"
+                         + (" (đã chuyển bộ lọc sang Tất cả bình luận)" if res.get("sort") == "switched" else "") + ".", "success")
     elif comment_quota > 0 and row["fb_comment_count"] == 0:
         _log(job_id, f"Bài số {idx + 1} chưa có bình luận nào.", "info")
 

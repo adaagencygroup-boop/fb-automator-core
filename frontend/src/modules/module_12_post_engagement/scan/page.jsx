@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  CloudUpload, Download, FileText, History, Link2, Loader2, MessageCircle, Pause, Play, Share2, Square, ThumbsUp, Trash2,
+  CloudUpload, Download, FileText, History, Link2, Loader2, MessageCircle, Pause, Play, RotateCcw, Share2, Square, ThumbsUp, Trash2,
   Upload, Users, X,
 } from "lucide-react";
 import { toast } from "@/lib/toast";
@@ -29,10 +29,14 @@ const draftKey = () => {
   const uid = getSessionUserId();
   return uid ? `${uid}:engage-scan` : "";
 };
-const defaultQuota = (meta) => ({
-  like: Math.min(LIMITS.like, Number(meta?.fb_like_count || 0)),
-  comment: Math.min(LIMITS.comment, Number(meta?.fb_comment_count || 0)),
-});
+// Ô số lượng: "" (để trống) = quét toàn bộ số hiện có; Facebook ẩn số đếm (null / 0) thì để trống thay vì điền 0
+const defaultQuota = (meta) => {
+  const pick = (count, max) => (Number(count) > 0 ? Math.min(max, Number(count)) : "");
+  return { like: pick(meta?.fb_like_count, LIMITS.like), comment: pick(meta?.fb_comment_count, LIMITS.comment) };
+};
+const isBlank = (v) => v === "" || v === null || v === undefined;
+const quotaValue = (v) => (isBlank(v) ? null : Number(v)); // null gửi lên Engine = quét toàn bộ
+const countText = (n) => (n === null || n === undefined ? "?" : nf(n)); // ? = Facebook không cho biết số
 const SOURCE_TEXT = { group: "Nhóm", page: "Page", profile: "Cá nhân" };
 
 function StatusBadge({ status }) {
@@ -41,6 +45,7 @@ function StatusBadge({ status }) {
     duplicate: ["Trùng lặp", "bg-[#FFFBEB] border-[#FDE68A] text-[#D97706]"],
     invalid: ["Sai định dạng", "bg-[#FEF2F2] border-[#FECACA] text-[#DC2626]"],
     checking: ["Đang kiểm tra", "bg-[#EFF6FF] border-[#BFDBFE] text-[#2563EB]"],
+    incomplete: ["Chưa kiểm tra xong", "bg-[#FFFBEB] border-[#FDE68A] text-[#B45309]"],
     available: ["Khả dụng", "bg-[#ECFDF5] border-[#A7F3D0] text-[#047857]"],
     unavailable: ["Không khả dụng", "bg-[#FEF2F2] border-[#FECACA] text-[#B91C1C]"],
     over: ["Vượt 20 bài", "bg-slate-100 border-slate-200 text-slate-500"],
@@ -103,9 +108,19 @@ export default function PostEngagementScanPage() {
   const [busy, setBusy] = useState(false);
   const fileInputRef = useRef(null);
 
+  // Màn hình theo bước (giống Tab 1 Module 03): config → chưa bấm gì; check → đã bấm Kiểm tra (hiện terminal);
+  // scan → đã bấm Bắt đầu thực thi / Chạy tiếp (hiện thêm Kết quả quét, khoá cấu hình tới khi "Quay về cấu hình ban đầu")
+  const [view, setView] = useState("config");
   const running = ["running", "paused", "stopping"].includes(scanStatus);
   const checking = Boolean(checkJobId);
-  const locked = running || checking;
+  const locked = running || checking || view === "scan";
+
+  const backToConfig = () => {
+    setView("config");
+    setScanJobId("");
+    setScanStatus("idle");
+    setLogs([]);
+  };
 
   useEffect(() => {
     saveInputDraft(draftKey(), {
@@ -156,16 +171,35 @@ export default function PostEngagementScanPage() {
       });
   }, [parsed, removed, checked]);
 
-  const targets = useMemo(() => previewRows.filter((r) => ["valid", "checking", "available", "unavailable", "error"].includes(r.view)), [previewRows]);
+  const targets = useMemo(
+    () => previewRows.filter((r) => ["valid", "checking", "incomplete", "available", "unavailable", "error"].includes(r.view)),
+    [previewRows],
+  );
   const available = useMemo(() => targets.filter((r) => r.view === "available"), [targets]);
-  const uncheckedCount = targets.filter((r) => r.view === "valid" || r.view === "error").length;
+  // "Chưa kiểm tra xong" (dừng Kiểm tra giữa chừng / rời màn hình) cũng phải Kiểm tra lại trước khi chạy
+  const uncheckedCount = targets.filter((r) => ["valid", "error", "incomplete"].includes(r.view)).length;
 
   const totals = useMemo(() => available.reduce((acc, r) => {
     const q = quotas[r.post_key] || defaultQuota(checked[r.post_key]?.meta);
-    acc.like += Number(q.like || 0);
-    acc.comment += Number(q.comment || 0);
+    if (isBlank(q.like)) acc.likeAll = true;
+    else acc.like += Number(q.like);
+    if (isBlank(q.comment)) acc.commentAll = true;
+    else acc.comment += Number(q.comment);
     return acc;
-  }, { like: 0, comment: 0 }), [available, quotas, checked]);
+  }, { like: 0, comment: 0, likeAll: false, commentAll: false }), [available, quotas, checked]);
+
+  // Bài còn "Đang kiểm tra" (keys = null → mọi bài) chuyển sang "Chưa kiểm tra xong" để phải Kiểm tra lại
+  const markIncomplete = useCallback((keys) => {
+    setChecked((cur) => {
+      const pick = keys || Object.keys(cur).filter((key) => cur[key]?.status === "checking");
+      if (!pick.length) return cur;
+      const next = { ...cur };
+      pick.forEach((key) => {
+        if (next[key]?.status === "checking" || keys) next[key] = { status: "incomplete" };
+      });
+      return next;
+    });
+  }, []);
 
   // ---- Khôi phục kết quả Kiểm tra đã lưu cho các link (mở lại trang / dán lại link cũ)
   useEffect(() => {
@@ -202,9 +236,13 @@ export default function PostEngagementScanPage() {
         if (s?.job_id) {
           setScanJobId(s.job_id);
           setScanStatus("running");
+          setView("scan");
         } else if (c?.job_id) {
           setCheckJobId(c.job_id);
+          setView("check");
         }
+        // Nháp cũ còn bài "Đang kiểm tra" mà không còn phiên Kiểm tra nào chạy → Chưa kiểm tra xong
+        if (!c?.job_id) markIncomplete(null);
         if (!s?.job_id) setResumable(await getResumableSession());
       } catch {
         /* bỏ qua */
@@ -242,6 +280,8 @@ export default function PostEngagementScanPage() {
         if (["done", "aborted", "error"].includes(job.status)) {
           stopped = true;
           setCheckJobId("");
+          // Dừng Kiểm tra giữa chừng: bài chưa tới lượt / đang mở dở không được kẹt mãi ở "Đang kiểm tra"
+          markIncomplete(Object.keys(next).filter((key) => next[key].status === "checking"));
           const okN = Object.values(next).filter((v) => v.status === "available").length;
           const badN = Object.values(next).filter((v) => v.status === "unavailable").length;
           if (job.status === "done") toast.success(`Kiểm tra xong: ${okN} bài khả dụng${badN ? `, ${badN} bài không khả dụng` : ""}.`);
@@ -249,8 +289,10 @@ export default function PostEngagementScanPage() {
         }
       } catch (err) {
         if (err?.status === 404) {
+          // Phiên Kiểm tra không còn (Engine khởi động lại / đã dọn): bài còn "Đang kiểm tra" → Chưa kiểm tra xong
           stopped = true;
           setCheckJobId("");
+          markIncomplete(null);
         }
       }
     };
@@ -358,6 +400,8 @@ export default function PostEngagementScanPage() {
         return next;
       });
       setCheckJobId(res.job_id);
+      setLogs([]);
+      setView("check");
       toast.info(`Đang mở Chrome kiểm tra ${links.length} bài viết${dup ? ` (bỏ ${dup} link trùng)` : ""}${bad ? `, ${bad} dòng sai định dạng` : ""}…`);
     } catch (err) {
       toast.error(err?.message || "Không bắt đầu được Kiểm tra.");
@@ -380,11 +424,11 @@ export default function PostEngagementScanPage() {
       const q = quotas[r.post_key] || defaultQuota(checked[r.post_key]?.meta);
       return {
         post_url: r.url,
-        like_quota: Number(q.like || 0),
-        comment_quota: Number(q.comment || 0),
+        like_quota: quotaValue(q.like),
+        comment_quota: quotaValue(q.comment),
         title: (checked[r.post_key]?.meta?.content || "").slice(0, 120),
       };
-    }).filter((p) => p.like_quota || p.comment_quota);
+    }).filter((p) => p.like_quota !== 0 || p.comment_quota !== 0); // bỏ bài nhập 0 cả hai ô (để trống = quét toàn bộ)
     if (!posts.length) {
       toast.warning("Chưa có bài khả dụng nào có số lượng quét lớn hơn 0.");
       return;
@@ -398,6 +442,7 @@ export default function PostEngagementScanPage() {
       setScanStatus("running");
       setScanJobId(res.job_id);
       setResumable(null);
+      setView("scan");
       toast.success(`Bắt đầu quét ${posts.length} bài viết với ${validSelected.length} tài khoản.`);
     } catch (err) {
       toast.error(err?.message || "Không bắt đầu được phiên quét.");
@@ -427,6 +472,7 @@ export default function PostEngagementScanPage() {
       setScanStatus("running");
       setScanJobId(res.job_id);
       setResumable(null);
+      setView("scan");
       toast.success(`Đang chạy tiếp ${res?.remaining || ""} bài còn thiếu của phiên trước.`);
     } catch (err) {
       toast.error(err?.message || "Không chạy tiếp được phiên này.");
@@ -704,9 +750,9 @@ export default function PostEngagementScanPage() {
                       <td className="whitespace-nowrap px-3 py-3 text-xs text-[#475569]">
                         {ok ? (
                           <span className="flex gap-3">
-                            <span className="inline-flex items-center gap-1"><ThumbsUp className="size-3.5 text-[#2563EB]" /> {nf(meta.fb_like_count)}</span>
-                            <span className="inline-flex items-center gap-1"><MessageCircle className="size-3.5 text-[#059669]" /> {nf(meta.fb_comment_count)}</span>
-                            <span className="inline-flex items-center gap-1"><Share2 className="size-3.5 text-[#D97706]" /> {nf(meta.fb_share_count)}</span>
+                            <span className="inline-flex items-center gap-1"><ThumbsUp className="size-3.5 text-[#2563EB]" /> {countText(meta.fb_like_count)}</span>
+                            <span className="inline-flex items-center gap-1"><MessageCircle className="size-3.5 text-[#059669]" /> {countText(meta.fb_comment_count)}</span>
+                            <span className="inline-flex items-center gap-1"><Share2 className="size-3.5 text-[#D97706]" /> {countText(meta.fb_share_count)}</span>
                           </span>
                         ) : "—"}
                       </td>
@@ -733,14 +779,22 @@ export default function PostEngagementScanPage() {
             </table>
           </div>
           <p className="mt-3 text-[13px] text-[#334155]">
-            Tổng tương tác dự kiến quét: <b>{nf(totals.like + totals.comment)}</b> ({nf(totals.like)} Like, {nf(totals.comment)} Cmt) · để trống = quét toàn bộ số hiện có.
+            Tổng tương tác dự kiến quét:{" "}
+            <b>{totals.likeAll || totals.commentAll ? "toàn bộ" : nf(totals.like + totals.comment)}</b> (
+            {totals.likeAll ? "toàn bộ" : nf(totals.like)} Like, {totals.commentAll ? "toàn bộ" : nf(totals.comment)} Cmt) · để trống = quét toàn bộ số hiện có.
           </p>
         </section>
       )}
 
       {/* -------------------- Nút điều khiển -------------------- */}
       <div className="space-y-2">
-        {!running ? (
+        {view === "scan" && !running ? (
+          <button type="button" onClick={backToConfig}
+            className="flex h-14 w-full items-center justify-center gap-3 rounded-2xl border border-[#2563EB] bg-white text-base font-bold uppercase tracking-wide text-[#2563EB] hover:bg-blue-50">
+            <RotateCcw className="size-5" />
+            Quay về cấu hình ban đầu
+          </button>
+        ) : !running ? (
           <button type="button" onClick={runScan} disabled={busy || checking || !available.length || uncheckedCount > 0}
             title={uncheckedCount > 0 ? "Bấm Kiểm tra & Lọc trùng lặp trước" : !available.length ? "Chưa có bài viết khả dụng" : undefined}
             className="flex h-14 w-full items-center justify-center gap-3 rounded-2xl bg-[#2563EB] text-base font-bold uppercase tracking-wide text-white shadow-[0_8px_20px_rgba(37,99,235,0.25)] hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60">
@@ -774,15 +828,17 @@ export default function PostEngagementScanPage() {
         )}
       </div>
 
-      <ResultsExplorer
-        title="Kết quả quét"
-        postKeys={sessionKeys}
-        live={running}
-        refreshKey={refreshKey}
-        emptyText="Chưa có kết quả. Kiểm tra link rồi bấm Bắt đầu thực thi — bài đang quét sẽ hiện ở đây và số liệu nhảy theo thời gian thực."
-      />
+      {view === "scan" && (
+        <ResultsExplorer
+          title="Kết quả quét"
+          postKeys={sessionKeys}
+          live={running}
+          refreshKey={refreshKey}
+          emptyText="Chưa có kết quả. Bài đang quét sẽ hiện ở đây và số liệu nhảy theo thời gian thực."
+        />
+      )}
 
-      <LiveConsole logs={logs} sessionId={scanJobId || checkJobId} running={running || checking} />
+      {view !== "config" && <LiveConsole logs={logs} sessionId={scanJobId || checkJobId} running={running || checking} />}
 
       <AccountSelectModal
         open={pickerOpen}

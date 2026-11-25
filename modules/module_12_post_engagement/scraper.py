@@ -253,6 +253,12 @@ def open_post(driver, url: str, *, wait: float = 20.0, sleep=time.sleep) -> dict
     return {"state": state, "meta": meta, "url": current, "objs": objs}
 
 
+# Chốt chặn chống treo: quá chừng này vòng LIÊN TIẾP không có dữ liệu mới thì kết thúc (reason "stalled"). Đếm theo
+# vòng chứ không theo giây → thời gian Tạm dừng / khoảng nghỉ Min–Max dài không làm dừng sớm. Reel từng treo 14 phút
+# vì trang cứ đổi chiều cao / còn nút "xem thêm" mà không ra bình luận mới.
+STALL_ROUNDS = 25
+
+
 def collect_reactions(
     driver,
     fb_post_id: str,
@@ -266,6 +272,7 @@ def collect_reactions(
     sleep=time.sleep,
     idle_rounds: int = 4,
     max_rounds: int = 3000,
+    stall_rounds: int = STALL_ROUNDS,
 ) -> dict[str, Any]:
     """Cuộn hết danh sách người bày tỏ cảm xúc. Trả {count, friends_only, reason}.
 
@@ -289,6 +296,7 @@ def collect_reactions(
     objs = fb_parse.json_blobs_from_html(driver.page_source)
     friends_only = False
     idle, last_height = 0, -1
+    dry = 0  # số vòng liên tiếp không có người mới (chốt chặn theo vòng, không theo giây)
     for _round in range(max_rounds):
         if tick():
             return {"count": got, "friends_only": friends_only, "reason": "stopped"}
@@ -312,9 +320,13 @@ def collect_reactions(
         if fresh:
             got += len(fresh)
             on_batch(fresh)
-            idle = 0
+            idle = dry = 0
+        else:
+            dry += 1
         if quota > 0 and got >= quota:
             return {"count": got, "friends_only": friends_only, "reason": "quota"}
+        if dry >= stall_rounds:
+            return {"count": got, "friends_only": friends_only, "reason": "stalled"}
         if parsed["has_next"] is False and not fresh:
             return {"count": got, "friends_only": friends_only, "reason": "end"}
         try:
@@ -364,8 +376,12 @@ def collect_comments(
     max_rounds: int = 3000,
     round_wait: float = 1.5,
     post_id: str = "",
+    stall_rounds: int = STALL_ROUNDS,
 ) -> dict[str, Any]:
-    """Lấy bình luận (gốc + trả lời, toàn văn) trên bài đang mở. Trả {count, reason, sort}."""
+    """Lấy bình luận (gốc + trả lời, toàn văn) trên bài đang mở. Trả {count, reason, sort}.
+
+    reason: quota | end | stalled (quá stall_rounds vòng liên tiếp không có bình luận mới — có thể còn sót) | stopped.
+    """
     seen: set[str] = set(known or ())
     got = 0
     try:
@@ -379,24 +395,15 @@ def collect_comments(
         sleep(3.0)
     objs = list(initial_objs or [])
     idle, last_height = 0, -1
+    dry = 0  # số vòng liên tiếp không có bình luận mới
     ctx: dict[str, Any] = {}
     prefixes: Counter[str] = Counter()  # bài chứa bình luận → số lần gặp
-    for _round in range(max_rounds):
-        if tick():
-            return {"count": got, "reason": "stopped", "sort": sort}
-        ensure_rendering(driver)
-        objs += fb_parse.json_objects_from_responses(drain_capture(driver))
-        comments = fb_parse.extract_comments(objs, ctx)
-        objs = []
-        # Trang ảnh tải sẵn bình luận của ảnh trước/sau → chỉ giữ bình luận của đúng bài (id bài biết trước,
-        # không khớp bình luận nào thì lấy bài chiếm đa số).
-        prefixes.update(c["post_id"] for c in comments if c.get("post_id"))
-        target = str(post_id or "")
-        if prefixes and target not in prefixes:
-            target = prefixes.most_common(1)[0][0]
-        if target:
-            comments = [c for c in comments if not c.get("post_id") or c["post_id"] == target]
-        fresh = [c for c in comments if c["comment_id"] not in seen]
+    known_id = str(post_id or "")
+    held: dict[str, dict[str, Any]] = {}  # bình luận của bài khác khi chưa thấy bình luận nào của đúng bài
+
+    def emit(rows: list[dict[str, Any]]) -> int:
+        nonlocal got
+        fresh = [c for c in rows if c["comment_id"] not in seen]
         if quota > 0:
             fresh = fresh[: max(0, quota - got)]
         for c in fresh:
@@ -404,9 +411,46 @@ def collect_comments(
         if fresh:
             got += len(fresh)
             on_batch(fresh)
-            idle = 0
+        return len(fresh)
+
+    def finish(reason: str) -> dict[str, Any]:
+        # Hết trang mà không thấy bình luận nào mang đúng mã bài (vd trang ảnh dùng mã ảnh) → lấy bài chiếm đa số
+        if known_id and known_id not in prefixes and held and reason in ("end", "stalled"):
+            major = Counter(c["post_id"] for c in held.values()).most_common(1)[0][0]
+            emit([c for c in held.values() if c["post_id"] == major])
+        return {"count": got, "reason": reason, "sort": sort}
+
+    for _round in range(max_rounds):
+        if tick():
+            return {"count": got, "reason": "stopped", "sort": sort}
+        ensure_rendering(driver)
+        objs += fb_parse.json_objects_from_responses(drain_capture(driver))
+        comments = fb_parse.extract_comments(objs, ctx)
+        objs = []
+        # Trang ảnh / reel tải sẵn bình luận của bài trước/sau → chỉ giữ bình luận của đúng bài. Đã biết mã bài thì
+        # lọc CHẶT theo mã; bình luận bài khác giữ tạm, chỉ dùng khi cả trang không có bình luận nào mang đúng mã.
+        prefixes.update(c["post_id"] for c in comments if c.get("post_id"))
+        if known_id:
+            if known_id in prefixes:
+                comments = [c for c in comments if not c.get("post_id") or c["post_id"] == known_id]
+            else:
+                for c in comments:
+                    if c.get("post_id"):
+                        held[c["comment_id"]] = c
+                comments = [c for c in comments if not c.get("post_id")]
+        elif prefixes:
+            major = prefixes.most_common(1)[0][0]
+            comments = [c for c in comments if not c.get("post_id") or c["post_id"] == major]
+        added = emit(comments)
+        if added:
+            idle = dry = 0
+        else:
+            dry += 1
+        fresh = added
         if quota > 0 and got >= quota:
             return {"count": got, "reason": "quota", "sort": sort}
+        if dry >= stall_rounds:
+            return finish("stalled")
         try:
             ensure_rendering(driver)
             clicked = int(driver.execute_script(EXPAND_COMMENTS_JS, clicks_per_round) or 0)
@@ -418,7 +462,7 @@ def collect_comments(
         if not fresh and not clicked and height == last_height:
             idle += 1
             if idle >= idle_rounds:
-                return {"count": got, "reason": "end", "sort": sort}
+                return finish("end")
         elif not fresh:
             idle = max(0, idle - 1) if clicked else idle
         last_height = height
@@ -426,4 +470,4 @@ def collect_comments(
             return {"count": got, "reason": "stopped", "sort": sort}
         _check_account(page_state(driver))
         sleep(round_wait)  # chờ Facebook trả dữ liệu sau khi bấm / cuộn
-    return {"count": got, "reason": "end", "sort": sort}
+    return finish("end")

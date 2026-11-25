@@ -27,6 +27,7 @@ const TIER_OPTIONS = [
   { value: "1", label: "Mức 1 (Cao)" },
   { value: "2", label: "Mức 2 (Cơ bản)" },
 ];
+const POSTS_PAGE = 200; // số bài mỗi lần tải ở cột trái (bấm "Tải thêm" để lấy tiếp)
 const PAGE_SIZES = [
   { value: 20, label: "20 / trang" },
   { value: 50, label: "50 / trang" },
@@ -137,6 +138,7 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
   const [posts, setPosts] = useState([]);
   const [postTotal, setPostTotal] = useState(0);
   const [loadingPosts, setLoadingPosts] = useState(true);
+  const loadedRef = useRef(POSTS_PAGE); // số bài đang hiện (tăng khi bấm Tải thêm)
   const [selectedKey, setSelectedKey] = useState("");
 
   const [tab, setTab] = useState("like");
@@ -162,7 +164,9 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
         setPostTotal(0);
         return;
       }
-      const res = await listPosts({ search: debSearch, source, sort, keys });
+      // Làm mới ngầm (đang quét) giữ đủ số bài đã "Tải thêm"; tải lại do đổi bộ lọc thì về trang đầu
+      if (!silent) loadedRef.current = POSTS_PAGE;
+      const res = await listPosts({ search: debSearch, source, sort, keys, limit: Math.min(1000, loadedRef.current) });
       const list = res?.posts || [];
       setPosts(list);
       setPostTotal(res?.total || 0);
@@ -173,6 +177,28 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
       if (!silent) setLoadingPosts(false);
     }
   }, [keysParam, debSearch, source, sort]);
+
+  // Kho > 200 bài: tải tiếp từng trang 200 bài, nối vào cuối danh sách
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadMorePosts = async () => {
+    setLoadingMore(true);
+    try {
+      const keys = keysParam === null ? null : keysParam ? keysParam.split(",") : [];
+      const res = await listPosts({ search: debSearch, source, sort, keys, limit: POSTS_PAGE, offset: posts.length });
+      const more = res?.posts || [];
+      setPosts((cur) => {
+        const have = new Set(cur.map((p) => p.post_key));
+        const next = [...cur, ...more.filter((p) => !have.has(p.post_key))];
+        loadedRef.current = next.length;
+        return next;
+      });
+      setPostTotal(res?.total || 0);
+    } catch (err) {
+      toast.error(err?.message || "Không tải thêm được bài viết.");
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const loadRows = useCallback(async (silent = false) => {
     if (!selectedKey) {
@@ -316,6 +342,17 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
                 <PostCard key={p.post_key} post={p} active={p.post_key === selectedKey} onSelect={() => setSelectedKey(p.post_key)}
                   onDelete={allowDelete ? () => removePost(p) : null} />
               ))
+            )}
+            {posts.length > 0 && posts.length < postTotal && (
+              <button
+                type="button"
+                onClick={loadMorePosts}
+                disabled={loadingMore}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 py-2.5 text-[13px] font-semibold text-[#2563EB] hover:bg-slate-50 disabled:opacity-60"
+              >
+                {loadingMore && <Loader2 className="size-4 animate-spin" />}
+                Tải thêm ({nf(posts.length)}/{nf(postTotal)} bài)
+              </button>
             )}
           </div>
         </div>
@@ -525,6 +562,9 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
         onOpenChange={setExportOpen}
         post={post}
         postKeys={posts.map((p) => p.post_key)}
+        postTotal={postTotal}
+        // Trang Danh sách (toàn kho): "Toàn bộ" xuất mọi bài khớp bộ lọc, kể cả bài chưa Tải thêm
+        storeFilter={keysParam === null ? { search: debSearch, source } : null}
         tab={tab}
         search={debQuery}
         tier={tier === "all" ? null : Number(tier)}

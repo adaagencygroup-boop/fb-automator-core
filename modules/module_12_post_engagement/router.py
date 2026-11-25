@@ -34,8 +34,9 @@ class CheckRequest(BaseModel):
 
 class ScanPost(BaseModel):
     post_url: str = Field(..., min_length=5)
-    like_quota: int = Field(0, ge=0, le=jobs.QUOTA_LIMITS["like"])
-    comment_quota: int = Field(0, ge=0, le=jobs.QUOTA_LIMITS["comment"])
+    # None (ô để trống) = quét toàn bộ số hiện có (tối đa QUOTA_LIMITS); 0 = không quét loại đó
+    like_quota: Optional[int] = Field(None, ge=0, le=jobs.QUOTA_LIMITS["like"])
+    comment_quota: Optional[int] = Field(None, ge=0, le=jobs.QUOTA_LIMITS["comment"])
     # Bản FE cũ còn gửi share_quota: vẫn nhận để không lỗi 422 nhưng bỏ qua (không còn quét Share)
     share_quota: int = Field(0, ge=0)
     title: Optional[str] = ""
@@ -54,7 +55,11 @@ class ControlRequest(BaseModel):
 
 
 class ExportRequest(BaseModel):
-    post_keys: list[str] = Field(..., min_length=1, max_length=500)
+    post_keys: list[str] = Field(default_factory=list, max_length=500)
+    # Xuất toàn bộ kho: BE tự lấy mọi bài khớp bộ lọc của cột trái (không phụ thuộc số bài FE đã tải)
+    all_posts: bool = False
+    post_search: Optional[str] = ""
+    post_source: Optional[str] = "all"
     scope: str = Field("all", pattern="^(all|tab)$")
     tab: str = Field("like", pattern="^(like|share|comment)$")
     search: Optional[str] = ""
@@ -87,6 +92,8 @@ def check_start(body: CheckRequest):
         raise HTTPException(409, "Đang có phiên Kiểm tra chạy.")
     try:
         return jobs.start_check(owner, body.uids, body.links)
+    except jobs.JobBusy as exc:
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -122,6 +129,8 @@ def scan_start(body: ScanRequest):
     try:
         return jobs.start_scan(owner, body.uids, [p.model_dump() for p in body.posts],
                                delay_min=body.delay_min, delay_max=body.delay_max)
+    except jobs.JobBusy as exc:
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -167,8 +176,12 @@ def engagements(post_key: str, tab: str = "like", search: str = "", tier: Option
 
 @router.post("/export", dependencies=[Depends(scoped_owner)])
 def export(body: ExportRequest):
-    rows = models.export_engagements(_owner(), body.post_keys, scope=body.scope, tab=body.tab, search=body.search or "",
-                                     tier=body.tier)
+    owner = _owner()
+    keys = (models.list_post_keys(owner, search=body.post_search or "", source=body.post_source or "all")
+            if body.all_posts else body.post_keys)
+    if not keys:
+        raise HTTPException(422, "Chưa chọn bài viết nào để xuất.")
+    rows = models.export_engagements(owner, keys, scope=body.scope, tab=body.tab, search=body.search or "", tier=body.tier)
     return {"rows": rows, "total": len(rows)}
 
 
@@ -197,6 +210,8 @@ def resume(session_id: str):
     try:
         res = jobs.start_scan(owner, req.get("uids") or [], info["remaining"], delay_min=req.get("delay_min") or 5,
                               delay_max=req.get("delay_max") or 10, resumed_from=session_id)
+    except jobs.JobBusy as exc:
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     models.update_session(session_id, status="RESUMED")

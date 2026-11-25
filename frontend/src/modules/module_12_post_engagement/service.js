@@ -33,8 +33,12 @@ export const listEngagements = (postKey, { tab = "like", search = "", tier = nul
   api.get(`${BASE}/posts/${encodeURIComponent(postKey)}/engagements`, {
     params: { tab, search, limit, offset, ...(tier ? { tier } : {}) },
   });
-export const exportEngagements = ({ postKeys, scope = "all", tab = "like", search = "", tier = null }) =>
-  api.post(`${BASE}/export`, { post_keys: postKeys, scope, tab, search, tier });
+// allPosts: xuất mọi bài trong kho khớp bộ lọc postSearch / postSource (Engine tự lấy, không giới hạn số bài đã tải)
+export const exportEngagements = ({ postKeys = [], scope = "all", tab = "like", search = "", tier = null, allPosts = false,
+  postSearch = "", postSource = "all" }) =>
+  api.post(`${BASE}/export`, {
+    post_keys: postKeys, scope, tab, search, tier, all_posts: allPosts, post_search: postSearch, post_source: postSource,
+  });
 export const deletePosts = (postKeys) => api.post(`${BASE}/posts/delete`, { post_keys: postKeys });
 
 // ---------------------------------------------------------------- Chạy tiếp phiên bị gián đoạn
