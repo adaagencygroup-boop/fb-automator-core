@@ -426,7 +426,7 @@ const MESSAGE_SEL = '[data-ad-rendering-role="story_message"], [data-ad-comet-pr
 const result = [];
 const normalize = (value) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 const cleanTimeText = (value) => normalize(value).replace(/[\u034f\u200b-\u200f\u2060\ufeff]/g, '');
-const isTimeLabel = (value) => /just\s*now|yesterday|ago|hôm\s*qua|trước|\d+\s*(?:minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|months?|years?|y|phút|giờ|ngày|tuần|tháng|năm)(?=\s|$|[^a-z])|tháng\s*\d|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|january|february|march|april|may|june|july|august|september|october|november|december/i.test(value || '');
+const isTimeLabel = (value) => /just\s*now|yesterday|ago|hôm\s*qua|trước|\d+\s*(?:minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|months?|years?|y|phút|giờ|ngày|tuần|tháng|năm)(?=\s|$|[^a-z])|tháng\s*\d|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|january|february|march|april|may|june|july|august|september|october|november|december|\bjan\b|\bfeb\b|\bmar\b|\bapr\b|\bjun\b|\bjul\b|\baug\b|\bsep\b|\boct\b|\bnov\b|\bdec\b/i.test(value || '');
 const isCommentLink = (anchor, postNode) => {
   if (anchor.closest('[role="navigation"]')) return true;
   for (let current = anchor; current && current !== postNode; current = current.parentElement) {
@@ -504,9 +504,8 @@ for (const [candidateIndex, node] of postNodes.entries()) {
   // NẾU KHÔNG CÓ messageRoot -> Bài viết không có text (chỉ có ảnh/video/share bài khác không kèm caption).
   // Tuyệt đối KHÔNG fallback sang các div[dir="auto"] ngoài messageRoot vì sẽ bắt nhầm bình luận!
 
-  const timeNodes = Array.from(node.querySelectorAll(
-    'abbr[data-utime], time[datetime], [data-utime], [title], [aria-label], [aria-labelledby]'
-  ));
+  const TIME_SELECTOR = 'abbr[data-utime], time[datetime], [data-utime], [title], [aria-label], [aria-labelledby]';
+  const timeNodes = Array.from(node.querySelectorAll(TIME_SELECTOR));
   // Một số layout đặt nhãn thời gian trong chính permalink và các span con
   // (chữ có thể bị chèn ký tự zero-width), không có abbr/data-utime.
   let linkAncestor = postLink;
@@ -519,8 +518,14 @@ for (const [candidateIndex, node] of postNodes.entries()) {
       .filter(Boolean).join(' ');
     return cleanTimeText(el.getAttribute('title') || el.getAttribute('datetime') || el.getAttribute('aria-label') || referenced || el.innerText || el.textContent);
   };
-  const timeNode = timeNodes.find((el) => el.hasAttribute('data-utime') || el.hasAttribute('datetime')) ||
-    timeNodes.find((el) => isTimeLabel(timeLabelText(el)));
+  // Timestamp of the post is normally inside its permalink in the post header.
+  // Prefer that metadata so a comment or a nested shared post cannot supply the date.
+  const permalinkTimeNodes = postLink
+    ? [postLink, ...postLink.querySelectorAll(TIME_SELECTOR)]
+    : [];
+  const orderedTimeNodes = [...new Set([...permalinkTimeNodes, ...timeNodes])];
+  const timeNode = orderedTimeNodes.find((el) => el.hasAttribute('data-utime') || el.hasAttribute('datetime')) ||
+    orderedTimeNodes.find((el) => isTimeLabel(timeLabelText(el)));
   const utimeRaw = timeNode?.getAttribute('data-utime') || timeNode?.querySelector('[data-utime]')?.getAttribute('data-utime');
   const utime = Number(utimeRaw);
   const rawTimeText = timeNode ? timeLabelText(timeNode) : '';
@@ -544,10 +549,17 @@ for (const [candidateIndex, node] of postNodes.entries()) {
     }
   }
   if (!publishedDate) {
+    const vietnameseDate = rawTimeText.match(/\b(\d{1,2})\s+tháng\s+(\d{1,2})(?:[,\s]+(\d{4}))?/i);
     const numericDate = rawTimeText.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b/);
-    if (numericDate) {
+    const englishDate = rawTimeText.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:,?\s+(\d{4}))?\b/i);
+    if (vietnameseDate) {
+      const year = Number(vietnameseDate[3] || new Date().getFullYear());
+      publishedDate = new Date(year, Number(vietnameseDate[2]) - 1, Number(vietnameseDate[1]));
+    } else if (numericDate) {
       const year = Number(numericDate[3].length === 2 ? `20${numericDate[3]}` : numericDate[3]);
       publishedDate = new Date(year, Number(numericDate[2]) - 1, Number(numericDate[1]));
+    } else if (englishDate) {
+      publishedDate = new Date(`${englishDate[1]} ${englishDate[2]} ${englishDate[3] || new Date().getFullYear()}`);
     } else if (rawTimeText) {
       const parsed = new Date(rawTimeText);
       if (!Number.isNaN(parsed.getTime())) publishedDate = parsed;
