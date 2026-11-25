@@ -18,7 +18,7 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime, time as datetime_time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -254,14 +254,39 @@ def _matches(row: Dict[str, Any], needle: str, post_type: str) -> bool:
     return True
 
 
+def _published_sort_key(row: Dict[str, Any]) -> tuple[int, float]:
+    """Sort dated posts newest first; keep posts without a readable date after them."""
+    raw = str(row.get("published_at") or "").strip()
+    if raw:
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            return 1, parsed.timestamp()
+        except (TypeError, ValueError, OverflowError):
+            try:
+                parsed_date = date.fromisoformat(raw[:10])
+                return 1, datetime.combine(parsed_date, datetime_time.min).timestamp()
+            except (TypeError, ValueError, OverflowError):
+                pass
+
+    raw_text = str(row.get("published_text") or "").strip()
+    for pattern in ("%d-%m-%Y", "%d/%m/%Y"):
+        try:
+            parsed_date = datetime.strptime(raw_text, pattern).date()
+            return 1, datetime.combine(parsed_date, datetime_time.min).timestamp()
+        except ValueError:
+            continue
+    return 0, 0.0
+
+
 def filtered(owner_id: int, source_key: str, q: Optional[str] = None, post_type: str = "all") -> List[Dict[str, Any]]:
-    """Bài của nguồn theo đúng thứ tự trên feed, lọc theo từ khoá (nội dung / link) và loại bài. Trả bản sao."""
+    """Filter a source's posts and put the most recently published posts first."""
     needle = (q or "").strip().casefold()
     with _lock:
         state = _load(owner_id)
         if not state or state["source_key"] != source_key:
             return []
-        return [dict(r) for r in state["rows"].values() if _matches(r, needle, post_type)]
+        rows = [dict(r) for r in state["rows"].values() if _matches(r, needle, post_type)]
+        return sorted(rows, key=_published_sort_key, reverse=True)
 
 
 def counts(owner_id: int, source_key: str, q: Optional[str] = None) -> Dict[str, int]:
