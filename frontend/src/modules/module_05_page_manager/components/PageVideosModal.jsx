@@ -46,7 +46,7 @@ function getDownloadModeMeta(mode) {
   }
   return { label: "Chưa Rõ", className: "bg-slate-500/10 text-slate-600 dark:text-zinc-400 border-slate-500/20" };
 }
-export default function PageVideosModal({ open, onOpenChange, page, defaultSource = null, onCleared }) {
+export default function PageVideosModal({ open, onOpenChange, page, defaultSource = null, downloadFolder = "", onCleared }) {
   const [videos, setVideos] = useState([]);
   const [loading, setLoading] = useState(false);
   const [sourceFilter, setSourceFilter] = useState(defaultSource || "ALL");
@@ -95,7 +95,7 @@ export default function PageVideosModal({ open, onOpenChange, page, defaultSourc
     if (!confirm(confirmMsg)) return;
     setLoading(true);
     try {
-      await clearPageVideos(page.page_id || page.id, targetSource);
+      await clearPageVideos(page.page_id || page.id, targetSource, downloadFolder);
       setVideos([]);
       if (onCleared) onCleared(page.page_id || page.id);
     } finally {

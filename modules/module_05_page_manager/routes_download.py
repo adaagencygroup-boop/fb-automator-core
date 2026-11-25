@@ -2,10 +2,11 @@ import os
 import sys
 import re
 import json
+import shutil
 import threading
 from pathlib import Path
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from core.database.connection import db
@@ -37,13 +38,6 @@ class UpdatePageKeywordsRequest(BaseModel):
   tiktok_url: Optional[str] = None
   youtube_keyword: Optional[str] = None
   youtube_url: Optional[str] = None
-class BulkKeywordsRequest(BaseModel):
-  keyword: str
-  source: str = "TIKTOK"
-  url: Optional[str] = None
-class ToolConfigRequest(BaseModel):
-  tool: str = "tiktok"
-  config: Dict[str, Any] = {}
 def ensure_page_activity_table():
   try:
     db.execute("""
@@ -90,75 +84,82 @@ def _remove_empty_dir_chain(pdir: str):
           os.rmdir(grand_dir)
   except Exception:
     pass
-def _wipe_page_folder_tree(p_dir: str) -> int:
-  removed = 0
-  if not os.path.isdir(p_dir):
-    return 0
+def _count_media_files(dir_path: str) -> int:
+  cnt = 0
   try:
-    for root_w, _, files_w in os.walk(p_dir, topdown=False):
+    for _, _, files_w in os.walk(dir_path):
       for f in files_w:
-        if f.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".part", ".txt")):
-          try:
-            os.remove(os.path.join(root_w, f))
-            removed += 1
-          except Exception:
-            pass
-      if not os.listdir(root_w):
+        if f.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi")):
+          cnt += 1
+  except Exception:
+    pass
+  return cnt
+def _wipe_page_folder_tree(p_dir: str, keep_subdirs: Optional[set] = None) -> int:
+  removed = 0
+  if not p_dir or not os.path.isdir(p_dir):
+    return 0
+  keep_norm = {os.path.normcase(os.path.normpath(k)) for k in (keep_subdirs or set()) if k}
+  try:
+    for name in list(os.listdir(p_dir)):
+      full = os.path.join(p_dir, name)
+      norm_full = os.path.normcase(os.path.normpath(full))
+      if os.path.isdir(full) and name.isdigit():
+        if norm_full in keep_norm:
+          continue
+        removed += _count_media_files(full)
         try:
-          os.rmdir(root_w)
+          shutil.rmtree(full, ignore_errors=True)
         except Exception:
           pass
+      elif os.path.isfile(full) and not keep_norm:
+        if name.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".part", ".ytdl", ".txt")):
+          try:
+            os.remove(full)
+            if not name.lower().endswith(".txt"):
+              removed += 1
+          except Exception:
+            pass
+    if os.path.isdir(p_dir) and not os.listdir(p_dir):
+      try:
+        os.rmdir(p_dir)
+      except Exception:
+        pass
   except Exception:
     pass
   return removed
-def check_folder_has_page_videos(folder_path: str):
-  if not folder_path:
-    return False, 0
-  target = folder_path.strip()
-  if not os.path.isabs(target):
-    from config.constants import BASE_DIR
-    target = os.path.join(str(BASE_DIR), target)
-  if not os.path.exists(target) or not os.path.isdir(target):
-    return False, 0
-  norm = target.replace("\\", "/").rstrip("/")
+def _collect_keep_subdirs(source_to_delete: Optional[str], page_ids: Optional[List[str]] = None) -> set:
+  if not source_to_delete:
+    return set()
+  query = "SELECT object_path FROM downloaded_videos WHERE upper(source) <> %s"
+  params: List[Any] = [source_to_delete.upper()]
+  if page_ids:
+    placeholders = ",".join(["%s"] * len(page_ids))
+    query += f" AND page_id IN ({placeholders})"
+    params.extend(page_ids)
+  rows = db.fetch_all(query, tuple(params)) or []
+  keep = set()
+  for r in rows:
+    p = r.get("object_path")
+    if p:
+      norm_p = _resolve_disk_path(p)
+      if os.path.exists(norm_p):
+        keep.add(os.path.normcase(os.path.normpath(os.path.dirname(norm_p))))
+  return keep
+def _reset_posting_progress_counters(page_ids: Optional[List[str]] = None):
   try:
-    row = db.fetch_one("SELECT COUNT(*) as c FROM downloaded_videos WHERE object_path LIKE %s OR object_path LIKE %s", (f"{norm}/%", f"{norm.replace('/', os.sep)}{os.sep}%"))
-    if row and row.get("c", 0) > 0:
-      return True, int(row["c"])
+    if page_ids:
+      placeholders = ",".join(["%s"] * len(page_ids))
+      rem = db.fetch_one(f"SELECT COUNT(*) as c FROM downloaded_videos WHERE page_id IN ({placeholders})", tuple(page_ids))
+      if not rem or int(rem.get("c") or 0) == 0:
+        db.execute(f"UPDATE posting_progress SET last_folder_index = 0, updated_at = NOW() WHERE page_id IN ({placeholders})", tuple(page_ids))
+    else:
+      rem = db.fetch_one("SELECT COUNT(*) as c FROM downloaded_videos")
+      if not rem or int(rem.get("c") or 0) == 0:
+        db.execute("UPDATE posting_progress SET last_folder_index = 0, updated_at = NOW()")
+      else:
+        db.execute("UPDATE posting_progress SET last_folder_index = 0, updated_at = NOW() WHERE page_id NOT IN (SELECT DISTINCT page_id FROM downloaded_videos)")
   except Exception:
     pass
-  try:
-    pages = db.fetch_all("SELECT page_id, page_name FROM pages") or []
-    count = 0
-    checked_dirs = set()
-    for p in pages:
-      p_id = str(p.get("page_id") or "").strip()
-      p_name = str(p.get("page_name") or "").strip()
-      safe_name = re.sub(r'[\\/*?:"<>|]', "", p_name).strip()
-      names = []
-      if safe_name:
-        names.append(safe_name)
-      if p_id:
-        names.append(f"Page_{p_id}")
-        names.append(p_id)
-      for n in names:
-        p_dir = os.path.join(target, n)
-        if p_dir in checked_dirs:
-          continue
-        checked_dirs.add(p_dir)
-        if os.path.isdir(p_dir):
-          try:
-            for _, _, files_walk in os.walk(p_dir):
-              for f in files_walk:
-                if f.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".part")):
-                  count += 1
-          except Exception:
-            pass
-    if count > 0:
-      return True, count
-  except Exception:
-    pass
-  return False, 0
 def read_persistent_tiktok_config() -> Dict[str, Any]:
   from config.constants import TIKTOK_CONFIG_PATH, TIKTOK_CONFIG_INI_PATH
   cfg = {"download_folder": "", "max_videos": 5}
@@ -409,75 +410,88 @@ def stream_video(path: Optional[str] = None, video_id: Optional[int] = None):
   return FileResponse(str(p), media_type=mt, content_disposition_type="inline")
 @router.delete("/all-videos")
 def clear_all_downloaded_videos(source: Optional[str] = None, folder: Optional[str] = None):
+  src_upper = source.upper().strip() if source else None
   query = "SELECT object_path FROM downloaded_videos"
   params = []
-  if source:
+  if src_upper:
     query += " WHERE upper(source) = %s"
-    params.append(source.upper())
-  rows = db.fetch_all(query, tuple(params))
+    params.append(src_upper)
+  rows = db.fetch_all(query, tuple(params)) or []
+  keep_subdirs = _collect_keep_subdirs(src_upper)
   deleted_count = 0
-  parent_dirs = set()
+  touched_page_dirs = set()
   for r in rows:
     p = r.get("object_path")
     if p:
       norm_p = _resolve_disk_path(p)
-      parent_dirs.add(os.path.dirname(norm_p))
+      sub_dir = os.path.dirname(norm_p)
+      if os.path.basename(sub_dir).isdigit():
+        touched_page_dirs.add(os.path.dirname(sub_dir))
       if os.path.exists(norm_p):
         try:
           os.remove(norm_p)
           deleted_count += 1
         except Exception:
           pass
-      txt_p = os.path.splitext(norm_p)[0] + ".txt"
-      if os.path.exists(txt_p):
-        try:
-          os.remove(txt_p)
-        except Exception:
-          pass
-  for pdir in sorted(parent_dirs, key=len, reverse=True):
-    if pdir and os.path.exists(pdir) and os.path.isdir(pdir):
-      try:
-        has_other = any(f.lower().endswith((".mp4", ".txt", ".part")) for f in os.listdir(pdir))
-        if not has_other or not os.listdir(pdir):
-          for f in os.listdir(pdir):
-            fp = os.path.join(pdir, f)
-            if os.path.isfile(fp):
-              try:
-                os.remove(fp)
-              except Exception:
-                pass
-          _remove_empty_dir_chain(pdir)
-      except Exception:
-        pass
+      if os.path.basename(sub_dir).isdigit() and os.path.isdir(sub_dir):
+        norm_sub = os.path.normcase(os.path.normpath(sub_dir))
+        if norm_sub not in keep_subdirs:
+          try:
+            shutil.rmtree(sub_dir, ignore_errors=True)
+          except Exception:
+            pass
+      else:
+        txt_p = os.path.splitext(norm_p)[0] + ".txt"
+        if os.path.exists(txt_p):
+          try:
+            os.remove(txt_p)
+          except Exception:
+            pass
+        _remove_empty_dir_chain(sub_dir)
+  base_folders = []
   if folder and folder.strip():
-    target_f = folder.strip()
-    if not os.path.isabs(target_f):
-      from config.constants import BASE_DIR
-      target_f = os.path.join(str(BASE_DIR), target_f)
-    if os.path.exists(target_f) and os.path.isdir(target_f):
-      try:
-        pages = db.fetch_all("SELECT page_id, page_name FROM pages") or []
-        for p in pages:
-          p_id = str(p.get("page_id") or "").strip()
-          p_name = str(p.get("page_name") or "").strip()
-          safe_name = re.sub(r'[\\/*?:"<>|]', "", p_name).strip()
-          names = []
-          if safe_name:
-            names.append(safe_name)
-          if p_id:
-            names.append(f"Page_{p_id}")
-            names.append(p_id)
-          for n in names:
-            p_dir = os.path.join(target_f, n)
-            deleted_count += _wipe_page_folder_tree(p_dir)
-      except Exception:
-        pass
+    base_folders.append(folder.strip())
+  try:
+    if not src_upper or src_upper == "TIKTOK":
+      cfg_t = read_persistent_tiktok_config()
+      if cfg_t.get("download_folder"):
+        base_folders.append(cfg_t["download_folder"])
+    if not src_upper or src_upper == "YOUTUBE":
+      cfg_y = read_persistent_youtube_config()
+      if cfg_y.get("download_folder"):
+        base_folders.append(cfg_y["download_folder"])
+  except Exception:
+    pass
+  for p_dir in touched_page_dirs:
+    deleted_count += _wipe_page_folder_tree(p_dir, keep_subdirs=keep_subdirs)
+  try:
+    pages = db.fetch_all("SELECT page_id, page_name FROM pages") or []
+    for base in set(base_folders):
+      target_f = _resolve_disk_path(base)
+      if not target_f or not os.path.isdir(target_f):
+        continue
+      for p in pages:
+        p_id = str(p.get("page_id") or "").strip()
+        p_name = str(p.get("page_name") or "").strip()
+        safe_name = re.sub(r'[\\/*?:"<>|]', "", p_name).strip()
+        names = []
+        if safe_name:
+          names.append(safe_name)
+        if p_id:
+          names.append(f"Page_{p_id}")
+          names.append(p_id)
+        for n in set(names):
+          p_dir = os.path.join(target_f, n)
+          deleted_count += _wipe_page_folder_tree(p_dir, keep_subdirs=keep_subdirs)
+  except Exception:
+    pass
   del_query = "DELETE FROM downloaded_videos"
   del_params = []
-  if source:
+  if src_upper:
     del_query += " WHERE upper(source) = %s"
-    del_params.append(source.upper())
+    del_params.append(src_upper)
   db.execute(del_query, tuple(del_params))
+  _reset_posting_progress_counters()
   db.execute("UPDATE page_job_items SET status = 'PENDING', message = ''")
   log_page_activity(page_id="ALL", page_name="Toàn Bộ Fanpage", action_type="DELETE", title=f"Đã Xóa Toàn Bộ {deleted_count} Video Của Hệ Thống", details=f"Đã Dọn Dẹp {deleted_count} Tệp Video Khỏi Hệ Thống", status="SUCCESS")
   return {"success": True, "deleted_count": deleted_count, "message": "Đã Xóa Toàn Bộ Video & Dữ Liệu Đã Tải"}
@@ -506,29 +520,6 @@ def update_page_keywords(page_id: str, req: UpdatePageKeywordsRequest):
   except Exception as e:
     return {"success": False, "error": str(e)}
   return {"success": True}
-@router.post("/bulk-keywords")
-def bulk_update_keywords(req: BulkKeywordsRequest, request: Request):
-  from modules.module_02_account_manager.context import owner_context
-  owner = owner_context.get()
-  kw = req.keyword.strip()
-  source = (req.source or "TIKTOK").upper()
-  where_clause = "WHERE 1=1"
-  params = []
-  if source == "TIKTOK":
-    set_clause = "tiktok_keyword = %s, tiktok_url = %s"
-    params.extend([kw, (req.url or "").strip()])
-  else:
-    set_clause = "youtube_keyword = %s, youtube_url = %s"
-    params.extend([kw, (req.url or "").strip()])
-  if owner:
-    where_clause += " AND (user_id = %s OR account_uid IN (SELECT uid FROM accounts WHERE user_id = %s))"
-    params.extend([owner, owner])
-  query = f"UPDATE pages SET {set_clause}, updated_at = NOW() {where_clause}"
-  try:
-    db.execute(query, tuple(params))
-  except Exception as e:
-    return {"success": False, "error": str(e)}
-  return {"success": True, "count": 1}
 @router.get("/{page_id}/videos")
 def get_page_videos(page_id: str, source: Optional[str] = None):
   p_row = db.fetch_one("SELECT page_id, page_name FROM pages WHERE page_id = %s OR id::text = %s", (page_id, page_id))
@@ -560,43 +551,61 @@ def get_page_videos(page_id: str, source: Optional[str] = None):
       pass
   return {"page_id": real_pid, "page_name": p_row["page_name"] if p_row else "", "videos": valid_rows}
 @router.delete("/{page_id}/videos")
-def clear_page_videos(page_id: str, source: Optional[str] = None):
+def clear_page_videos(page_id: str, source: Optional[str] = None, folder: Optional[str] = None):
+  src_upper = source.upper().strip() if source else None
   p_row = db.fetch_one("SELECT id, page_id, page_name FROM pages WHERE page_id = %s OR id::text = %s", (page_id, page_id))
   real_pid = p_row["page_id"] if p_row else page_id
   id_str = str(p_row["id"]) if p_row and p_row.get("id") else page_id
+  page_ids = list({str(page_id), str(real_pid), str(id_str)})
   query = "SELECT object_path, video_id, source FROM downloaded_videos WHERE (page_id = %s OR page_id = %s OR page_id = %s)"
   params = [page_id, real_pid, id_str]
-  if source:
+  if src_upper:
     query += " AND upper(source) = %s"
-    params.append(source.upper())
-  rows = db.fetch_all(query, tuple(params))
+    params.append(src_upper)
+  rows = db.fetch_all(query, tuple(params)) or []
+  keep_subdirs = _collect_keep_subdirs(src_upper, page_ids=page_ids)
   deleted_count = 0
-  parent_dirs = set()
+  touched_page_dirs = set()
   for r in rows:
     p = r.get("object_path")
     if p:
       norm_p = _resolve_disk_path(p)
-      parent_dirs.add(os.path.dirname(norm_p))
+      sub_dir = os.path.dirname(norm_p)
+      if os.path.basename(sub_dir).isdigit():
+        touched_page_dirs.add(os.path.dirname(sub_dir))
       if os.path.exists(norm_p):
         try:
           os.remove(norm_p)
           deleted_count += 1
         except Exception:
           pass
-      txt_p = os.path.splitext(norm_p)[0] + ".txt"
-      if os.path.exists(txt_p):
-        try:
-          os.remove(txt_p)
-        except Exception:
-          pass
+      if os.path.basename(sub_dir).isdigit() and os.path.isdir(sub_dir):
+        norm_sub = os.path.normcase(os.path.normpath(sub_dir))
+        if norm_sub not in keep_subdirs:
+          try:
+            shutil.rmtree(sub_dir, ignore_errors=True)
+          except Exception:
+            pass
+      else:
+        txt_p = os.path.splitext(norm_p)[0] + ".txt"
+        if os.path.exists(txt_p):
+          try:
+            os.remove(txt_p)
+          except Exception:
+            pass
+        _remove_empty_dir_chain(sub_dir)
   base_folders = []
+  if folder and folder.strip():
+    base_folders.append(folder.strip())
   try:
-    cfg_t = read_persistent_tiktok_config()
-    if cfg_t.get("download_folder"):
-      base_folders.append(cfg_t["download_folder"])
-    cfg_y = read_persistent_youtube_config()
-    if cfg_y.get("download_folder"):
-      base_folders.append(cfg_y["download_folder"])
+    if not src_upper or src_upper == "TIKTOK":
+      cfg_t = read_persistent_tiktok_config()
+      if cfg_t.get("download_folder"):
+        base_folders.append(cfg_t["download_folder"])
+    if not src_upper or src_upper == "YOUTUBE":
+      cfg_y = read_persistent_youtube_config()
+      if cfg_y.get("download_folder"):
+        base_folders.append(cfg_y["download_folder"])
   except Exception:
     pass
   name_candidates = []
@@ -606,37 +615,22 @@ def clear_page_videos(page_id: str, source: Optional[str] = None):
     if s_name:
       name_candidates.append(s_name)
   name_candidates.extend([f"Page_{real_pid}", str(real_pid), str(id_str), f"Page_{id_str}"])
+  for p_dir in touched_page_dirs:
+    deleted_count += _wipe_page_folder_tree(p_dir, keep_subdirs=keep_subdirs)
   for base in set(base_folders):
-    if not base:
-      continue
-    target_base = base
-    if not os.path.isabs(target_base):
-      from config.constants import BASE_DIR
-      target_base = os.path.join(str(BASE_DIR), base)
-    if not os.path.exists(target_base) or not os.path.isdir(target_base):
+    target_base = _resolve_disk_path(base)
+    if not target_base or not os.path.isdir(target_base):
       continue
     for d_name in set(name_candidates):
       sub_dir = os.path.join(target_base, d_name)
-      deleted_count += _wipe_page_folder_tree(sub_dir)
-  for pdir in sorted(parent_dirs, key=len, reverse=True):
-    if pdir and os.path.exists(pdir) and os.path.isdir(pdir):
-      try:
-        for f in os.listdir(pdir):
-          if f.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".part", ".txt")):
-            try:
-              os.remove(os.path.join(pdir, f))
-              deleted_count += 1
-            except Exception:
-              pass
-        _remove_empty_dir_chain(pdir)
-      except Exception:
-        pass
+      deleted_count += _wipe_page_folder_tree(sub_dir, keep_subdirs=keep_subdirs)
   del_query = "DELETE FROM downloaded_videos WHERE (page_id = %s OR page_id = %s OR page_id = %s)"
   del_params = [page_id, real_pid, id_str]
-  if source:
+  if src_upper:
     del_query += " AND upper(source) = %s"
-    del_params.append(source.upper())
+    del_params.append(src_upper)
   db.execute(del_query, tuple(del_params))
+  _reset_posting_progress_counters(page_ids=page_ids)
   p_name = p_row["page_name"] if p_row and p_row.get("page_name") else "Fanpage"
   log_page_activity(page_id=real_pid, page_name=p_name, action_type="DELETE", title=f"Đã Xóa {deleted_count} Video Của Fanpage: {p_name}", details=f"Đã Xóa {deleted_count} Video Trong Thư Mục Lưu Trữ", status="SUCCESS")
   db.execute("UPDATE page_job_items SET status = 'PENDING', message = '' WHERE page_id = %s OR page_id = %s OR page_id = %s", (page_id, real_pid, id_str))
@@ -672,51 +666,6 @@ def delete_single_video(page_id: str, video_db_id: int):
   vid_title = row.get("title") or "1 Video"
   log_page_activity(page_id=real_pid, page_name=p_name, action_type="DELETE", title=f"Đã Xóa Video '{vid_title}' Của Fanpage: {p_name}", details=row.get("caption") or "", object_path=p or "", status="SUCCESS")
   return {"success": True, "message": "Đã Xóa Video Thành Công"}
-@router.get("/config/{tool}")
-def get_page_tool_config(tool: str):
-  key = f"{tool.lower()}_download_config"
-  row = db.fetch_one("SELECT value FROM system_settings WHERE key = %s", (key,))
-  if row and row.get("value"):
-    try:
-      return {"success": True, "config": json.loads(row["value"])}
-    except Exception:
-      pass
-  local_file = Path("data/page_tool_settings.json")
-  if local_file.exists():
-    try:
-      all_cfg = json.loads(local_file.read_text(encoding="utf-8"))
-      if key in all_cfg:
-        return {"success": True, "config": all_cfg[key]}
-    except Exception:
-      pass
-  return {"success": True, "config": {}}
-@router.post("/config")
-def save_page_tool_config(req: ToolConfigRequest):
-  key = f"{req.tool.lower()}_download_config"
-  val_str = json.dumps(req.config)
-  try:
-    db.execute(
-      """INSERT INTO system_settings (key, value, updated_at)
-      VALUES (%s, %s, NOW())
-      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()""",
-      (key, val_str)
-    )
-  except Exception:
-    pass
-  try:
-    local_file = Path("data/page_tool_settings.json")
-    local_file.parent.mkdir(parents=True, exist_ok=True)
-    existing = {}
-    if local_file.exists():
-      try:
-        existing = json.loads(local_file.read_text(encoding="utf-8"))
-      except Exception:
-        existing = {}
-    existing[key] = req.config
-    local_file.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
-  except Exception:
-    pass
-  return {"success": True}
 @router.post("/tiktok-download")
 def start_tiktok_download(req: TikTokDownloadRequest):
   if not req.download_folder or not req.download_folder.strip():
@@ -869,8 +818,3 @@ def save_youtube_config_endpoint(req: Dict[str, Any]):
     return {"success": True, "config": cfg}
   except Exception as e:
     return {"success": False, "error": str(e)}
-@router.post("/check-folder")
-def check_folder_endpoint(req: Dict[str, Any]):
-  folder = str(req.get("folder", "")).strip()
-  has_data, count = check_folder_has_page_videos(folder)
-  return {"has_data": has_data, "count": count}

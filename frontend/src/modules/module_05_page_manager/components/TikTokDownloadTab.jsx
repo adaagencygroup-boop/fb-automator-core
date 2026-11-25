@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import { Settings, FolderOpen, Search, Trash2, HelpCircle, Play, Square, Terminal, Video, Flag, LogIn, LogOut, CheckCircle2, Loader2, AlertTriangle, AlertCircle, Edit3, ExternalLink, Maximize2, Lock } from "lucide-react";
-import { startTikTokDownloadJob, getJobStatus, stopJob, selectFolder, clearPageVideos, clearAllVideos, updatePageKeywords, getTikTokAuthStatus, openTikTokLogin, disconnectTikTok, getTikTokConfig, saveTikTokConfig, checkFolderData, setSharedVideoFolder, getSharedVideoFolder } from "../service";
+import { startTikTokDownloadJob, getJobStatus, stopJob, selectFolder, clearPageVideos, clearAllVideos, updatePageKeywords, getTikTokAuthStatus, openTikTokLogin, disconnectTikTok, getTikTokConfig, saveTikTokConfig, setSharedVideoFolder, getSharedVideoFolder } from "../service";
 import Pagination from "@/components/ui/pagination";
 import PageVideosModal from "./PageVideosModal";
 import EditSourceModal from "./EditSourceModal";
@@ -40,19 +40,11 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
       const saved = localStorage.getItem("fb_tiktok_config");
       const parsed = saved ? JSON.parse(saved).downloadFolder : "";
       if (parsed && parsed.trim() && parsed !== "downloads/tiktok") return parsed;
-      const shared = localStorage.getItem("fb_shared_video_folder");
+      const shared = getSharedVideoFolder();
       if (shared && shared.trim()) return shared.trim();
       return "";
     } catch {
       return "";
-    }
-  });
-  const [, setHasDownloadedData] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return localStorage.getItem("fb_tiktok_has_data") === "true";
-    } catch {
-      return false;
     }
   });
   const [folderError, setFolderError] = useState(false);
@@ -117,11 +109,9 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
           getTikTokConfig(),
           getTikTokAuthStatus()
         ]);
-        let targetFolder = downloadFolder;
         if (active && cfg) {
           const folder = (cfg.download_folder && cfg.download_folder.trim() && cfg.download_folder !== "downloads/tiktok") ? cfg.download_folder.trim() : "";
           if (folder) {
-            targetFolder = folder;
             setDownloadFolder(folder);
           }
           if (cfg.max_videos) {
@@ -136,19 +126,6 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
           } else {
             addLog(`[${getUtc7Time()}] Chưa Đăng Nhập Tài Khoản TikTok (Bắt Buộc Để Kích Hoạt Tải).`);
           }
-        }
-        if (targetFolder && targetFolder.trim()) {
-          checkFolderData(targetFolder).then((chk) => {
-            if (active && chk) {
-              if (chk.has_data) {
-                setHasDownloadedData(true);
-                try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
-              } else if (chk.has_data === false && !(itemsRef.current || []).some((it) => it.status === "SUCCESS")) {
-                setHasDownloadedData(false);
-                try { localStorage.removeItem("fb_tiktok_has_data"); } catch { }
-              }
-            }
-          });
         }
         if (active) {
           addLog(`[${getUtc7Time()}] Đã Nạp Cấu Hình Tải Video TikTok Thành Công.`);
@@ -213,14 +190,6 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
         return;
       }
       if (res && res.folder) {
-        const check = await checkFolderData(res.folder);
-        const hasData = Boolean(check && check.has_data);
-        setHasDownloadedData(hasData);
-        if (hasData) {
-          try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
-        } else {
-          try { localStorage.removeItem("fb_tiktok_has_data"); } catch { }
-        }
         setDownloadFolder(res.folder);
         setSharedVideoFolder(res.folder);
         setFolderError(false);
@@ -235,22 +204,12 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
     }
   };
   const handleFolderFileChange = async (e) => {
-    setHasDownloadedData(false);
-    try { localStorage.removeItem("fb_tiktok_has_data"); } catch { }
     const files = e.target.files;
     if (files && files.length > 0) {
       const first = files[0];
       const relPath = first.webkitRelativePath || "";
       const rootPart = relPath.split("/")[0] || "";
       if (rootPart) {
-        const check = await checkFolderData(rootPart);
-        const hasData = Boolean(check && check.has_data);
-        setHasDownloadedData(hasData);
-        if (hasData) {
-          try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
-        } else {
-          try { localStorage.removeItem("fb_tiktok_has_data"); } catch { }
-        }
         setDownloadFolder(rootPart);
         setFolderError(false);
       }
@@ -352,16 +311,6 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
   const handleVideosCleared = async (pageId) => {
     const pidStr = String(pageId || "");
     setItems((prev) => prev.map((item) => ((item.id === pageId || String(item.page_id || item.id) === pidStr) ? { ...item, status: "PENDING", message: "" } : item)));
-    if (downloadFolder && downloadFolder.trim()) {
-      const check = await checkFolderData(downloadFolder);
-      const hasData = Boolean(check && check.has_data);
-      setHasDownloadedData(hasData);
-      if (!hasData) {
-        try { localStorage.removeItem("fb_tiktok_has_data"); } catch { }
-      } else {
-        try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
-      }
-    }
   };
   const filteredItems = items.filter((it) => {
     const q = searchTerm.toLowerCase().trim();
@@ -377,20 +326,10 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
       return;
     }
     const targetPid = String(it.page_id || it.id || "");
-    const res = await clearPageVideos(targetPid, "TIKTOK");
+    const res = await clearPageVideos(targetPid, "TIKTOK", downloadFolder);
     setItems((prev) => prev.map((item) => ((item.id === it.id || String(item.page_id || item.id) === targetPid) ? { ...item, status: "PENDING", message: "" } : item)));
     const deletedMsg = res && res.deleted_count ? ` (Đã Xóa ${res.deleted_count} Video)` : "";
     addLog(`[${getUtc7Time()}] Đã Xóa Sạch Toàn Bộ Video Đã Tải Của Fanpage "${pageName}"${deletedMsg}.`);
-    if (downloadFolder && downloadFolder.trim()) {
-      const check = await checkFolderData(downloadFolder);
-      const hasData = Boolean(check && check.has_data);
-      setHasDownloadedData(hasData);
-      if (!hasData) {
-        try { localStorage.removeItem("fb_tiktok_has_data"); } catch { }
-      } else {
-        try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
-      }
-    }
   };
   const handleStartItem = async (it) => {
     if (isRunning || isStarting || isActionLockedRef.current) return;
@@ -466,17 +405,6 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
               pollTimerRef.current = null;
             }
             setIsRunning(false);
-            if (statusData.items.some((x) => x.status === "SUCCESS")) {
-              setHasDownloadedData(true);
-              try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
-            } else if (downloadFolder && downloadFolder.trim()) {
-              checkFolderData(downloadFolder).then((chk) => {
-                if (chk && chk.has_data) {
-                  setHasDownloadedData(true);
-                  try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
-                }
-              });
-            }
             const nowStr = getUtc7Time();
             const failed = statusData.items.some((x) => x.status === "FAILED");
             if (failed) {
@@ -594,17 +522,6 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
               pollTimerRef.current = null;
             }
             setIsRunning(false);
-            if (statusData.items.some((x) => x.status === "SUCCESS")) {
-              setHasDownloadedData(true);
-              try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
-            } else if (downloadFolder && downloadFolder.trim()) {
-              checkFolderData(downloadFolder).then((chk) => {
-                if (chk && chk.has_data) {
-                  setHasDownloadedData(true);
-                  try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
-                }
-              });
-            }
             const hasFailed = statusData.items.some((it) => it.status === "FAILED");
             if (hasFailed) {
               addLog(`[${nowStr}] Tác Vụ Hoàn Tất: Một Số Nguồn Tải Không Thành Công. Xem Chi Tiết Ở Trên!`);
@@ -651,8 +568,6 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
     try {
       const res = await clearAllVideos("TIKTOK", downloadFolder);
       if (res && (res.success || res.deleted_count !== undefined)) {
-        setHasDownloadedData(false);
-        try { localStorage.removeItem("fb_tiktok_has_data"); } catch { }
         setItems((prev) => prev.map((p) => ({ ...p, status: "PENDING", message: "" })));
         addLog(`[${getUtc7Time()}] Đã Xóa Sạch Toàn Bộ Video TikTok Đã Tải Khỏi Ổ Đĩa (${res.deleted_count || 0} Tệp). Thư Mục Đã Được Mở Khóa.`);
         alert("Đã Xóa Sạch Toàn Bộ Video Đã Tải Thành Công!");
@@ -1172,7 +1087,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
           </div>
         </div>
       </div>
-      <PageVideosModal open={videosModalOpen} onOpenChange={setVideosModalOpen} page={selectedVideosPage} defaultSource="TIKTOK" onCleared={handleVideosCleared} />
+      <PageVideosModal open={videosModalOpen} onOpenChange={setVideosModalOpen} page={selectedVideosPage} defaultSource="TIKTOK" downloadFolder={downloadFolder} onCleared={handleVideosCleared} />
       <EditSourceModal open={editModalOpen} onOpenChange={setEditModalOpen} item={editingItem} sourceType="TIKTOK" onSave={handleSaveEditModal} />
     </div>
   );

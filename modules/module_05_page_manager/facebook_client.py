@@ -45,33 +45,6 @@ def requests_post_with_retry(url, data=None, files=None, headers=None, timeout=3
                 log_func(f"[WARNING] [Lỗi kết nối] Thử lại lần {attempt}/{max_retries} sau {sleep_time}s cho page {page_name} do: {str(e)}")
             time.sleep(sleep_time)
 
-def post_to_facebook_page(page_name, page_id, page_token, message, image_url, fb_version, log_func, save_posted_func):
-    try:
-        if image_url:
-            url = f"https://graph.facebook.com/{fb_version}/{page_id}/photos"
-            payload = {'url': image_url, 'caption': message, 'access_token': page_token}
-        else:
-            url = f"https://graph.facebook.com/{fb_version}/{page_id}/feed"
-            payload = {'message': message, 'access_token': page_token}
-
-        response = requests_post_with_retry(url, data=payload, timeout=20, log_func=log_func, page_name=page_name)
-        result = response.json()
-        
-        if 'id' in result:
-            log_func(f"[SUCCESS] Đã đăng bài thành công lên Page: {page_name}! Post ID: {result['id']}")
-            save_posted_func(page_name, result['id'])
-            return True
-        else:
-            error_msg = result.get('error', {}).get('message', 'Không rõ nguyên nhân')
-            log_func(f"[ERROR] Facebook từ chối đăng lên page {page_name}: {error_msg}")
-            if image_url:
-                log_func("[*] Thử đăng lại dạng TEXT ONLY (không kèm ảnh) để cứu bài viết...")
-                return post_to_facebook_page(page_name, page_id, page_token, message, None, fb_version, log_func, save_posted_func)
-            return False
-    except Exception as e:
-        log_func(f"[EXCEPTION] Lỗi mạng khi kết nối Facebook Graph API sau các lần thử lại: {str(e)}")
-        return False
-
 def upload_reel_to_facebook(page_name, page_id, page_token, video_path, message, fb_version, log_func, save_posted_func):
     try:
         if not video_path or not os.path.exists(video_path):
@@ -143,31 +116,4 @@ def upload_reel_to_facebook(page_name, page_id, page_token, video_path, message,
             return False
     except Exception as e:
         log_func(f"[EXCEPTION] Lỗi mạng khi tải lên Reels sau các lần thử lại: {str(e)}")
-        return False
-
-def upload_video_to_facebook(page_name, page_id, page_token, video_path, message, fb_version, log_func, save_posted_func):
-    try:
-        log_func(f"[*] [VIDEO] Đang đăng tải video dài lên Page {page_name}...")
-        url = f"https://graph-video.facebook.com/{fb_version}/{page_id}/videos"
-        payload = {
-            "description": message,
-            "access_token": page_token
-        }
-        with open(video_path, "rb") as f:
-            files = {
-                "source": f
-            }
-            response = requests_post_with_retry(url, data=payload, files=files, timeout=300, log_func=log_func, page_name=page_name) # 5 phút timeout cho video dài
-        
-        result = response.json()
-        if 'id' in result:
-            log_func(f"[SUCCESS] Đã đăng video dài thành công lên Page: {page_name}! Video ID: {result['id']}")
-            save_posted_func(page_name, result['id'])
-            return True
-        else:
-            error_msg = result.get('error', {}).get('message', 'Không rõ nguyên nhân')
-            log_func(f"[ERROR] Đăng video dài thất bại: {error_msg}")
-            return False
-    except Exception as e:
-        log_func(f"[EXCEPTION] Lỗi kết nối mạng khi tải lên video dài sau các lần thử lại: {str(e)}")
         return False

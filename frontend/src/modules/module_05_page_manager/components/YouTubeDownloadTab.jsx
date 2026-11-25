@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import { Settings, FolderOpen, Search, Trash2, HelpCircle, Play, Square, Terminal, Video, Flag, AlertTriangle, AlertCircle, Edit3, ExternalLink, Maximize2, Lock, CheckCircle2, Loader2 } from "lucide-react";
-import { startYouTubeDownloadJob, getJobStatus, stopJob, selectFolder, clearPageVideos, clearAllVideos, updatePageKeywords, getYoutubeConfig, saveYoutubeConfig, checkFolderData, setSharedVideoFolder, getSharedVideoFolder } from "../service";
+import { startYouTubeDownloadJob, getJobStatus, stopJob, selectFolder, clearPageVideos, clearAllVideos, updatePageKeywords, getYoutubeConfig, saveYoutubeConfig, setSharedVideoFolder, getSharedVideoFolder } from "../service";
 import Pagination from "@/components/ui/pagination";
 import PageVideosModal from "./PageVideosModal";
 import EditSourceModal from "./EditSourceModal";
@@ -39,19 +39,11 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
       const saved = localStorage.getItem("fb_youtube_config");
       const parsed = saved ? JSON.parse(saved).downloadFolder : "";
       if (parsed && parsed.trim() && parsed !== "downloads/youtube") return parsed;
-      const shared = localStorage.getItem("fb_shared_video_folder");
+      const shared = getSharedVideoFolder();
       if (shared && shared.trim()) return shared.trim();
       return "";
     } catch {
       return "";
-    }
-  });
-  const [, setHasDownloadedData] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return localStorage.getItem("fb_youtube_has_data") === "true";
-    } catch {
-      return false;
     }
   });
   const [folderError, setFolderError] = useState(false);
@@ -108,25 +100,13 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
       addLog(`[${getUtc7Time()}] Đang Nạp Cấu Hình & Kiểm Tra Thư Mục YouTube Shorts...`);
       try {
         const cfg = await getYoutubeConfig();
-        let targetFolder = downloadFolder;
         if (active && cfg) {
           const folder = (cfg.download_folder && cfg.download_folder.trim() && cfg.download_folder !== "downloads/youtube") ? cfg.download_folder.trim() : "";
           if (folder) {
-            targetFolder = folder;
             setDownloadFolder(folder);
           }
           if (cfg.max_videos) {
             setMaxVideos(Number(cfg.max_videos));
-          }
-        }
-        const check = await checkFolderData(targetFolder);
-        if (active) {
-          if (check && check.has_data) {
-            setHasDownloadedData(true);
-            try { localStorage.setItem("fb_youtube_has_data", "true"); } catch {}
-          } else if (check && check.has_data === false && !(itemsRef.current || []).some((it) => it.status === "SUCCESS")) {
-            setHasDownloadedData(false);
-            try { localStorage.removeItem("fb_youtube_has_data"); } catch {}
           }
         }
       } catch {}
@@ -161,14 +141,6 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
         return;
       }
       if (res && res.folder) {
-        const check = await checkFolderData(res.folder);
-        const hasData = Boolean(check && check.has_data);
-        setHasDownloadedData(hasData);
-        if (hasData) {
-          try { localStorage.setItem("fb_youtube_has_data", "true"); } catch {}
-        } else {
-          try { localStorage.removeItem("fb_youtube_has_data"); } catch {}
-        }
         setDownloadFolder(res.folder);
         setSharedVideoFolder(res.folder);
         setFolderError(false);
@@ -189,14 +161,6 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
       const relPath = first.webkitRelativePath || "";
       const rootPart = relPath.split("/")[0] || "";
       if (rootPart) {
-        const check = await checkFolderData(rootPart);
-        const hasData = Boolean(check && check.has_data);
-        setHasDownloadedData(hasData);
-        if (hasData) {
-          try { localStorage.setItem("fb_youtube_has_data", "true"); } catch {}
-        } else {
-          try { localStorage.removeItem("fb_youtube_has_data"); } catch {}
-        }
         setDownloadFolder(rootPart);
         setFolderError(false);
       }
@@ -298,16 +262,6 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
   const handleVideosCleared = async (pageId) => {
     const pidStr = String(pageId || "");
     setItems((prev) => prev.map((item) => ((item.id === pageId || String(item.page_id || item.id) === pidStr) ? { ...item, status: "PENDING", message: "" } : item)));
-    if (downloadFolder && downloadFolder.trim()) {
-      const check = await checkFolderData(downloadFolder);
-      const hasData = Boolean(check && check.has_data);
-      setHasDownloadedData(hasData);
-      if (!hasData) {
-        try { localStorage.removeItem("fb_youtube_has_data"); } catch {}
-      } else {
-        try { localStorage.setItem("fb_youtube_has_data", "true"); } catch {}
-      }
-    }
   };
   const filteredItems = items.filter((it) => {
     const q = searchTerm.toLowerCase().trim();
@@ -323,20 +277,10 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
       return;
     }
     const targetPid = String(it.page_id || it.id || "");
-    const res = await clearPageVideos(targetPid, "YOUTUBE");
+    const res = await clearPageVideos(targetPid, "YOUTUBE", downloadFolder);
     setItems((prev) => prev.map((item) => ((item.id === it.id || String(item.page_id || item.id) === targetPid) ? { ...item, status: "PENDING", message: "" } : item)));
     const deletedMsg = res && res.deleted_count ? ` (Đã Xóa ${res.deleted_count} Video)` : "";
     addLog(`[${getUtc7Time()}] Đã Xóa Sạch Toàn Bộ Video Đã Tải Của Fanpage "${pageName}"${deletedMsg}.`);
-    if (downloadFolder && downloadFolder.trim()) {
-      const check = await checkFolderData(downloadFolder);
-      const hasData = Boolean(check && check.has_data);
-      setHasDownloadedData(hasData);
-      if (!hasData) {
-        try { localStorage.removeItem("fb_youtube_has_data"); } catch {}
-      } else {
-        try { localStorage.setItem("fb_youtube_has_data", "true"); } catch {}
-      }
-    }
   };
   const handleStartItem = async (it) => {
     if (isRunning || isStarting || isActionLockedRef.current) return;
@@ -400,17 +344,6 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
               pollTimerRef.current = null;
             }
             setIsRunning(false);
-            if (statusData.items.some((x) => x.status === "SUCCESS")) {
-              setHasDownloadedData(true);
-              try { localStorage.setItem("fb_youtube_has_data", "true"); } catch {}
-            } else if (downloadFolder && downloadFolder.trim()) {
-              checkFolderData(downloadFolder).then((chk) => {
-                if (chk && chk.has_data) {
-                  setHasDownloadedData(true);
-                  try { localStorage.setItem("fb_youtube_has_data", "true"); } catch {}
-                }
-              });
-            }
             const nowStr = getUtc7Time();
             const failed = statusData.items.some((x) => x.status === "FAILED");
             if (failed) {
@@ -520,17 +453,6 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
               pollTimerRef.current = null;
             }
             setIsRunning(false);
-            if (statusData.items.some((x) => x.status === "SUCCESS")) {
-              setHasDownloadedData(true);
-              try { localStorage.setItem("fb_youtube_has_data", "true"); } catch {}
-            } else if (downloadFolder && downloadFolder.trim()) {
-              checkFolderData(downloadFolder).then((chk) => {
-                if (chk && chk.has_data) {
-                  setHasDownloadedData(true);
-                  try { localStorage.setItem("fb_youtube_has_data", "true"); } catch {}
-                }
-              });
-            }
             const hasFailed = statusData.items.some((it) => it.status === "FAILED");
             if (hasFailed) {
               addLog(`[${nowStr}] Tác Vụ Hoàn Tất: Một Số Nguồn Tải Không Thành Công. Xem Chi Tiết Ở Trên!`);
@@ -560,8 +482,6 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
     try {
       const res = await clearAllVideos("YOUTUBE", downloadFolder);
       if (res && (res.success || res.deleted_count !== undefined)) {
-        setHasDownloadedData(false);
-        try { localStorage.removeItem("fb_youtube_has_data"); } catch {}
         setItems((prev) => prev.map((p) => ({ ...p, status: "PENDING", message: "" })));
         addLog(`[${getUtc7Time()}] Đã Xóa Sạch Toàn Bộ Video YouTube Đã Tải Khỏi Ổ Đĩa (${res.deleted_count || 0} Tệp). Thư Mục Đã Được Mở Khóa.`);
         alert("Đã Xóa Sạch Toàn Bộ Video Đã Tải Thành Công!");
@@ -1027,7 +947,7 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
           </div>
         </div>
       </div>
-      <PageVideosModal open={videosModalOpen} onOpenChange={setVideosModalOpen} page={selectedVideosPage} defaultSource="YOUTUBE" onCleared={handleVideosCleared} />
+      <PageVideosModal open={videosModalOpen} onOpenChange={setVideosModalOpen} page={selectedVideosPage} defaultSource="YOUTUBE" downloadFolder={downloadFolder} onCleared={handleVideosCleared} />
       <EditSourceModal open={editModalOpen} onOpenChange={setEditModalOpen} item={editingItem} sourceType="YOUTUBE" onSave={handleSaveEditModal} />
     </div>
   );

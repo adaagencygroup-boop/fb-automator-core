@@ -1,286 +1,153 @@
 import os
 import re
-import html
-import json
-import string
 import time
-import random
-import urllib.parse
-import threading
+import tempfile
 import requests
-from typing import Optional, Dict, Any, List, Tuple
+import yt_dlp
 from pathlib import Path
+from typing import Callable, Optional, Dict, Any, Iterable, List, Tuple
 from core.database.connection import db
-from bs4 import BeautifulSoup
+from core.media.tiktok_browser import (
+  DEFAULT_DESKTOP_UA,
+  get_session_data,
+  search_tiktok_via_browser,
+  fetch_tiktok_channel_via_browser,
+  resolve_tiktok_video_via_browser,
+)
 try:
   import curl_cffi.requests as c_requests
   HAS_CURL_CFFI = True
 except ImportError:
   c_requests = None
   HAS_CURL_CFFI = False
-api_call_lock = threading.Lock()
-last_api_call_time = 0.0
-USER_AGENTS = [
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0"
-]
-def get_tikwm_headers() -> Dict[str, str]:
+def _should_stop(stop_check: Optional[Callable[[], bool]]) -> bool:
+  if not stop_check:
+    return False
+  try:
+    return bool(stop_check())
+  except Exception:
+    return False
+def _normalize_cookies_list(cookies: Any = None) -> List[Dict[str, Any]]:
+  if isinstance(cookies, list) and cookies:
+    return [c for c in cookies if isinstance(c, dict) and c.get("name")]
+  if isinstance(cookies, dict) and cookies:
+    return [
+      {"name": k, "value": str(v), "domain": ".tiktok.com", "path": "/", "secure": True}
+      for k, v in cookies.items()
+      if k
+    ]
+  session_data = get_session_data()
+  raw_list = session_data.get("cookies", []) if isinstance(session_data, dict) else []
+  return [c for c in raw_list if isinstance(c, dict) and c.get("name")]
+def _cookies_to_dict(cookies: Any = None) -> Dict[str, str]:
   return {
-    "User-Agent": random.choice(USER_AGENTS),
-    "Accept": "application/json, text/javascript, */*; q=0.01",
-    "Accept-Language": "en-US,en;q=0.9,vi;q=0.8",
-    "Origin": "https://tikwm.com",
-    "Referer": "https://tikwm.com/",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-origin",
-    "X-Requested-With": "XMLHttpRequest"
+    str(c["name"]): str(c.get("value") or "")
+    for c in _normalize_cookies_list(cookies)
+    if c.get("name") and c.get("value") is not None
   }
-def safe_tikwm_request(target_url: str, params=None, data=None, method: str = "POST", timeout: int = 25, max_retries: int = 3) -> Dict[str, Any]:
-  global last_api_call_time
-  req_headers = get_tikwm_headers()
-  for attempt in range(max_retries):
-    with api_call_lock:
-      now = time.time()
-      elapsed = now - last_api_call_time
-      if elapsed < 1.5:
-        time.sleep(1.5 - elapsed)
-      try:
-        if HAS_CURL_CFFI and c_requests is not None:
-          s = c_requests.Session(impersonate="chrome124")
-          if method.upper() == "POST":
-            resp = s.post(target_url, params=params, data=data, headers=req_headers, timeout=timeout)
-          else:
-            resp = s.get(target_url, params=params, headers=req_headers, timeout=timeout)
-        else:
-          if method.upper() == "POST":
-            resp = requests.post(target_url, params=params, data=data, headers=req_headers, timeout=timeout)
-          else:
-            resp = requests.get(target_url, params=params, headers=req_headers, timeout=timeout)
-        last_api_call_time = time.time()
-        if resp.status_code == 200:
-          try:
-            res_json = resp.json()
-          except Exception:
-            res_json = None
-          if res_json is not None:
-            if res_json.get("code") == -1 and ("limit" in res_json.get("msg", "").lower() or "rate" in res_json.get("msg", "").lower()):
-              pass
-            else:
-              return res_json
-        elif resp.status_code in [403, 429, 502, 503, 504]:
-          method = "GET" if method.upper() == "POST" else "POST"
-          if method == "GET" and data and not params:
-            params = data
-        else:
-          if attempt == max_retries - 1:
-            return {"code": resp.status_code, "msg": f"HTTP Error {resp.status_code}"}
-      except Exception as e:
-        last_api_call_time = time.time()
-        if attempt == max_retries - 1:
-          return {"code": -1, "msg": str(e)}
-    time.sleep(random.uniform(2.0, 3.5))
-  return {"code": -1, "msg": "TikWM connection failed"}
-def fetch_tiktok_user_videos(username_or_url: str, count: int = 15) -> List[Dict[str, Any]]:
-  raw = username_or_url.strip()
-  u_match = re.search(r'tiktok\.com/@([a-zA-Z0-9_.-]+)', raw)
-  if u_match:
-    username = u_match.group(1)
-  elif raw.startswith("@"):
-    username = raw.lstrip("@").strip()
-  else:
-    username = raw.split("/")[0].strip()
-  if not username:
-    return []
-  results = []
-  seen = set()
+def _write_netscape_cookie_file(cookies: Any = None) -> Optional[str]:
+  cookie_list = _normalize_cookies_list(cookies)
+  if not cookie_list:
+    return None
+  fd, tmp_path = tempfile.mkstemp(prefix="tt_cookies_", suffix=".txt")
   try:
-    if HAS_CURL_CFFI and c_requests is not None:
-      s_tt = c_requests.Session(impersonate="chrome124")
-      headers_page = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://www.google.com/"
-      }
-      r_prof = s_tt.get(f"https://www.tiktok.com/@{username}", headers=headers_page, timeout=12)
-      if r_prof.status_code == 200:
-        m_rehyd = re.search(r'<script[^>]+id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>', r_prof.text, re.DOTALL)
-        if m_rehyd:
-          u_data = json.loads(m_rehyd.group(1))
-          ud = u_data.get("__DEFAULT_SCOPE__", {}).get("webapp.user-detail", {})
-          sec_uid = ud.get("userInfo", {}).get("user", {}).get("secUid")
-          if sec_uid:
-            dev_id = str(random.randint(7250000000000000000, 7325099899999994577))
-            verify_fp = f'verify_{"".join(random.choices(string.hexdigits, k=7))}'
-            headers_api = {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-              "Referer": f"https://www.tiktok.com/@{username}",
-              "Accept": "*/*"
-            }
-            page_cursor = "0"
-            while len(results) < count:
-              batch_size = min(15, count - len(results))
-              params_creator = {
-                "aid": "1988",
-                "app_language": "en",
-                "app_name": "tiktok_web",
-                "browser_language": "en-US",
-                "browser_name": "Mozilla",
-                "browser_online": "true",
-                "browser_platform": "Win32",
-                "browser_version": "5.0 (Windows)",
-                "channel": "tiktok_web",
-                "cookie_enabled": "true",
-                "count": str(batch_size),
-                "cursor": page_cursor,
-                "device_id": dev_id,
-                "device_platform": "web_pc",
-                "focus_state": "true",
-                "from_page": "user",
-                "history_len": "2",
-                "is_fullscreen": "false",
-                "is_page_visible": "true",
-                "language": "en",
-                "os": "windows",
-                "priority_region": "",
-                "referer": "",
-                "region": "US",
-                "screen_height": "1080",
-                "screen_width": "1920",
-                "secUid": sec_uid,
-                "type": "1",
-                "tz_name": "UTC",
-                "verifyFp": verify_fp,
-                "webcast_language": "en",
-              }
-              r_api = s_tt.get("https://www.tiktok.com/api/creator/item_list/", params=params_creator, headers=headers_api, timeout=12)
-              if r_api.status_code != 200:
-                break
-              data_api = r_api.json()
-              items = data_api.get("itemList", [])
-              if not items:
-                break
-              for it in items:
-                v_id = str(it.get("id"))
-                if v_id and v_id not in seen:
-                  seen.add(v_id)
-                  desc = it.get("desc", "").strip()
-                  v_play = it.get("video", {}).get("playAddr") or it.get("video", {}).get("downloadAddr")
-                  results.append({
-                    "video_id": v_id,
-                    "title": desc if desc else f"{username} Video {v_id}",
-                    "play": None,
-                    "source_url": f"https://www.tiktok.com/@{username}/video/{v_id}",
-                    "author": {"unique_id": username}
-                  })
-                  if len(results) >= count:
-                    break
-              if not data_api.get("hasMore"):
-                break
-              page_cursor = str(data_api.get("cursor", ""))
-              if not page_cursor or page_cursor == "0":
-                break
-            if results:
-              return results
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+      f.write("# Netscape HTTP Cookie File\n")
+      for c in cookie_list:
+        name = str(c.get("name") or "").strip()
+        val = str(c.get("value") or "")
+        if not name:
+          continue
+        domain = str(c.get("domain") or ".tiktok.com")
+        if not domain.startswith(".") and "tiktok" in domain:
+          domain = "." + domain
+        include_sub = "TRUE" if domain.startswith(".") else "FALSE"
+        path = str(c.get("path") or "/")
+        secure = "TRUE" if c.get("secure", True) else "FALSE"
+        expiry = int(c.get("expiry") or c.get("expires") or (int(time.time()) + 86400 * 30))
+        f.write(f"{domain}\t{include_sub}\t{path}\t{secure}\t{expiry}\t{name}\t{val}\n")
+    return tmp_path
   except Exception:
-    pass
-  if len(results) >= count:
-    return results
-  user_posts_url = "https://tikwm.com/api/user/posts"
-  data = safe_tikwm_request(user_posts_url, params={"unique_id": username, "count": count}, method="GET", timeout=15)
-  if data.get("code") == 0 and data.get("data", {}).get("videos"):
-    for v in data["data"]["videos"]:
-      v_id = str(v.get("video_id") or v.get("id"))
-      if v_id and v_id not in seen:
-        seen.add(v_id)
-        results.append({
-          "video_id": v_id,
-          "title": v.get("title") or f"{username} Video {v_id}",
-          "play": v.get("play") or v.get("hdplay") or v.get("wmplay"),
-          "source_url": f"https://www.tiktok.com/@{username}/video/{v_id}",
-          "author": {"unique_id": username}
-        })
-        if len(results) >= count:
-          return results
-  if len(results) < count:
-    ub_url = f"https://urlebird.com/user/{username}/"
-    profile = random.choice(URLEBIRD_BROWSER_PROFILES)
-    headers = get_urlebird_headers(profile)
-    html_body = ""
     try:
-      if HAS_CURL_CFFI and c_requests is not None and profile.get("impersonate"):
-        s = c_requests.Session(impersonate=profile["impersonate"])
-        r = s.get(ub_url, headers=headers, timeout=10)
-      else:
-        r = requests.get(ub_url, headers=headers, timeout=10)
-      if r.status_code == 200 and r.text:
-        html_body = r.text
-      elif (r.status_code in [403, 503] or "cloudflare" in r.text.lower()) and check_flaresolverr():
-        fs_res = request_via_flaresolverr(ub_url, timeout=15)
-        if fs_res:
-          html_body = fs_res
+      os.remove(tmp_path)
     except Exception:
-      if check_flaresolverr():
-        fs_res = request_via_flaresolverr(ub_url, timeout=15)
-        if fs_res:
-          html_body = fs_res
-    if html_body:
-      for m in re.findall(r'href=["\']((?:https?://urlebird\.com)?/video/[^"\'?#]+)["\']', html_body):
-        full_url = m if m.startswith("http") else f"https://urlebird.com{m}"
-        vid_match = re.search(r'(\d{15,22})', full_url)
-        if vid_match and vid_match.group(1) not in seen:
-          v_id = vid_match.group(1)
-          seen.add(v_id)
-          results.append({
-            "video_id": v_id,
-            "title": f"{username} Video {v_id}",
-            "author": {"unique_id": username},
-            "urlebird_url": full_url,
-            "source_url": f"https://www.tiktok.com/@{username}/video/{v_id}"
-          })
-          if len(results) >= count:
-            break
-  return results
-def search_tiktok_videos(keywords: str, cursor: int = 0, count: int = 15) -> Dict[str, Any]:
-  search_url = "https://tikwm.com/api/feed/search"
-  params = {"keywords": keywords, "count": count, "cursor": cursor, "web": 1}
-  data = safe_tikwm_request(search_url, data=params, method="POST", timeout=20)
-  if data.get("code") == 0 and data.get("data", {}).get("videos"):
-    return data
-  data_get = safe_tikwm_request(search_url, params=params, method="GET", timeout=20)
-  if data_get.get("code") == 0 and data_get.get("data", {}).get("videos"):
-    return data_get
+      pass
+    return None
+def _is_valid_video_file(file_path: str) -> bool:
+  if not os.path.exists(file_path) or os.path.getsize(file_path) <= 1000:
+    return False
   try:
-    from core.media.tiktok_browser import search_tiktok_via_browser
-    browser_vids = search_tiktok_via_browser(keywords, count=count)
-    if browser_vids:
-      return {"code": 0, "msg": "success", "data": {"videos": browser_vids}}
+    with open(file_path, "rb") as f:
+      head = f.read(64).lstrip().lower()
+    if head.startswith(b"<html") or head.startswith(b"<!doctype") or head.startswith(b"{"):
+      return False
   except Exception:
-    pass
+    return False
+  return True
+def fetch_tiktok_user_videos(
+  username_or_url: str,
+  count: int = 15,
+  driver=None,
+  exclude_ids: Optional[Iterable[str]] = None,
+  match_keywords: Optional[List[str]] = None,
+  stop_check: Optional[Callable[[], bool]] = None,
+) -> List[Dict[str, Any]]:
+  return fetch_tiktok_channel_via_browser(
+    username_or_url,
+    count=count,
+    driver=driver,
+    exclude_ids=exclude_ids,
+    match_keywords=match_keywords,
+    stop_check=stop_check,
+  )
+def search_tiktok_videos(
+  keywords: str,
+  cursor: int = 0,
+  count: int = 15,
+  driver=None,
+  exclude_ids: Optional[Iterable[str]] = None,
+  stop_check: Optional[Callable[[], bool]] = None,
+) -> Dict[str, Any]:
+  browser_vids = search_tiktok_via_browser(
+    keywords,
+    count=count,
+    driver=driver,
+    exclude_ids=exclude_ids,
+    stop_check=stop_check,
+  )
+  if browser_vids:
+    return {"code": 0, "msg": "success", "data": {"videos": browser_vids}}
   return {"code": -1, "msg": "No TikTok videos found", "data": {"videos": []}}
-def resolve_tiktok_video_url(raw_url_or_id: str, urlebird_url: Optional[str] = None) -> Tuple[Optional[str], str]:
-  url = raw_url_or_id if raw_url_or_id.startswith("http") else f"https://www.tiktok.com/@user/video/{raw_url_or_id}"
-  try:
-    detail_resp = safe_tikwm_request("https://tikwm.com/api/", data={"url": url, "hd": 1}, method="POST", timeout=20)
-    if detail_resp.get("code") == 0 and detail_resp.get("data"):
-      d = detail_resp["data"]
-      play = d.get("play") or d.get("hdplay") or d.get("wmplay")
-      if play:
-        return play, d.get("title", "")
-  except Exception:
-    pass
-  return None, ""
-def download_stream_to_file(download_url: str, save_path: str) -> bool:
+def resolve_tiktok_video_detail(
+  raw_url_or_id: str,
+  driver=None,
+  stop_check: Optional[Callable[[], bool]] = None,
+) -> Dict[str, Any]:
+  return resolve_tiktok_video_via_browser(raw_url_or_id, driver=driver, stop_check=stop_check)
+def resolve_tiktok_video_url(
+  raw_url_or_id: str,
+  driver=None,
+  stop_check: Optional[Callable[[], bool]] = None,
+) -> Tuple[Optional[str], str]:
+  meta = resolve_tiktok_video_detail(raw_url_or_id, driver=driver, stop_check=stop_check)
+  play_urls = meta.get("play_urls") or []
+  return (play_urls[0] if play_urls else None), (meta.get("title") or "")
+def download_stream_to_file(
+  download_url: str,
+  save_path: str,
+  cookies: Any = None,
+  user_agent: Optional[str] = None,
+  referer: str = "https://www.tiktok.com/",
+  stop_check: Optional[Callable[[], bool]] = None,
+) -> bool:
   if not download_url:
     return False
+  cookie_dict = _cookies_to_dict(cookies)
   headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+    "User-Agent": user_agent or DEFAULT_DESKTOP_UA,
     "Accept": "*/*",
     "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.tiktok.com/",
+    "Referer": referer,
     "Origin": "https://www.tiktok.com",
     "Range": "bytes=0-",
     "Sec-Fetch-Dest": "video",
@@ -288,30 +155,160 @@ def download_stream_to_file(download_url: str, save_path: str) -> bool:
     "Sec-Fetch-Site": "cross-site",
   }
   for attempt in range(3):
+    if _should_stop(stop_check):
+      return False
+    use_cffi = HAS_CURL_CFFI and c_requests is not None and attempt < 2
     try:
-      with requests.get(download_url, headers=headers, stream=True, timeout=30) as r:
-        if r.status_code in (200, 206):
+      if use_cffi:
+        resp_ctx = c_requests.get(
+          download_url,
+          headers=headers,
+          cookies=cookie_dict or None,
+          impersonate="chrome124",
+          stream=True,
+          timeout=35,
+        )
+      else:
+        resp_ctx = requests.get(
+          download_url,
+          headers=headers,
+          cookies=cookie_dict or None,
+          stream=True,
+          timeout=35,
+        )
+      with resp_ctx as r:
+        content_type = (r.headers.get("Content-Type") or "").lower()
+        if r.status_code in (200, 206) and not content_type.startswith(("text/", "application/json")):
           with open(save_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=256 * 1024):
+            iterator = r.iter_content(chunk_size=256 * 1024)
+            for chunk in iterator:
+              if _should_stop(stop_check):
+                f.close()
+                if os.path.exists(save_path):
+                  try:
+                    os.remove(save_path)
+                  except Exception:
+                    pass
+                return False
               if chunk:
                 f.write(chunk)
-          if os.path.exists(save_path) and os.path.getsize(save_path) > 1000:
+          if _is_valid_video_file(save_path):
             return True
     except Exception:
       pass
+    if os.path.exists(save_path):
+      try:
+        os.remove(save_path)
+      except Exception:
+        pass
     time.sleep(0.5)
   return False
+def download_tiktok_video_ytdlp(
+  video_url: str,
+  save_path: str,
+  cookies: Any = None,
+  user_agent: Optional[str] = None,
+) -> Tuple[bool, str]:
+  if not video_url:
+    return False, ""
+  cookie_file = _write_netscape_cookie_file(cookies)
+  base_no_ext = os.path.splitext(save_path)[0]
+  outtmpl = base_no_ext + ".%(ext)s"
+  ydl_opts: Dict[str, Any] = {
+    "outtmpl": outtmpl,
+    "format": "mp4/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+    "merge_output_format": "mp4",
+    "quiet": True,
+    "no_warnings": True,
+    "noplaylist": True,
+    "socket_timeout": 30,
+    "retries": 5,
+    "http_headers": {
+      "User-Agent": user_agent or DEFAULT_DESKTOP_UA,
+      "Referer": "https://www.tiktok.com/",
+    },
+  }
+  if cookie_file:
+    ydl_opts["cookiefile"] = cookie_file
+  title = ""
+  try:
+    if os.path.exists(save_path):
+      try:
+        os.remove(save_path)
+      except Exception:
+        pass
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+      info = ydl.extract_info(video_url, download=True)
+      if isinstance(info, dict):
+        title = str(info.get("description") or info.get("title") or "").strip()
+    if not _is_valid_video_file(save_path):
+      for ext in (".mp4", ".mkv", ".webm", ".mov"):
+        candidate = base_no_ext + ext
+        if os.path.exists(candidate) and _is_valid_video_file(candidate):
+          if candidate != save_path:
+            os.replace(candidate, save_path)
+          break
+    return _is_valid_video_file(save_path), title
+  except Exception:
+    return False, title
+  finally:
+    if cookie_file and os.path.exists(cookie_file):
+      try:
+        os.remove(cookie_file)
+      except Exception:
+        pass
+def download_tiktok_video(
+  video_url_or_id: str,
+  save_path: str,
+  driver=None,
+  stop_check: Optional[Callable[[], bool]] = None,
+) -> Tuple[bool, Dict[str, Any]]:
+  if _should_stop(stop_check):
+    return False, {}
+  meta = resolve_tiktok_video_detail(video_url_or_id, driver=driver, stop_check=stop_check)
+  if _should_stop(stop_check):
+    return False, meta
+  cookies = meta.get("cookies") or None
+  user_agent = meta.get("user_agent") or DEFAULT_DESKTOP_UA
+  play_urls = meta.get("play_urls") or []
+  canonical_url = meta.get("source_url") or (
+    video_url_or_id
+    if str(video_url_or_id).startswith("http")
+    else f"https://www.tiktok.com/@_/video/{video_url_or_id}"
+  )
+  for cdn_url in play_urls:
+    if _should_stop(stop_check):
+      return False, meta
+    if download_stream_to_file(
+      cdn_url,
+      save_path,
+      cookies=cookies,
+      user_agent=user_agent,
+      stop_check=stop_check,
+    ):
+      return True, meta
+  if _should_stop(stop_check):
+    return False, meta
+  ok, ydl_title = download_tiktok_video_ytdlp(
+    canonical_url,
+    save_path,
+    cookies=cookies,
+    user_agent=user_agent,
+  )
+  if ok and ydl_title and not meta.get("title"):
+    meta["title"] = ydl_title
+  return ok, meta
 def convert_tiktok_hashtags_to_facebook(text: str) -> str:
   if not text:
     return ""
   replacements = {
-    r'#fyp\b': '#reels',
-    r'#xuhuong\b': '#facebook',
-    r'#tiktok\b': '#facebook',
-    r'#tik_tok\b': '#fb',
-    r'#trending\b': '#viral',
-    r'#fypシ\b': '#viral',
-    r'#foryou\b': '#reels'
+    r"#fyp\b": "#reels",
+    r"#xuhuong\b": "#facebook",
+    r"#tiktok\b": "#facebook",
+    r"#tik_tok\b": "#fb",
+    r"#trending\b": "#viral",
+    r"#fypシ\b": "#viral",
+    r"#foryou\b": "#reels",
   }
   for pattern, repl in replacements.items():
     text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
@@ -319,30 +316,30 @@ def convert_tiktok_hashtags_to_facebook(text: str) -> str:
 class TikTokScraper:
   def __init__(self, timeout: int = 30):
     self.timeout = timeout
-    self.session = requests.Session()
-    self.session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
   def is_downloaded(self, video_id: str) -> bool:
     row = db.fetch_one("SELECT id FROM videos_cache WHERE video_id = %s AND platform = 'tiktok'", (video_id,))
     return row is not None
   def mark_downloaded(self, video_id: str, page_id: str, source_url: str, file_path: str):
     db.execute(
-      "INSERT INTO videos_cache (video_id, platform, page_id, source_url, file_path) VALUES (%s, 'tiktok', %s, %s, %s) ON CONFLICT (video_id, platform) DO NOTHING",
-      (video_id, page_id, source_url, file_path)
+      "INSERT INTO videos_cache (video_id, platform, page_id, source_url, file_path) "
+      "VALUES (%s, 'tiktok', %s, %s, %s) ON CONFLICT (video_id, platform) DO NOTHING",
+      (video_id, page_id, source_url, file_path),
     )
-  def extract_video_info_tikwm(self, video_url: str) -> Optional[Dict[str, Any]]:
-    play_url, title = resolve_tiktok_video_url(video_url)
-    if play_url:
-      vid_match = re.search(r'(\d{15,22})', video_url)
-      vid = vid_match.group(1) if vid_match else str(int(time.time() * 1000))
-      return {"video_id": vid, "title": title, "play_url": play_url, "hd_url": play_url}
+  def extract_video_info(self, video_url: str, driver=None) -> Optional[Dict[str, Any]]:
+    meta = resolve_tiktok_video_detail(video_url, driver=driver)
+    play_urls = meta.get("play_urls") or []
+    if play_urls or meta.get("video_id"):
+      return {
+        "video_id": meta.get("video_id") or str(int(time.time() * 1000)),
+        "title": meta.get("title") or "",
+        "play_url": play_urls[0] if play_urls else None,
+        "hd_url": play_urls[0] if play_urls else None,
+      }
     return None
   def download_to_page_pipeline(self, video_url: str, page_folder: str, page_id: str = "") -> Optional[Dict[str, Any]]:
-    play_url, title = resolve_tiktok_video_url(video_url)
-    if not play_url:
-      return None
-    vid_match = re.search(r'(\d{15,22})', video_url)
+    vid_match = re.search(r"(\d{15,22})", video_url)
     video_id = vid_match.group(1) if vid_match else str(int(time.time() * 1000))
-    if self.is_downloaded(video_id):
+    if vid_match and self.is_downloaded(video_id):
       return {"skipped": True, "reason": "Already downloaded", "video_id": video_id}
     target_base = Path(page_folder)
     target_base.mkdir(parents=True, exist_ok=True)
@@ -351,11 +348,27 @@ class TikTokScraper:
     video_subfolder = target_base / str(next_idx)
     video_subfolder.mkdir(parents=True, exist_ok=True)
     video_file_path = video_subfolder / f"{video_id}.mp4"
-    caption_file_path = video_subfolder / "caption.txt"
-    if download_stream_to_file(play_url, str(video_file_path)):
+    ok, meta = download_tiktok_video(video_url, str(video_file_path))
+    if ok:
+      final_vid = meta.get("video_id") or video_id
+      if final_vid != video_id:
+        new_video_path = video_subfolder / f"{final_vid}.mp4"
+        try:
+          os.replace(str(video_file_path), str(new_video_path))
+          video_file_path = new_video_path
+        except Exception:
+          pass
+      title = meta.get("title") or ""
+      caption_file_path = video_subfolder / "caption.txt"
       with open(caption_file_path, "w", encoding="utf-8") as f:
         f.write(convert_tiktok_hashtags_to_facebook(title))
-      self.mark_downloaded(video_id, page_id, video_url, str(video_file_path))
-      return {"success": True, "video_id": video_id, "folder_index": next_idx, "video_path": str(video_file_path), "caption": title}
+      self.mark_downloaded(final_vid, page_id, meta.get("source_url") or video_url, str(video_file_path))
+      return {
+        "success": True,
+        "video_id": final_vid,
+        "folder_index": next_idx,
+        "video_path": str(video_file_path),
+        "caption": title,
+      }
     return None
 tiktok_scraper = TikTokScraper()

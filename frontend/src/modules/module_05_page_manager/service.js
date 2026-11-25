@@ -45,7 +45,6 @@ export async function deletePage(pageId) {
   }
 }
 export const SHARED_VIDEO_DIR_KEY = "fb_shared_video_folder";
-
 export function getSharedVideoFolder() {
   if (typeof window === "undefined") return "";
   try {
@@ -54,7 +53,6 @@ export function getSharedVideoFolder() {
     return "";
   }
 }
-
 export function setSharedVideoFolder(dir) {
   if (typeof window === "undefined") return;
   const clean = (dir || "").trim();
@@ -63,7 +61,6 @@ export function setSharedVideoFolder(dir) {
     localStorage.setItem(SHARED_VIDEO_DIR_KEY, clean);
   } catch {}
 }
-
 export async function selectReelsFolder(initialDir) {
   try {
     const res = await api.post("/api/pages/reels/select-folder", { initial_dir: initialDir || "" });
@@ -114,11 +111,9 @@ export async function openAiPage(uid, pageId) {
 export async function testAiKeys(payload) {
   return api.post("/api/pages/ai/test-key", payload);
 }
-
 export async function testPixabayKey(payload) {
   return api.post("/api/pages/ai/test-pixabay-key", payload);
 }
-
 export async function startAiPost(payload) {
   return api.post("/api/pages/ai/start", payload);
 }
@@ -260,9 +255,11 @@ export async function selectFolder(initialDir) {
     return { folder: "", success: false, error: err?.message || "" };
   }
 }
-export async function clearPageVideos(pageId, source) {
+export async function clearPageVideos(pageId, source, folder = "") {
   try {
-    const params = source ? { source } : {};
+    const params = {};
+    if (source) params.source = source;
+    if (folder) params.folder = folder;
     return await api.delete(`/api/pages/${pageId}/videos`, { params });
   } catch {
     return { success: false, deleted_count: 0 };
@@ -278,28 +275,6 @@ export async function deletePageVideo(pageId, videoDbId) {
 export async function updatePageKeywords(pageId, data) {
   try {
     return await api.put(`/api/pages/${pageId}/keywords`, data);
-  } catch {
-    return { success: false };
-  }
-}
-export async function bulkUpdateKeywords(keyword, source = "TIKTOK", url = "") {
-  try {
-    return await api.post("/api/pages/bulk-keywords", { keyword, source, url });
-  } catch {
-    return { success: false };
-  }
-}
-export async function getPageToolConfig(tool) {
-  try {
-    const res = await api.get(`/api/pages/config/${tool}`);
-    return res && res.config ? res.config : {};
-  } catch {
-    return {};
-  }
-}
-export async function savePageToolConfig(tool, config) {
-  try {
-    return await api.post("/api/pages/config", { tool, config });
   } catch {
     return { success: false };
   }
@@ -360,14 +335,6 @@ export async function saveYoutubeConfig(config) {
     return await api.post("/api/pages/youtube/config", config);
   } catch {
     return null;
-  }
-}
-export async function checkFolderData(folder) {
-  try {
-    const res = await api.post("/api/pages/check-folder", { folder });
-    return res || { has_data: false, count: 0 };
-  } catch {
-    return { has_data: false, count: 0 };
   }
 }
 export async function clearAllVideos(source = null, folder = "") {
