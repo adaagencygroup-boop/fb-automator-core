@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useSyncExternalStore } from "react";
+import React, { useState, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
   X,
@@ -113,6 +113,23 @@ export default function AccountSelectModal({
   const [selectedCategories, setSelectedCategories] = useState(() => new Set(["all"]));
   const [draftSelected, setDraftSelected] = useState(() => new Set(selectedUids));
   const [copiedUid, setCopiedUid] = useState(null);
+  const accountDragRef = useRef({ active: false, moved: false, startUid: null, shouldSelect: false });
+
+  useEffect(() => {
+    const finishAccountDrag = () => {
+      const drag = accountDragRef.current;
+      drag.active = false;
+      window.setTimeout(() => {
+        accountDragRef.current = { active: false, moved: false, startUid: null, shouldSelect: false };
+      }, 0);
+    };
+    window.addEventListener("mouseup", finishAccountDrag);
+    window.addEventListener("blur", finishAccountDrag);
+    return () => {
+      window.removeEventListener("mouseup", finishAccountDrag);
+      window.removeEventListener("blur", finishAccountDrag);
+    };
+  }, []);
 
   // Đồng bộ draft selection khi mở popup hoặc prop selectedUids thay đổi
   useEffect(() => {
@@ -328,6 +345,35 @@ export default function AccountSelectModal({
       }
       return next;
     });
+  };
+
+  const handleAccountMouseDown = (event, account, ready, isChecked) => {
+    if (event.button !== 0 || !ready || isRunning || event.target.closest("button")) return;
+    accountDragRef.current = {
+      active: true,
+      moved: false,
+      startUid: account.uid,
+      shouldSelect: !isChecked,
+    };
+  };
+
+  const handleAccountMouseEnter = (account, ready) => {
+    const drag = accountDragRef.current;
+    if (!drag.active || !ready || account.uid === drag.startUid) return;
+    drag.moved = true;
+    setDraftSelected((previous) => {
+      const next = new Set(previous);
+      [drag.startUid, account.uid].forEach((uid) => {
+        if (drag.shouldSelect) next.add(uid);
+        else next.delete(uid);
+      });
+      return next;
+    });
+  };
+
+  const handleAccountRowClick = (uid, ready) => {
+    if (accountDragRef.current.moved) return;
+    handleToggleAccount(uid, ready);
   };
 
   // Bật/tắt chọn tất cả nick trong bảng hiển thị hiện tại
@@ -755,7 +801,9 @@ export default function AccountSelectModal({
                       return (
                         <tr
                           key={acc.uid}
-                          onClick={() => handleToggleAccount(acc.uid, ready)}
+                          onMouseDown={(event) => handleAccountMouseDown(event, acc, ready, isChecked)}
+                          onMouseEnter={() => handleAccountMouseEnter(acc, ready)}
+                          onClick={() => handleAccountRowClick(acc.uid, ready)}
                           className={`transition-colors ${
                             ready
                               ? isChecked
