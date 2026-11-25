@@ -105,12 +105,16 @@ function PostCard({ post, active, onSelect, onDelete }) {
         {SOURCE_TEXT[post.source_type] || "Nguồn"}:
         <span className="truncate text-[#334155]">{post.source_name || "—"}</span>
       </p>
+      {/* Tổng Facebook (cùng loại số với Share và cột "Tương tác hiện tại"); số đã quét xem ở thẻ số liệu bên phải */}
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-[#F1F5F9] pt-2.5 text-xs text-[#64748B]">
-        <span className={`inline-flex items-center gap-1 ${active ? "font-semibold text-[#2563EB]" : ""}`}>
-          <ThumbsUp className="size-3.5" /> {nf(post.like_count)} Like
+        <span
+          className={`inline-flex items-center gap-1 ${active ? "font-semibold text-[#2563EB]" : ""}`}
+          title={`Tổng trên Facebook · đã quét ${nf(post.like_count)}`}
+        >
+          <ThumbsUp className="size-3.5" /> {nf(post.fb_like_count)} Like
         </span>
-        <span className="inline-flex items-center gap-1">
-          <MessageCircle className="size-3.5" /> {nf(post.comment_count)} Cmt
+        <span className="inline-flex items-center gap-1" title={`Tổng trên Facebook · đã quét ${nf(post.comment_count)}`}>
+          <MessageCircle className="size-3.5" /> {nf(post.fb_comment_count)} Cmt
         </span>
         <span className="inline-flex items-center gap-1" title="Facebook chỉ cho xem tổng số chia sẻ">
           <Share2 className="size-3.5" /> {nf(post.fb_share_count)} Share
@@ -344,9 +348,10 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
 
           <div className="grid gap-3 sm:grid-cols-3">
             {[
-              { id: "like", label: "Tài khoản Like", value: counts.like },
+              // Like / Bình luận: số đã quét (khớp số dòng của bảng) kèm tổng Facebook của bài
+              { id: "like", label: "Tài khoản Like", value: counts.like, hint: `/ ${nf(post?.fb_like_count)} trên Facebook` },
               { id: "share", label: "Lượt chia sẻ", value: counts.share, hint: "Facebook chỉ cho xem tổng số", info: true },
-              { id: "comment", label: "Bình luận chi tiết", value: counts.comment },
+              { id: "comment", label: "Bình luận chi tiết", value: counts.comment, hint: `/ ${nf(post?.fb_comment_count)} trên Facebook` },
             ].map((k) =>
               // Thẻ chia sẻ chỉ hiện tổng số: không có tab danh sách để mở
               k.info ? (
@@ -366,6 +371,7 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
                 >
                   <p className={`text-[13px] font-semibold uppercase ${tab === k.id ? "text-[#2563EB]" : "text-[#475569]"}`}>{k.label}</p>
                   <p className={`mt-1 text-3xl font-bold tabular-nums ${tab === k.id ? "text-[#2563EB]" : "text-[#0F172A]"}`}>{nf(k.value)}</p>
+                  {post && <p className="mt-0.5 text-[11px] text-slate-400">{k.hint}</p>}
                 </button>
               ),
             )}
