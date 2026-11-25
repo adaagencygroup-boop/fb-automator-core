@@ -504,29 +504,65 @@ for (const [candidateIndex, node] of postNodes.entries()) {
   // NẾU KHÔNG CÓ messageRoot -> Bài viết không có text (chỉ có ảnh/video/share bài khác không kèm caption).
   // Tuyệt đối KHÔNG fallback sang các div[dir="auto"] ngoài messageRoot vì sẽ bắt nhầm bình luận!
 
-  const TIME_SELECTOR = 'abbr[data-utime], time[datetime], [data-utime], [title], [aria-label], [aria-labelledby]';
+  const TIME_SELECTOR = 'abbr[data-utime], time[datetime], [data-utime], [datetime], [data-tooltip-content], [data-time], [title], [aria-label], [aria-labelledby]';
   const timeNodes = Array.from(node.querySelectorAll(TIME_SELECTOR));
-  // Một số layout đặt nhãn thời gian trong chính permalink và các span con
-  // (chữ có thể bị chèn ký tự zero-width), không có abbr/data-utime.
-  let linkAncestor = postLink;
-  for (let depth = 0; linkAncestor && linkAncestor !== node && depth < 5; depth++, linkAncestor = linkAncestor.parentElement) {
-    if (!timeNodes.includes(linkAncestor)) timeNodes.push(linkAncestor);
-  }
   const timeLabelText = (el) => {
     const referenced = (el.getAttribute('aria-labelledby') || '').split(/\s+/)
       .map((id) => document.getElementById(id)?.textContent || '')
       .filter(Boolean).join(' ');
-    return cleanTimeText(el.getAttribute('title') || el.getAttribute('datetime') || el.getAttribute('aria-label') || referenced || el.innerText || el.textContent);
+    return cleanTimeText(
+      el.getAttribute('title') || el.getAttribute('datetime') || el.getAttribute('data-tooltip-content') ||
+      el.getAttribute('data-time') || el.getAttribute('aria-label') || referenced || el.innerText || el.textContent
+    );
   };
-  // Timestamp of the post is normally inside its permalink in the post header.
-  // Prefer that metadata so a comment or a nested shared post cannot supply the date.
-  const permalinkTimeNodes = postLink
-    ? [postLink, ...postLink.querySelectorAll(TIME_SELECTOR)]
-    : [];
+  const postIdentityOf = (rawUrl) => {
+    if (!rawUrl) return '';
+    try {
+      const url = new URL(rawUrl, location.href);
+      const storyId = url.searchParams.get('story_fbid') || url.searchParams.get('fbid');
+      if (storyId) return `post:${storyId}`;
+      const postMatch = url.pathname.match(/\/posts\/([^/?#]+)/i);
+      if (postMatch) return `post:${postMatch[1]}`;
+      const mediaMatch = url.pathname.match(/\/(?:reels?|videos?)\/([^/?#]+)/i);
+      if (mediaMatch) return `media:${mediaMatch[1]}`;
+      const videoId = url.searchParams.get('v');
+      return videoId ? `media:${videoId}` : '';
+    } catch {
+      return '';
+    }
+  };
+  // Locate the same post's timestamp permalink in the card header, even when
+  // Facebook places that header just outside the action/content element we marked.
+  const targetPostIdentity = postIdentityOf(postUrl);
+  const matchingPostLinks = [];
+  if (targetPostIdentity) {
+    let root = node;
+    for (let depth = 0; root && root !== document.body && depth < 8; depth++, root = root.parentElement) {
+      for (const anchor of root.querySelectorAll('a[href]')) {
+        if (postIdentityOf(anchor.href || anchor.getAttribute('href')) === targetPostIdentity
+          && !isCommentLink(anchor, root) && !matchingPostLinks.includes(anchor)) {
+          matchingPostLinks.push(anchor);
+        }
+      }
+    }
+  }
+  // Also inspect the original post link's descendants for aria-labelledby/title metadata.
+  const permalinkAnchors = [...new Set([...matchingPostLinks, ...(postLink ? [postLink] : [])])];
+  const permalinkTimeNodes = permalinkAnchors.flatMap((anchor) => {
+    const nodes = [anchor, ...anchor.querySelectorAll(TIME_SELECTOR)];
+    // Comet can put the timestamp beside (rather than inside) the permalink.
+    // Read only the small header wrapper around that exact post link.
+    let header = anchor.parentElement;
+    for (let depth = 0; header && depth < 4; depth++, header = header.parentElement) {
+      if (header.querySelectorAll('a[href]').length > 8) break;
+      nodes.push(...header.querySelectorAll(TIME_SELECTOR));
+    }
+    return nodes;
+  });
   const orderedTimeNodes = [...new Set([...permalinkTimeNodes, ...timeNodes])];
   const timeNode = orderedTimeNodes.find((el) => el.hasAttribute('data-utime') || el.hasAttribute('datetime')) ||
     orderedTimeNodes.find((el) => isTimeLabel(timeLabelText(el)));
-  const utimeRaw = timeNode?.getAttribute('data-utime') || timeNode?.querySelector('[data-utime]')?.getAttribute('data-utime');
+  const utimeRaw = timeNode?.getAttribute('data-utime') || timeNode?.closest('[data-utime]')?.getAttribute('data-utime') || timeNode?.querySelector('[data-utime]')?.getAttribute('data-utime');
   const utime = Number(utimeRaw);
   const rawTimeText = timeNode ? timeLabelText(timeNode) : '';
   let publishedDate = timeNode?.getAttribute('datetime') ? new Date(timeNode.getAttribute('datetime')) : null;

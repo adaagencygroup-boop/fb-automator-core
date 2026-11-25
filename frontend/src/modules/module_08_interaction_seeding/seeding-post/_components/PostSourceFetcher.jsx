@@ -114,6 +114,9 @@ export default function PostSourceFetcher({
   const [adding, setAdding] = useState(false);
 
   const listSeq = useRef(0);
+  const listGeneration = useRef(0);
+  const listRefreshPendingRef = useRef(false);
+  const loadListRef = useRef(null);
   const loadingListRef = useRef(false);
   const listItemsRef = useRef([]);
   const dragSelectRef = useRef({ active: false, moved: false, startId: null });
@@ -171,18 +174,27 @@ export default function PostSourceFetcher({
 
   // Đổi nguồn / từ khoá → tải lại từ đầu và bỏ lựa chọn ("tất cả kết quả lọc" gắn với từ khoá lúc chọn)
   useEffect(() => {
+    listGeneration.current += 1;
+    listSeq.current += 1;
+    loadingListRef.current = false;
+    listRefreshPendingRef.current = false;
     listItemsRef.current = [];
     setList({ items: [], total: 0, available: true });
     setSel(emptySelection());
   }, [sourceKey, q]);
 
   const loadList = useCallback(async (allPages = true) => {
+    const generation = listGeneration.current;
     if (!sourceKey) {
       listItemsRef.current = [];
       setList({ items: [], total: 0, available: true });
       return;
     }
-    if (!allPages && loadingListRef.current) return;
+    if (!allPages && loadingListRef.current) {
+      listRefreshPendingRef.current = true;
+      return;
+    }
+    if (allPages) listRefreshPendingRef.current = false;
     const seq = ++listSeq.current;
     loadingListRef.current = true;
     setLoadingList(true);
@@ -200,12 +212,9 @@ export default function PostSourceFetcher({
       if (seq !== listSeq.current) return;
       let total = Number(res?.total || 0);
       const mergeUnique = (rows) => {
-        const seen = new Set();
-        return rows.filter((item) => {
-          if (seen.has(item.id)) return false;
-          seen.add(item.id);
-          return true;
-        });
+        const byId = new Map();
+        rows.forEach((item) => byId.set(item.id, item));
+        return [...byId.values()];
       };
       let items = mergeUnique(allPages
         ? (res?.items || [])
@@ -235,9 +244,19 @@ export default function PostSourceFetcher({
       if (seq === listSeq.current) {
         loadingListRef.current = false;
         setLoadingList(false);
+        if (generation === listGeneration.current && listRefreshPendingRef.current) {
+          listRefreshPendingRef.current = false;
+          window.setTimeout(() => {
+            if (generation === listGeneration.current) loadListRef.current?.(false);
+          }, 0);
+        }
       }
     }
   }, [sourceKey, q]);
+
+  useEffect(() => {
+    loadListRef.current = loadList;
+  }, [loadList]);
 
   useEffect(() => {
     loadList();
@@ -579,7 +598,7 @@ export default function PostSourceFetcher({
                   const { Icon, label } = TYPES[p.post_type] || TYPES.text;
                   const checked = p.added || isSelected(sel, p.id);
                   const { title, desc } = splitContent(p.content);
-                    const date = formatDateOnly(p.published_text || p.published_at);
+                    const date = formatDateOnly(p.published_text) || formatDateOnly(p.published_at);
                   return (
                     <label
                       key={p.id}
