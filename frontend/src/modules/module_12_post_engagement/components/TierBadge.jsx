@@ -1,16 +1,16 @@
 "use client";
 
-// Huy hiệu "Mức tiềm năng" (cột QUAN TÂM) + 3 hộp chú giải ở chân bảng — theo Figma Module 12.
-// Mức 1: xanh lá #10B981 · Mức 2: vàng cam #F59E0B · Mức 3: xanh dương #3B82F6.
+// Huy hiệu "Mức tiềm năng" (cột QUAN TÂM) + hộp chú giải ở chân bảng.
+// Figma có 3 mức tính cả Share, nhưng Facebook chỉ cho xem tổng số lượt chia sẻ (không biết ai chia sẻ) → còn 2 mức
+// theo Like + Bình luận. Mức 1: xanh lá · Mức 2: vàng cam.
 
 export const TIERS = {
   1: { label: "Mức 1 (Cao)", cls: "bg-[#ECFDF5] border-[#A7F3D0] text-[#047857]" },
-  2: { label: "Mức 2 (Vừa)", cls: "bg-[#FFFBEB] border-[#FDE68A] text-[#B45309]" },
-  3: { label: "Mức 3 (Cơ bản)", cls: "bg-[#EFF6FF] border-[#BFDBFE] text-[#1D4ED8]" },
+  2: { label: "Mức 2 (Cơ bản)", cls: "bg-[#FFFBEB] border-[#FDE68A] text-[#B45309]" },
 };
 
 export function TierBadge({ tier, title }) {
-  const t = TIERS[tier] || TIERS[3];
+  const t = TIERS[tier] || TIERS[2];
   return (
     <span
       title={title}
@@ -21,9 +21,9 @@ export function TierBadge({ tier, title }) {
   );
 }
 
-/** Giải thích vì sao người này ở mức đó: đã Like / Share / Bình luận trên bài. */
+/** Giải thích vì sao người này ở mức đó: đã Like / Bình luận trên bài. */
 export function tierReason(row) {
-  const acts = [row.has_like && "bày tỏ cảm xúc", row.has_share && "chia sẻ", row.has_comment && "bình luận"].filter(Boolean);
+  const acts = [row.has_like && "bày tỏ cảm xúc", row.has_comment && "bình luận"].filter(Boolean);
   return acts.length ? `Đã ${acts.join(", ")} trên bài viết này` : "";
 }
 
@@ -49,23 +49,17 @@ export function ReactionIcon({ type }) {
 
 export function TierLegend() {
   return (
-    <div className="grid gap-3 md:grid-cols-3">
+    <div className="grid gap-3 md:grid-cols-2">
       <div className="rounded-xl border border-[#A7F3D0] bg-[#ECFDF5] px-4 py-3">
-        <p className="text-[13px] font-bold text-[#047857]">Mức 1: Tiềm năng tối đa</p>
+        <p className="text-[13px] font-bold text-[#047857]">Mức 1: Tiềm năng cao</p>
         <p className="mt-1 text-xs leading-5 text-[#059669]">
-          Tài khoản tương tác tối đa (vừa <b>Like</b>, <b>Share</b> và <b>Comment</b> tại bài viết).
+          Tài khoản vừa <b>Like</b> vừa <b>Comment</b> tại bài viết.
         </p>
       </div>
       <div className="rounded-xl border border-[#FDE68A] bg-[#FFFBEB] px-4 py-3">
-        <p className="text-[13px] font-bold text-[#B45309]">Mức 2: Tương tác tích cực</p>
+        <p className="text-[13px] font-bold text-[#B45309]">Mức 2: Tương tác cơ bản</p>
         <p className="mt-1 text-xs leading-5 text-[#D97706]">
-          Tài khoản có tương tác tích cực (thực hiện <b>2 trong 3</b> hành động Like / Share / Comment).
-        </p>
-      </div>
-      <div className="rounded-xl border border-[#BFDBFE] bg-[#EFF6FF] px-4 py-3">
-        <p className="text-[13px] font-bold text-[#1D4ED8]">Mức 3: Tương tác cơ bản</p>
-        <p className="mt-1 text-xs leading-5 text-[#2563EB]">
-          Tài khoản tương tác cơ bản (chỉ thực hiện <b>1 hành động</b> Like, hoặc Share, hoặc để lại Comment).
+          Tài khoản chỉ thực hiện <b>1 hành động</b>: Like, hoặc để lại Comment.
         </p>
       </div>
     </div>

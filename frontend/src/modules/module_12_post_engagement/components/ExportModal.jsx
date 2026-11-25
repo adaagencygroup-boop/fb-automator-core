@@ -13,10 +13,10 @@ const FORMATS = [
   { id: "txt", label: "Danh sách UID (.txt)", desc: "Mỗi dòng 1 UID — chạy seeding / quảng cáo", Icon: Hash, color: "text-violet-600" },
 ];
 
-const TAB_TEXT = { like: "Đã Like", share: "Đã Share", comment: "Bình luận" };
+const TAB_TEXT = { like: "Đã Like", comment: "Bình luận" };
 
 /**
- * Hộp thoại "Xuất toàn bộ file": định dạng + phạm vi (dòng đã chọn / tab đang xem / cả 3 loại tương tác của bài /
+ * Hộp thoại "Xuất toàn bộ file": định dạng + phạm vi (dòng đã chọn / tab đang xem / Like + Bình luận của bài /
  * mọi bài trong danh mục) + lọc mức quan tâm.
  */
 export default function ExportModal({ open, onOpenChange, post, postKeys = [], tab = "like", search = "", tier = null,
@@ -35,7 +35,7 @@ export default function ExportModal({ open, onOpenChange, post, postKeys = [], t
   const scopes = [
     selectedRows.length ? { id: "selected", label: `Các dòng đã chọn (${selectedRows.length})` } : null,
     post ? { id: "tab", label: `Tab đang xem của bài này (${TAB_TEXT[tab]})` } : null,
-    post ? { id: "post", label: "Toàn bộ Like + Share + Bình luận của bài này" } : null,
+    post ? { id: "post", label: "Toàn bộ Like + Bình luận của bài này" } : null,
     postKeys.length > 1 ? { id: "all", label: `Toàn bộ tương tác của ${postKeys.length} bài trong danh mục` } : null,
   ].filter(Boolean);
 
@@ -124,8 +124,7 @@ export default function ExportModal({ open, onOpenChange, post, postKeys = [], t
             >
               <option value="all">Tất cả mức</option>
               <option value="1">Chỉ Mức 1 (Cao)</option>
-              <option value="2">Chỉ Mức 2 (Vừa)</option>
-              <option value="3">Chỉ Mức 3 (Cơ bản)</option>
+              <option value="2">Chỉ Mức 2 (Cơ bản)</option>
             </select>
           </div>
         </div>
