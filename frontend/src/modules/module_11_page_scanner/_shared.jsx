@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card";
 import { toast } from "@/lib/toast";
 import { askConfirm } from "./shared/askConfirm";
 import { pageWindow, parseJsonField } from "./utils.mjs";
+import { useActionLock } from "./shared/useActionLock";
 
 export { pageWindow, parseJsonField };
 
@@ -42,16 +43,19 @@ export function formatLogsForCopy(logs = []) {
     .join("\n");
 }
 
-export function copyLogsToClipboard(logs = []) {
+/** Sao chép log; trả về promise để nút chờ sao chép xong (cùng key: bấm nhiều lần không xếp chồng thông báo). */
+export async function copyLogsToClipboard(logs = []) {
   if (!logs.length) {
-    toast.warning("Chưa có log để sao chép.");
+    toast.warning("Chưa có log để sao chép.", { key: "m11-copy-log" });
     return;
   }
   const text = formatLogsForCopy(logs);
-  navigator.clipboard
-    ?.writeText(text)
-    .then(() => toast.success(`Đã sao chép ${logs.length} dòng log`))
-    .catch(() => toast.error("Không thể sao chép log"));
+  try {
+    await navigator.clipboard?.writeText(text);
+    toast.success(`Đã sao chép ${logs.length} dòng log`, { key: "m11-copy-log" });
+  } catch {
+    toast.error("Không thể sao chép log", { key: "m11-copy-log" });
+  }
 }
 
 /**
@@ -68,7 +72,8 @@ export function LiveLogConsole({ title, task, thread = "Thread-01", logs, phase 
         : "border-slate-500/30 bg-slate-500/10 text-slate-400";
   const heading = title || `Live Automation Log Console [${thread}${task ? ` - ${task}` : ""}]`;
 
-  const handleCopy = useCallback(() => copyLogsToClipboard(logs), [logs]);
+  const [isCopying, guardCopy] = useActionLock();
+  const handleCopy = useCallback(() => guardCopy(() => copyLogsToClipboard(logs)), [guardCopy, logs]);
 
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-800 bg-[#0B1220] shadow-md">
@@ -89,7 +94,7 @@ export function LiveLogConsole({ title, task, thread = "Thread-01", logs, phase 
           <button
             type="button"
             onClick={handleCopy}
-            disabled={!logs?.length}
+            disabled={!logs?.length || isCopying}
             className="rounded-md p-1 text-slate-400 transition hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
             title="Sao chép toàn bộ log"
             aria-label="Sao chép toàn bộ log"
@@ -212,6 +217,29 @@ export async function runDelete({ count, noun, request, confirm = true }) {
 
 export function nowStamp() {
   return new Date().toLocaleTimeString("vi-VN", { hour12: false });
+}
+
+/**
+ * Báo kết quả xuất file CSV/Excel thống nhất toàn Module 11:
+ * - "saved"      → chỉ báo thành công sau khi người dùng đã chọn nơi lưu và bấm Save.
+ * - "cancelled"  → báo đã huỷ (không báo thành công giả).
+ * - "downloaded" → trình duyệt không hỗ trợ hộp thoại lưu → báo dạng thông tin.
+ */
+export function notifyExportResult(result, { successMessage, key } = {}) {
+  if (!result) return;
+  if (result.status === "saved") {
+    toast.success(successMessage || `Đã xuất file "${result.fileName}" thành công.`, {
+      title: "XUẤT FILE THÀNH CÔNG",
+      key,
+    });
+  } else if (result.status === "cancelled") {
+    toast.info("Đã huỷ xuất file.", { title: "XUẤT FILE", key });
+  } else {
+    toast.info(`Đã gửi file "${result.fileName}" cho trình duyệt — kiểm tra thư mục Tải xuống.`, {
+      title: "XUẤT FILE",
+      key,
+    });
+  }
 }
 
 export const LIVE_STATUSES = new Set(["LIVE", "live", "Live"]);

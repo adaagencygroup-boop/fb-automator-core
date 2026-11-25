@@ -1,5 +1,6 @@
 import api from "@/services/api";
 import { API_BASE } from "@/config/constants";
+import { saveBlobFile } from "./shared/saveFile.mjs";
 
 /** Bắn sau mỗi lần đổi danh mục page để các màn đang mở tự tải lại (không lưu gì trong trình duyệt). */
 export const PAGE_LISTS_EVENT = "fb-automator.page-scanner.page-lists-changed";
@@ -40,22 +41,6 @@ export function getPageTemplateUrl() {
 
 export const PAGE_TEMPLATE_FILE_NAME = "mau_danh_sach_fanpage_fb.txt";
 
-function isAbortError(err) {
-  return err?.name === "AbortError";
-}
-
-/** Tải qua link <a download> — trình duyệt tự xử lý, trang KHÔNG biết người dùng có bấm Lưu hay không. */
-function triggerBrowserDownload(blob, fileName) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-}
-
 /**
  * Tải file mẫu danh sách Fanpage. Trả về { status, fileName }:
  * - "saved"      : người dùng đã chọn nơi lưu, bấm Lưu và file đã ghi xong (Chrome / Edge — hộp thoại lưu file).
@@ -78,25 +63,10 @@ export async function downloadPageTemplate() {
     return { status: "opened", fileName };
   }
 
-  if (typeof window !== "undefined" && typeof window.showSaveFilePicker === "function") {
-    try {
-      // Chờ người dùng chọn nơi lưu và bấm Lưu; bấm Huỷ → AbortError
-      const handle = await window.showSaveFilePicker({
-        suggestedName: fileName,
-        types: [{ description: "Tệp văn bản", accept: { "text/plain": [".txt"] } }],
-      });
-      const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      return { status: "saved", fileName: handle.name || fileName };
-    } catch (err) {
-      if (isAbortError(err)) return { status: "cancelled", fileName };
-      // Trình duyệt không cho mở hộp thoại (vd mất quyền thao tác người dùng) → tải theo cách thường
-    }
-  }
-
-  triggerBrowserDownload(blob, fileName);
-  return { status: "downloaded", fileName };
+  return saveBlobFile(blob, {
+    suggestedName: fileName,
+    types: [{ description: "Tệp văn bản", accept: { "text/plain": [".txt"] } }],
+  });
 }
 
 // ── SESSIONS ──
