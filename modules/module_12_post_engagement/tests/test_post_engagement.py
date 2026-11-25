@@ -305,19 +305,6 @@ def _reactor_page(start, n, has_next=True):
     return json.dumps({"data": {"node": {"reactors": {"edges": edges, "page_info": {"has_next_page": has_next}}}}})
 
 
-class StallGuardTests(unittest.TestCase):
-    def test_comments_end_when_height_keeps_changing_without_new_data(self):
-        # Trang reel: chiều cao đổi mãi (tải reel kế tiếp) nhưng không có bình luận mới → phải dừng nhờ chốt thời gian
-        drv = FakeDriver([[] for _ in range(10000)])
-        clock = iter(range(0, 10 ** 6, 10))  # mỗi lần đọc đồng hồ +10s
-        with mock.patch.object(scraper.time, "monotonic", lambda: next(clock)):
-            res = scraper.collect_comments(drv, 0, on_batch=lambda b: None, tick=lambda: False, pause=lambda: False,
-                                           sleep=lambda s: None, stall_sec=90)
-        self.assertEqual(res["reason"], "end")
-        self.assertLess(len(drv.pages), 10000 - 3)  # đã chạy vài vòng
-        self.assertGreater(len(drv.pages), 9000)     # nhưng không chạy tới max_rounds
-
-
 class ScraperLoopTests(unittest.TestCase):
     def run_reactions(self, pages, quota, known=None):
         got = []

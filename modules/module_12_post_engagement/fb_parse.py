@@ -181,10 +181,6 @@ def post_meta(objs: list[Any], *, post_key: str = "", page_url: str = "") -> dic
                     meta["shares"] = _share_total(o)
                 if "comments" not in meta and _comment_total(o) is not None:
                     meta["comments"] = _comment_total(o)
-    # Fanpage kiểu mới (New Pages Experience) có __typename "User" → nhận qua cờ is_additional_profile_plus của tác giả
-    author = meta.get("author") or {}
-    if author.get("id") and author.get("type") != "Page" and _is_new_page(objs, author["id"]):
-        author["type"] = "Page"
     # Nguồn: nhóm (to: Group) / page / trang cá nhân
     to, author = meta.get("to") or {}, meta.get("author") or {}
     if to.get("type") == "Group":
@@ -214,15 +210,6 @@ def _reaction_total(o: dict[str, Any]) -> Optional[int]:
     if isinstance(o.get("i18n_reaction_count"), str) and "node" not in o:
         return parse_count_text(o["i18n_reaction_count"])
     return None
-
-
-def _is_new_page(objs: list[Any], author_id: str) -> bool:
-    """Tác giả là fanpage kiểu mới: khối có id = tác giả mang is_additional_profile_plus = true."""
-    for root in objs:
-        for o in walk(root):
-            if o.get("is_additional_profile_plus") is True and _str(o.get("id")) == str(author_id):
-                return True
-    return False
 
 
 def _comment_total(o: dict[str, Any]) -> Optional[int]:

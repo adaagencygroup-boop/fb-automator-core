@@ -266,7 +266,6 @@ def collect_reactions(
     sleep=time.sleep,
     idle_rounds: int = 4,
     max_rounds: int = 3000,
-    stall_sec: float = 90.0,
 ) -> dict[str, Any]:
     """Cuộn hết danh sách người bày tỏ cảm xúc. Trả {count, friends_only, reason}.
 
@@ -290,7 +289,6 @@ def collect_reactions(
     objs = fb_parse.json_blobs_from_html(driver.page_source)
     friends_only = False
     idle, last_height = 0, -1
-    last_fresh = time.monotonic()  # chốt chặn: quá stall_sec không có người mới → coi như hết (tránh vòng lặp vô hạn)
     for _round in range(max_rounds):
         if tick():
             return {"count": got, "friends_only": friends_only, "reason": "stopped"}
@@ -315,9 +313,6 @@ def collect_reactions(
             got += len(fresh)
             on_batch(fresh)
             idle = 0
-            last_fresh = time.monotonic()
-        elif time.monotonic() - last_fresh > stall_sec:
-            return {"count": got, "friends_only": friends_only, "reason": "end"}
         if quota > 0 and got >= quota:
             return {"count": got, "friends_only": friends_only, "reason": "quota"}
         if parsed["has_next"] is False and not fresh:
@@ -369,7 +364,6 @@ def collect_comments(
     max_rounds: int = 3000,
     round_wait: float = 1.5,
     post_id: str = "",
-    stall_sec: float = 90.0,
 ) -> dict[str, Any]:
     """Lấy bình luận (gốc + trả lời, toàn văn) trên bài đang mở. Trả {count, reason, sort}."""
     seen: set[str] = set(known or ())
@@ -386,7 +380,6 @@ def collect_comments(
     objs = list(initial_objs or [])
     idle, last_height = 0, -1
     ctx: dict[str, Any] = {}
-    last_fresh = time.monotonic()  # chốt chặn: quá stall_sec không có bình luận mới → kết thúc (nút / chiều cao đổi mãi)
     prefixes: Counter[str] = Counter()  # bài chứa bình luận → số lần gặp
     for _round in range(max_rounds):
         if tick():
@@ -412,9 +405,6 @@ def collect_comments(
             got += len(fresh)
             on_batch(fresh)
             idle = 0
-            last_fresh = time.monotonic()
-        elif time.monotonic() - last_fresh > stall_sec:
-            return {"count": got, "reason": "end", "sort": sort}
         if quota > 0 and got >= quota:
             return {"count": got, "reason": "quota", "sort": sort}
         try:

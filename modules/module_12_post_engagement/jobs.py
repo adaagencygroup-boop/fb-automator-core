@@ -490,15 +490,6 @@ def _short(post: dict[str, Any]) -> str:
     return (post.get("title") or post.get("post_url") or post.get("post_key") or "")[:70]
 
 
-def _fix_source_type(models: Any, owner: str, row: dict[str, Any]) -> None:
-    """Trang reel không cho biết tác giả là fanpage → dùng kết quả đã nhận ở bài khác của cùng nguồn."""
-    try:
-        if row.get("source_type") == "profile" and models.is_known_page(owner, row.get("source_id") or ""):
-            row["source_type"] = "page"
-    except Exception:  # chỉ là nhãn hiển thị, không chặn luồng quét
-        logger.debug("is_known_page lỗi", exc_info=True)
-
-
 def _meta_to_post(post: dict[str, Any], opened: dict[str, Any]) -> dict[str, Any]:
     meta = opened.get("meta") or {}
     unavailable = bool(opened.get("state", {}).get("unavailable")) or not meta
@@ -551,7 +542,6 @@ def _check_one(job_id: str, session: dict[str, Any], idx: int, post: dict[str, A
     row = _meta_to_post(post, opened)
     with _jobs_lock:
         owner = _jobs[job_id]["owner"]
-    _fix_source_type(models, owner, row)
     models.upsert_post(owner, row)
     meta = _public_meta(row)
     if row["availability"] == "unavailable":
@@ -582,7 +572,6 @@ def _scan_one(job_id: str, session: dict[str, Any], idx: int, post: dict[str, An
 
     opened = scraper.open_post(driver, post["post_url"])
     row = _meta_to_post(post, opened)
-    _fix_source_type(models, owner, row)
     models.upsert_post(owner, row)
     if row["availability"] == "unavailable":
         _progress(job_id, key, status="unavailable", meta=_public_meta(row))
@@ -634,15 +623,14 @@ def _scan_one(job_id: str, session: dict[str, Any], idx: int, post: dict[str, An
     if like_quota > 0 and row["fb_like_count"] != 0 and fb_id:
         _log(job_id, f"👍 Đang quét người bày tỏ cảm xúc bài số {idx + 1} (tối đa {like_quota:,})…", "info")
         sink, flush, counter = make_sink("like", "likes")
-        known_likes = models.known_uids(owner, key, "like")
         try:
             res = scraper.collect_reactions(driver, fb_id, like_quota, on_batch=sink, tick=tick, pause=pause_between,
-                                            known=known_likes)
+                                            known=models.known_uids(owner, key, "like"))
         finally:
             flush()
         msg = f"✅ Bài số {idx + 1}: trích xuất {counter['n']:,} tài khoản đã bày tỏ cảm xúc"
         # Cờ "chỉ bạn bè" có thể bật nhầm (reel / bài công khai vẫn cho xem hết) → chỉ cảnh báo khi lấy thiếu so với số trên bài
-        short = row["fb_like_count"] is None or len(known_likes) + counter["n"] < int(row["fb_like_count"] or 0)
+        short = row["fb_like_count"] is None or counter["n"] < int(row["fb_like_count"] or 0)
         if res.get("friends_only") and short and res.get("reason") != "quota":
             _log(job_id, msg + " — Facebook chỉ cho xem tên người bày tỏ cảm xúc là BẠN BÈ của nick với bài ngoài nhóm.", "warn")
         elif res.get("reason") == "no_dialog":
