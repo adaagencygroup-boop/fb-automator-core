@@ -6,8 +6,9 @@ import { Check, ChevronRight, Flag, Loader2, MessageSquareText, Network, Search,
 
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/lib/toast";
-import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { Pager } from "@/modules/module_11_page_scanner/_shared";
+import useDragRowSelect from "@/modules/module_11_page_scanner/shared/useDragRowSelect";
+import ProfileAvatar from "../shared/ProfileAvatar";
 import { loadGroupSource, loadPageListKeys, loadPageSource, loadSourceProfiles, loadTopProfiles } from "../service";
 import { fmtNum, sourceKey, summarizeSources } from "../utils.mjs";
 
@@ -246,7 +247,7 @@ function SourceTab({ type, draft, updateSource }) {
                   className={`w-full rounded-xl border bg-white p-3 text-left ${on ? "border-[#BFDBFE] shadow-sm" : "border-transparent hover:border-[#E2E8F0]"}`}
                 >
                   <span className="flex items-start gap-2">
-                    <span className={`flex size-8 shrink-0 items-center justify-center rounded-lg ${n ? t.active : "bg-[#F1F5F9] text-[#475569]"}`}><t.icon className="size-4" /></span>
+                    <ProfileAvatar src={i.avatar} name={i.name} className="size-8 rounded-lg" tint={n ? t.active : "bg-[#F1F5F9] text-[#475569]"}><t.icon className="size-4" /></ProfileAvatar>
                     <span className="min-w-0 flex-1">
                       <span className={`block truncate text-xs text-[#0F172A] ${on ? "font-bold" : "font-semibold"}`}>{i.name}</span>
                       <span className="block truncate text-[11px] text-[#94A3B8]">UID: {i.id}</span>
@@ -322,7 +323,8 @@ function ProfilePicker({ type, item, selected, onChange, onTotal }) {
 
   const loading = res.query !== query;
   const rows = loading ? [] : res.items;
-  const allOnPage = rows.length > 0 && rows.every((p) => selected[p.uid]);
+  const fresh = rows.filter((p) => !p.scanned); // chọn hàng loạt chỉ lấy người chưa quét
+  const allOnPage = fresh.length > 0 && fresh.every((p) => selected[p.uid]);
   const toggle = (list, on) =>
     onChange((cur) => {
       const next = { ...cur };
@@ -333,12 +335,29 @@ function ProfilePicker({ type, item, selected, onChange, onTotal }) {
       return next;
     });
 
+  const drag = useDragRowSelect({
+    ids: rows.map((p) => p.uid),
+    isSelected: (uid) => Boolean(selected[uid]),
+    onSet: (uids) => {
+      const on = new Set(uids);
+      onChange((cur) => {
+        const next = { ...cur };
+        rows.forEach((p) => {
+          if (on.has(String(p.uid))) next[p.uid] = p;
+          else delete next[p.uid];
+        });
+        return next;
+      });
+    },
+    onToggle: (uid) => toggle(rows.filter((p) => String(p.uid) === uid), !selected[uid]),
+  });
+
   const applyQuick = async () => {
     setApplying(true);
     try {
       const top = await loadTopProfiles(type, item.id, quick, search);
       onChange(() => Object.fromEntries(top.map((p) => [p.uid, p])));
-      if (top.length < quick) toast.warning(`Chỉ có ${fmtNum(top.length)} profile đã quét.`);
+      if (top.length < quick) toast.warning(`Chỉ còn ${fmtNum(top.length)} profile chưa quét thông tin.`);
     } catch (err) {
       toast.error(`Không lấy được profile: ${err.message}`);
     } finally {
@@ -358,7 +377,7 @@ function ProfilePicker({ type, item, selected, onChange, onTotal }) {
       <div className="rounded-lg bg-[#F8FAFC] p-2">
         <div className="flex items-center justify-between gap-2">
           <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-[#334155]">
-            <Checkbox checked={allOnPage} disabled={!rows.length} onCheckedChange={(c) => toggle(rows, c)} />
+            <Checkbox checked={allOnPage} disabled={!fresh.length} onCheckedChange={(c) => toggle(c ? fresh : rows, c)} />
             Chọn tất cả trang này
           </label>
           <span className="text-[11px] italic text-[#94A3B8]">hoặc nhập số lượng lấy nhanh</span>
@@ -372,7 +391,7 @@ function ProfilePicker({ type, item, selected, onChange, onTotal }) {
               onChange={(e) => setQuick(Math.min(MAX_QUICK, Number(e.target.value.replace(/\D/g, "")) || 0))}
               className="w-14 rounded bg-[#EFF6FF] px-2 py-0.5 text-center font-bold text-[#2563EB] outline-none focus:ring-1 focus:ring-[#2563EB]"
             />
-            <span className="truncate">{t.person} từ trên xuống</span>
+            <span className="truncate">{t.person} chưa quét, từ trên xuống</span>
           </label>
           <button type="button" disabled={applying || !quick || !res.total} onClick={applyQuick} className="inline-flex h-6 items-center gap-1 rounded-md bg-[#2563EB] px-3 text-xs font-semibold text-white hover:bg-[#1D4ED8] disabled:opacity-50">
             {applying && <Loader2 className="size-3 animate-spin" />} Áp dụng
@@ -380,21 +399,24 @@ function ProfilePicker({ type, item, selected, onChange, onTotal }) {
         </div>
       </div>
       <SearchBox soft value={input} onChange={setInput} placeholder={`Tìm tên, UID ${t.person}...`} />
-      <div className="min-h-[160px] flex-1 space-y-1.5 overflow-y-auto border-t border-[#F1F5F9] pt-2">
+      <div ref={drag.setContainer} className="min-h-[160px] flex-1 select-none space-y-1.5 overflow-y-auto border-t border-[#F1F5F9] pt-2">
         {loading ? (
           <Loader2 className="mx-auto mt-10 size-5 animate-spin text-[#2563EB]" />
         ) : rows.length === 0 ? (
           <Empty>{search ? "Không tìm thấy profile phù hợp." : `${t.Noun} này chưa quét ${t.person} nào.`}</Empty>
         ) : (
           rows.map((p, i) => (
-            <label key={p.uid} className="flex cursor-pointer items-center gap-2.5 rounded-lg bg-[#F8FAFF] px-2 py-2 hover:bg-[#EFF6FF]">
+            <div key={p.uid} {...drag.rowProps(p.uid)} className={`flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-2 hover:bg-[#EFF6FF] ${selected[p.uid] ? "bg-[#EFF6FF]" : "bg-[#F8FAFF]"}`}>
               <Checkbox checked={Boolean(selected[p.uid])} onCheckedChange={(c) => toggle([p], c)} />
-              <span className={`flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white ${AVATARS[i % AVATARS.length]}`}>{initialsOf(p.name)}</span>
+              <ProfileAvatar src={p.avatar} name={p.name} tint={`text-white ${AVATARS[i % AVATARS.length]}`} />
               <span className="min-w-0">
                 <span className="block truncate text-xs font-bold text-[#0F172A]">{p.name}</span>
                 <span className="block truncate font-mono text-[11px] text-[#94A3B8]">UID: {p.uid}</span>
               </span>
-            </label>
+              {p.scanned && (
+                <span title="Profile này đã được quét thông tin trước đó" className="ml-auto shrink-0 rounded-full border border-[#A7F3D0] bg-[#ECFDF5] px-2 py-0.5 text-[10px] font-semibold text-[#047857]">Đã quét</span>
+              )}
+            </div>
           ))
         )}
       </div>

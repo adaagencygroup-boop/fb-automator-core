@@ -84,8 +84,8 @@ const POLL_MS = 5000;
 function StatusBadge({ status }) {
   const info = STATUS[status] || { label: status, cls: "bg-slate-50 border-slate-200 text-slate-500", dot: "bg-slate-400" };
   return (
-    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-xs font-semibold ${info.cls}`}>
-      <span className={`size-2 rounded-full ${info.dot}`} />
+    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-semibold ${info.cls}`}>
+      <span className={`size-1.5 rounded-full ${info.dot}`} />
       {info.label}
     </span>
   );
@@ -153,15 +153,15 @@ function DurationLine({ s }) {
       ? `Thời gian: ${formatDuration(s.duration_seconds)}`
       : `Dừng lúc ${formatDuration(s.duration_seconds)}`;
   return (
-    <span className="mt-0.5 flex items-center gap-1 whitespace-nowrap text-[11px] leading-5 text-[#94A3B8]">
+    <span className="mt-0.5 flex items-center gap-1 whitespace-nowrap text-[11px] leading-4 text-[#94A3B8]">
       <Icon className="size-[11px] shrink-0" />
       {text}
     </span>
   );
 }
 
-const TH = "px-4 py-5 text-xs font-bold uppercase tracking-[0.6px] text-[#64748B]";
-const SELECT_BTN = "!h-[42px] !rounded-xl !border-[#E2E8F0] !bg-[#F8FAFC] !px-3.5 !text-xs !shadow-none";
+const TH = "px-3 py-3 text-xs font-semibold uppercase tracking-[0.3px] text-[#64748B]";
+const SELECT_BTN = "!h-[34px] !rounded-lg !border-[#E2E8F0] !bg-[#F8FAFC] !px-3.5 !text-xs !shadow-none";
 
 /* ════════════════════════════════════════════════════════════
    HISTORY MODULE
@@ -399,21 +399,21 @@ export default function PageScannerHistoryModule() {
 
   return (
     <div className="pb-8">
-      <h1 className="font-heading text-2xl font-bold tracking-[-0.6px] text-[#0F172A]">Lịch sử quét page</h1>
-      <p className="mt-1 text-sm text-[#64748B]">
+      <h1 className="font-heading text-xl font-bold text-[#0F172A]">Lịch sử quét page</h1>
+      <p className="mt-1 text-xs text-[#64748B]">
         Theo dõi, quản lý tiến trình và phân tích kết quả dữ liệu Fanpage thu thập theo thời gian thực.
       </p>
 
       {/* Bộ lọc */}
-      <section className="mt-6 flex flex-wrap items-center gap-3 rounded-2xl border border-[#E2E8F0] bg-white p-5 shadow-sm">
+      <section className="mt-6 flex flex-wrap items-center gap-2.5 rounded-xl border border-[#E2E8F0] bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
         <div className="relative min-w-[240px] flex-1">
-          <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-[#94A3B8]" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#94A3B8]" />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Tìm kiếm"
-            className="h-[42px] w-full rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] pl-10 pr-9 text-sm text-[#334155] outline-none transition-colors placeholder:text-[#94A3B8] focus:border-[#2563EB] focus:bg-white"
+            className="h-[34px] w-full rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] pl-9 pr-9 text-xs text-[#334155] outline-none transition-colors placeholder:text-[#94A3B8] focus:border-[#2563EB] focus:bg-white"
           />
           {search && (
             <button
@@ -433,7 +433,7 @@ export default function PageScannerHistoryModule() {
           type="button"
           onClick={handleExport}
           disabled={exporting}
-          className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-[#059669] px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#047857] disabled:opacity-60"
+          className="inline-flex h-[34px] shrink-0 items-center gap-2 rounded-lg bg-[#059669] px-3.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#047857] disabled:opacity-60"
         >
           {exporting ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
           Xuất báo cáo Excel{selected.size > 0 ? ` (${selected.size})` : ""}
@@ -441,12 +441,12 @@ export default function PageScannerHistoryModule() {
       </section>
 
       {/* Bảng phiên quét */}
-      <section className="mt-6 rounded-2xl border border-[#E2E8F0] bg-white shadow-sm">
-        <div className="overflow-x-auto rounded-t-2xl">
+      <section className="mt-6 rounded-xl border border-[#E2E8F0] bg-white shadow-sm">
+        <div className="overflow-x-auto rounded-t-xl">
           <table className="w-full min-w-[1080px] text-left">
             <thead className="bg-[#F8FAFC]">
               <tr className="border-b border-[#E2E8F0]">
-                <th className="w-12 py-5 pl-4">
+                <th className="w-10 py-3 pl-4">
                   <Checkbox checked={allChecked} disabled={!sessions.length} onCheckedChange={toggleAll} aria-label="Chọn tất cả trong trang" />
                 </th>
                 <th className={`${TH} w-14 text-center`}>STT</th>
@@ -465,12 +465,12 @@ export default function PageScannerHistoryModule() {
                     {loading ? (
                       <>
                         <Loader2 className="mx-auto mb-2 size-6 animate-spin text-primary" />
-                        <p className="text-sm">Đang tải lịch sử phiên...</p>
+                        <p className="text-xs">Đang tải lịch sử phiên...</p>
                       </>
                     ) : (
                       <>
                         <BarChart2 className="mx-auto mb-2 size-8 opacity-30" />
-                        <p className="text-sm font-medium">Không có phiên quét nào phù hợp bộ lọc</p>
+                        <p className="text-xs font-medium">Không có phiên quét nào phù hợp bộ lọc</p>
                         <p className="mt-1 text-xs">Thử đổi khoảng thời gian, loại quét hoặc trạng thái.</p>
                       </>
                     )}
@@ -482,18 +482,18 @@ export default function PageScannerHistoryModule() {
                   const result = resultOf(s);
                   return (
                     <tr key={s.id} className={`transition-colors hover:bg-slate-50 ${s.status === "FAILED" ? "bg-red-50/20" : ""}`}>
-                      <td className="py-4 pl-4">
+                      <td className="py-3 pl-4">
                         <Checkbox checked={selected.has(s.id)} onCheckedChange={() => toggleOne(s)} aria-label={`Chọn phiên #${s.id}`} />
                       </td>
-                      <td className="px-4 py-4 text-center text-xs font-semibold text-[#94A3B8]">
+                      <td className="px-3 py-3 text-center text-xs font-semibold text-[#94A3B8]">
                         {String((page - 1) * pageSize + idx + 1).padStart(2, "0")}
                       </td>
-                      <td className="px-4 py-4">
-                        <span className="inline-flex whitespace-nowrap rounded-full border border-[#DBEAFE] bg-[#EFF6FF] px-2.5 py-1 text-xs font-semibold text-[#1D4ED8]">
+                      <td className="px-3 py-3">
+                        <span className="inline-flex whitespace-nowrap rounded-full border border-[#DBEAFE] bg-[#EFF6FF] px-2.5 py-0.5 text-xs font-semibold text-[#1D4ED8]">
                           {typeLabel(s)}
                         </span>
                       </td>
-                      <td className="max-w-[260px] px-4 py-4 text-sm">
+                      <td className="max-w-[260px] px-3 py-3 text-xs">
                         <div className="flex items-center gap-1.5" title={`Phiên #${s.id} · ${targetText(s)}`}>
                           {target.label && <span className="shrink-0 font-medium text-[#0F172A]">{target.label}</span>}
                           <span className={`line-clamp-2 break-words font-semibold ${target.link ? "text-[#2563EB]" : "text-[#0F172A]"}`}>
@@ -501,17 +501,17 @@ export default function PageScannerHistoryModule() {
                           </span>
                         </div>
                       </td>
-                      <td className={`whitespace-nowrap px-4 py-4 text-xs font-bold ${result.ok ? "text-[#059669]" : "text-[#1E293B]"}`}>
+                      <td className={`whitespace-nowrap px-3 py-3 text-xs font-bold ${result.ok ? "text-[#059669]" : "text-[#1E293B]"}`}>
                         {result.text}
                       </td>
-                      <td className="px-4 py-4">
+                      <td className="px-3 py-3">
                         <span className="whitespace-nowrap text-xs font-medium text-[#1E293B]">{formatDt(s.started_at)}</span>
                         <DurationLine s={s} />
                       </td>
-                      <td className="px-4 py-4" title={s.error_message || STOP_REASONS[s.stop_reason]?.label || ""}>
+                      <td className="px-3 py-3" title={s.error_message || STOP_REASONS[s.stop_reason]?.label || ""}>
                         <StatusBadge status={s.status} />
                       </td>
-                      <td className="px-4 py-4">
+                      <td className="px-3 py-3">
                         <div className="flex items-center justify-center gap-1">
                           <button
                             type="button"
@@ -543,7 +543,7 @@ export default function PageScannerHistoryModule() {
           </table>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-b-2xl border-t border-[#E2E8F0] bg-[#F8FAFC]/80 px-6 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-b-xl border-t border-[#E2E8F0] bg-[#F8FAFC]/80 px-4 py-3">
           <div className="flex items-center gap-2 text-xs text-[#64748B]">
             Hiển thị
             <CustomSelect
@@ -573,7 +573,7 @@ export default function PageScannerHistoryModule() {
             {/* Header */}
             <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
               <div>
-                <h2 className="font-bold text-slate-800">
+                <h2 className="text-base font-bold text-slate-800">
                   Chi tiết phiên #{detail.id}: <span className="text-primary">{targetText(detail)}</span>
                 </h2>
                 <div className="mt-1 flex items-center gap-2">
@@ -620,7 +620,7 @@ export default function PageScannerHistoryModule() {
                 <div className="flex h-full items-center justify-center text-slate-400">
                   <div className="text-center">
                     <Loader2 className="mx-auto mb-2 size-6 animate-spin text-primary" />
-                    <p className="text-sm">Đang tải danh sách Page...</p>
+                    <p className="text-xs">Đang tải danh sách Page...</p>
                   </div>
                 </div>
               ) : (

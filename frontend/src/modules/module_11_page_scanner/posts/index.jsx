@@ -5,10 +5,6 @@ import {
   Users,
   Globe,
   Trash2,
-  Play,
-  Pause,
-  Square,
-  RotateCcw,
   Search,
   ExternalLink,
   Eye,
@@ -40,6 +36,7 @@ import {
   saveSelectedAccountUids,
   resolveUsableSavedUids,
 } from "../shared/accountStorage";
+import { ScanActionButtons } from "../shared/ScanActionButtons";
 import { clearScanState, fetchSavedSessions, loadScanState, saveScanState } from "../shared/scanStateStorage";
 import { useClickLock } from "../shared/useClickLock";
 import { localIsoDate, toCsv } from "../utils.mjs";
@@ -1059,59 +1056,17 @@ export default function PageScannerPosts() {
       </section>
 
       {/* CTA */}
-      <div className="space-y-2.5">
-        <button
-          type="button"
-          onClick={() => runStartLocked(handleToggleExecution)}
-          disabled={startLocked || (!isExecuting && accountsLoading)}
-          className={`inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl text-sm font-bold tracking-wide text-white shadow-sm transition-colors ${
-            isExecuting
-              ? "bg-[#DC2626] hover:bg-rose-700"
-              : "bg-[#004AC6] hover:bg-blue-800 disabled:opacity-60"
-          }`}
-        >
-          {isExecuting ? (
-            <>
-              <Square className="size-4 fill-white" />
-              <span>DỪNG THỰC THI QUÉT BÀI VIẾT</span>
-            </>
-          ) : (
-            <>
-              <Play className="size-4 fill-white" />
-              <span>BẮT ĐẦU THỰC THI</span>
-            </>
-          )}
-        </button>
-        {!isBusy && showResults && (
-          <button
-            type="button"
-            onClick={handleNewScan}
-            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[#CBD5E1] bg-white text-xs font-bold text-[#475569] hover:bg-slate-50"
-          >
-            <RotateCcw className="size-3.5" />
-            QUÉT MỚI (XÓA KẾT QUẢ ĐANG XEM)
-          </button>
-        )}
-        {isBusy && (
-          <button
-            type="button"
-            onClick={handlePauseResume}
-            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[#F59E0B] bg-white text-xs font-bold text-[#D97706] hover:bg-amber-50"
-          >
-            {isPaused ? (
-              <>
-                <Play className="size-3.5 fill-current" />
-                TIẾP TỤC QUÉT
-              </>
-            ) : (
-              <>
-                <Pause className="size-3.5" />
-                TẠM DỪNG QUÉT
-              </>
-            )}
-          </button>
-        )}
-      </div>
+      <ScanActionButtons
+        live={isBusy}
+        paused={isPaused}
+        showNewScan={showResults}
+        startDisabled={startLocked || accountsLoading}
+        controlDisabled={startLocked}
+        onStart={() => runStartLocked(handleToggleExecution)}
+        onPauseResume={handlePauseResume}
+        onStop={() => runStartLocked(handleToggleExecution)}
+        onNewScan={handleNewScan}
+      />
 
       {/* Kết quả — ảnh "Quét bài viết page" */}
       {showResults ? (

@@ -85,7 +85,7 @@ export default function DateRangeFilter({ value, onChange }) {
           setDraft(value);
           setOpen((v) => !v);
         }}
-        className={`flex h-[42px] min-w-[190px] items-center justify-between gap-3 rounded-xl border bg-[#F8FAFC] px-3.5 text-xs font-medium text-[#334155] transition-colors hover:border-slate-300 ${
+        className={`flex h-[34px] min-w-[170px] items-center justify-between gap-3 rounded-lg border bg-[#F8FAFC] px-3.5 text-xs font-medium text-[#334155] transition-colors hover:border-slate-300 ${
           open ? "border-[#2563EB] ring-2 ring-[#2563EB]/10" : "border-[#E2E8F0]"
         }`}
       >

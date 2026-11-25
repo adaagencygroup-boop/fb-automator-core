@@ -4,8 +4,8 @@ import React, { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Copy, ExternalLink, MapPin } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/lib/toast";
-import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { Pager } from "@/modules/module_11_page_scanner/_shared";
+import ProfileAvatar from "../shared/ProfileAvatar";
 import { jobText } from "../shared/exportProfiles";
 import { fmtNum, shortFbUrl } from "../utils.mjs";
 
@@ -45,7 +45,7 @@ export default function ProfileTable({ rows: input, selected, onSelect, emptyTex
   return (
     <div className="min-w-0 overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1640px] text-left text-xs">
+        <table className="w-full min-w-[1760px] text-left text-xs">
           <thead className="border-b border-[#E2E8F0] bg-[#F8FAFC] text-[11px] uppercase tracking-[0.5px] text-[#475569] [&_th]:whitespace-nowrap [&_th]:px-3 [&_th]:py-3 [&_th]:font-bold">
             <tr>
               {onSelect && <th className="w-10"><Checkbox aria-label="Chọn tất cả" checked={allOn} disabled={!rows.length} onCheckedChange={(c) => toggle(rows, c)} /></th>}
@@ -54,6 +54,7 @@ export default function ProfileTable({ rows: input, selected, onSelect, emptyTex
               <th>Link Facebook</th>
               <th className="text-right"><button type="button" title="Sắp xếp theo số bạn bè" onClick={() => setSort(sort === "desc" ? "asc" : sort === "asc" ? null : "desc")} className="inline-flex items-center gap-1 font-bold uppercase hover:text-[#2563EB]">Bạn bè <SortIcon className="size-3" /></button></th>
               <th className="text-right">Followers</th>
+              <th>Số điện thoại</th>
               <th>Tiểu sử (Bio)</th>
               <th>Ngày sinh</th>
               <th>Quê quán</th>
@@ -64,7 +65,7 @@ export default function ProfileTable({ rows: input, selected, onSelect, emptyTex
           </thead>
           <tbody className="[&_td]:px-3 [&_td]:py-2.5">
             {shown.length === 0 && (
-              <tr><td colSpan={12} className="!py-12 text-center text-[#94A3B8]">{emptyText}</td></tr>
+              <tr><td colSpan={13} className="!py-12 text-center text-[#94A3B8]">{emptyText}</td></tr>
             )}
             {shown.map((r, i) => (
               <tr key={rowId(r)} className="border-t border-[#F1F5F9] hover:bg-[#F8FAFC]">
@@ -72,7 +73,7 @@ export default function ProfileTable({ rows: input, selected, onSelect, emptyTex
                 <td className="font-mono text-[#94A3B8]">{String(start + i + 1).padStart(2, "0")}</td>
                 <td>
                   <div className="flex items-center gap-2.5">
-                    <span className={`flex size-8 shrink-0 items-center justify-center rounded-full font-bold ${TINTS[i % TINTS.length]}`}>{initialsOf(r.name)}</span>
+                    <ProfileAvatar src={r.avatar} name={r.name} tint={TINTS[i % TINTS.length]} />
                     <span className="min-w-0">
                       <span className="block max-w-[170px] truncate font-bold text-[#0F172A]">{r.name}</span>
                       <span className="text-[11px] text-[#94A3B8]">UID: {r.uid}</span>
@@ -90,6 +91,7 @@ export default function ProfileTable({ rows: input, selected, onSelect, emptyTex
                 </td>
                 <td className="text-right font-mono font-bold text-[#0F172A]">{fmtNum(r.friends)}</td>
                 <td className="text-right font-mono font-bold text-[#0F172A]">{fmtNum(r.followers)}</td>
+                <td className="whitespace-nowrap font-mono text-[#334155]" title={r.phone ? (r.phone_source === "about" ? "Lấy từ Giới thiệu" : "Lấy từ tiểu sử") : undefined}>{r.phone || "—"}</td>
                 <td><span className="block max-w-[220px] truncate text-[#475569]" title={r.bio}>{r.bio || "—"}</span></td>
                 <td className="whitespace-nowrap font-mono text-[#64748B]">{r.birthday || "—"}</td>
                 <td className="whitespace-nowrap text-[#334155]">{r.hometown || "—"}</td>

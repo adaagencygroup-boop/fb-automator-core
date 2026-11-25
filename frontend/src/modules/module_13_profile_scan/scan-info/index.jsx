@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2, Copy, Database, Download, ExternalLink, FileSpreadsheet, FileUp, Link2, ListChecks, MessageCircle,
-  Play, Save, Search, Share2, ThumbsUp, Trash2, UserPlus, Users, X,
+  Save, Search, Share2, ThumbsUp, Trash2, UserPlus, Users, X,
 } from "lucide-react";
 
 import CustomSelect from "@/components/ui/custom-select";
@@ -13,9 +13,12 @@ import { getAccounts } from "@/modules/module_02_account_manager/service";
 import { normalizeAccount } from "@/modules/module_07_group_spam/shared/components";
 import { LiveLogConsole, nowStamp } from "@/modules/module_11_page_scanner/_shared";
 import { SelectAccountsModal } from "@/modules/module_11_page_scanner/shared/SelectPagesModal";
+import { ScanActionButtons } from "@/modules/module_11_page_scanner/shared/ScanActionButtons";
+import { loadScanState, saveScanState } from "@/modules/module_11_page_scanner/shared/scanStateStorage";
+import { askConfirm } from "@/modules/module_11_page_scanner/shared/askConfirm";
 import { loadSavedAccountUids, resolveUsableSavedUids, saveSelectedAccountUids } from "@/modules/module_11_page_scanner/shared/accountStorage";
 import { exportProfiles } from "../shared/exportProfiles";
-import { startProfileScan } from "../service";
+import { controlScan, getLatestScan, getScanProgress, getScanResults, startProfileScan } from "../service";
 import { SCALE_UNITS, SOURCE_TYPES, fmtNum, parseProfileLines, pickProfileCell, shortFbUrl, summarizeSources } from "../utils.mjs";
 import ProfileTable, { rowId } from "./ProfileTable";
 import SaveProfileListModal from "./SaveProfileListModal";
@@ -34,6 +37,7 @@ const STATUS = {
   invalid: ["Lỗi link", "border-[#FECACA] bg-[#FEF2F2] text-[#DC2626]"],
 };
 const MAX_FILE_MB = 10;
+const POLL_MS = 2500;
 
 function NumCtrl({ label, value, onChange, min = 1, max = 500, step = 1 }) {
   const clamp = (n) => Math.min(max, Math.max(min, n));
@@ -119,6 +123,10 @@ export default function ProfileScanInfo() {
   const [showAccounts, setShowAccounts] = useState(false);
   const [delay, setDelay] = useState({ min: 5, max: 8 });
   const [rotateEvery, setRotateEvery] = useState(50);
+  const [workers, setWorkers] = useState(2);
+  const [skipScanned, setSkipScanned] = useState(true);
+  const [minFriends, setMinFriends] = useState(false);
+  const [directIp, setDirectIp] = useState(true);
 
   const [mode, setMode] = useState("source");
   const [sources, setSources] = useState({});
@@ -133,6 +141,9 @@ export default function ProfileScanInfo() {
   const fileRef = useRef(null);
 
   const [starting, setStarting] = useState(false);
+  const [session, setSession] = useState(null);
+  const [controlling, setControlling] = useState(null);
+  const lastLogRef = useRef(0);
   const [results, setResults] = useState([]);
   const [resultSources, setResultSources] = useState({});
   const [logs, setLogs] = useState([]);
@@ -172,6 +183,72 @@ export default function ProfileScanInfo() {
     return () => clearTimeout(id);
   }, []);
 
+  // Mở trang: hiện lại phiên gần nhất (đang chạy thì theo dõi tiếp)
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("demo") === "1") return undefined;
+    let ignore = false;
+    getLatestScan()
+      .then((s) => {
+        if (ignore || !s) return;
+        // Đã bấm "Quét mới" với phiên này → không hiện lại
+        const running = s.status === "RUNNING" || s.status === "PAUSED";
+        if (!running && loadScanState("profile_scan")?.dismissedId === s.id) return;
+        setSession((cur) => cur || s);
+      })
+      .catch((err) => !ignore && toast.error(`Lỗi tải phiên quét: ${err.message}`));
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  const sessionId = session?.id;
+  const live = session?.status === "RUNNING" || session?.status === "PAUSED";
+  const paused = session?.status === "PAUSED";
+  const showResults = Boolean(session) || demo;
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    let ignore = false;
+    let timer;
+    const tick = async () => {
+      let again = live;
+      try {
+        const res = await getScanProgress(sessionId, lastLogRef.current);
+        if (ignore) return;
+        if (res.logs.length) {
+          lastLogRef.current = res.logs[res.logs.length - 1].id;
+          setLogs((prev) => [...prev, ...res.logs.map((l) => ({ id: `s${l.id}`, timestamp: l.time, message: l.message, type: l.level }))].slice(-500));
+        }
+        setSession(res.session);
+        again = res.session.status === "RUNNING" || res.session.status === "PAUSED";
+      } catch {
+        // Mất kết nối tạm thời: lần sau hỏi lại
+      }
+      if (!ignore && again) timer = setTimeout(tick, POLL_MS);
+    };
+    tick();
+    return () => {
+      ignore = true;
+      clearTimeout(timer);
+    };
+  }, [sessionId, live]);
+
+  // Có thêm profile quét xong → tải lại kết quả
+  const doneCount = session?.done ?? 0;
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    let ignore = false;
+    getScanResults(sessionId)
+      .then((res) => {
+        if (ignore) return;
+        setResults(res.items);
+        setResultSources(Object.fromEntries(res.sources.map((s) => [s.key, { ...s, scaleLabel: s.scale_label, profiles: {} }])));
+      })
+      .catch((err) => !ignore && toast.error(`Lỗi tải kết quả: ${err.message}`));
+    return () => {
+      ignore = true;
+    };
+  }, [sessionId, doneCount]);
+
   const log = (message, type = "info") =>
     setLogs((prev) => [...prev, { id: `${Date.now()}_${prev.length}`, timestamp: nowStamp(), message, type }].slice(-500));
 
@@ -182,7 +259,12 @@ export default function ProfileScanInfo() {
   // Một người có thể nằm ở nhiều nguồn → chỉ quét 1 lần
   const sourceTargets = useMemo(() => {
     const map = new Map();
-    Object.values(sources).forEach((s) => Object.values(s.profiles).forEach((p) => map.set(p.uid, p)));
+    Object.entries(sources).forEach(([key, s]) =>
+      Object.values(s.profiles).forEach((p) => {
+        const old = map.get(p.uid);
+        map.set(p.uid, { ...p, source_keys: [...(old?.source_keys || []), key] });
+      }),
+    );
     return [...map.values()];
   }, [sources]);
   const targets = mode === "source" ? sourceTargets : validRows;
@@ -240,7 +322,28 @@ export default function ProfileScanInfo() {
     if (!targets.length) return toast.warning("Chưa có profile hợp lệ để quét.");
     setStarting(true);
     try {
-      await startProfileScan({ account_uids: uids, delay_min: delay.min, delay_max: delay.max, rotate_every: rotateEvery, mode, targets });
+      const res = await startProfileScan({
+        account_uids: uids,
+        delay_min: delay.min,
+        delay_max: delay.max,
+        rotate_every: rotateEvery,
+        workers: Math.min(workers, uids.length),
+        skip_scanned: skipScanned,
+        min_friends: minFriends ? 500 : 0,
+        allow_direct_ip: directIp,
+        mode,
+        targets: targets.map((t) => ({ uid: t.uid || t.key, url: t.url, name: t.name, avatar: t.avatar, source_keys: t.source_keys || [] })),
+        sources:
+          mode === "source"
+            ? Object.entries(sources).map(([key, s]) => ({ key, type: s.type, name: s.name, url: s.url, scale: s.scale ?? null, scale_label: s.scaleLabel || null }))
+            : [],
+      });
+      lastLogRef.current = 0;
+      setLogs([]);
+      setResults([]);
+      setResultSources({});
+      setSelected(new Set());
+      setSession({ id: res.session_id, status: "RUNNING", mode, total: res.total, done: 0, skipped: 0, failed: 0, pending: res.total });
     } catch (err) {
       log(err.message, "error");
       toast.error(err.message);
@@ -248,6 +351,49 @@ export default function ProfileScanInfo() {
       setStarting(false);
     }
     return undefined;
+  };
+
+  /** "Quét mới": bỏ kết quả đang xem và danh sách xem trước (dữ liệu trong kho không bị xóa). */
+  const newScan = () => {
+    if (sessionId) saveScanState("profile_scan", { dismissedId: sessionId });
+    lastLogRef.current = 0;
+    setSession(null);
+    setDemo(false);
+    setLogs([]);
+    setResults([]);
+    setResultSources({});
+    setSelected(new Set());
+    setActiveSource(null);
+    setSourceSearch("");
+    setSourceType("ALL");
+    setSources({});
+    setLinkText("");
+    setLinkRows([]);
+    setFile(null);
+    setFileRows([]);
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  const control = async (action) => {
+    setControlling(action);
+    try {
+      await controlScan(sessionId, action, action === "resume" ? { allow_direct_ip: directIp } : {});
+      const res = await getScanProgress(sessionId, lastLogRef.current);
+      setSession(res.session);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setControlling(null);
+    }
+  };
+  const emergencyStop = async () => {
+    const ok = await askConfirm({
+      title: "Dừng khẩn cấp",
+      description: "Đóng ngay các Chrome đang quét profile. Dữ liệu đã quét được giữ lại.",
+      confirmText: "Dừng",
+      cancelText: "Hủy",
+    });
+    if (ok) control("stop");
   };
 
   const exportRows = async (list, name) => {
@@ -273,6 +419,10 @@ export default function ProfileScanInfo() {
   const active = resultSources[activeKey];
   const activeRows = results.filter((r) => r.sourceKey === activeKey);
   const bySource = mode === "source";
+  const resultsBySource = session ? session.mode === "source" : bySource;
+  // Số chạy song song không vượt quá số tài khoản live đã chọn (tối đa 5 Chrome)
+  const maxWorkers = Math.min(5, Math.max(1, uids.length));
+  const workerCount = Math.min(workers, maxWorkers);
 
   return (
     <div className="-m-6 min-h-full space-y-6 bg-[#F8FAFC] p-6">
@@ -282,7 +432,7 @@ export default function ProfileScanInfo() {
         {demo && <p className="mt-2 inline-block rounded-md bg-[#FEF3C7] px-2.5 py-1 text-xs font-semibold text-[#92400E]">Đang xem dữ liệu mẫu — không phải kết quả quét thật</p>}
       </div>
 
-      <section className={`${CARD} p-6`}>
+      <section className={`${CARD} p-6 ${live ? "hidden" : ""}`}>
         <div className="flex items-center gap-2.5 border-b border-[#F1F5F9] pb-3">
           <span className="flex size-6 items-center justify-center rounded-full bg-[#1877F2] text-xs font-bold text-white">1</span>
           <h2 className="text-sm font-bold text-[#0F172A]">Chọn tài khoản & Thiết lập phiên quét</h2>
@@ -293,7 +443,7 @@ export default function ProfileScanInfo() {
           </button>
           <div className="mt-3 border-b border-[#E2E8F0] pb-3">
             {uids.length ? (
-              <span className="inline-flex items-center gap-2 rounded-full border border-[#A7F3D0] bg-[#ECFDF5] px-3 py-1 text-xs text-[#047857]"><CheckCircle2 className="size-3.5" /> <span>Đã chọn: <b>{uids.length}</b> tài khoản chạy song song</span></span>
+              <span className="inline-flex items-center gap-2 rounded-full border border-[#A7F3D0] bg-[#ECFDF5] px-3 py-1 text-xs text-[#047857]"><CheckCircle2 className="size-3.5" /> <span>Đã chọn: <b>{uids.length}</b> tài khoản · chạy song song <b>{workerCount}</b> · dự phòng <b>{uids.length - workerCount}</b></span></span>
             ) : (
               <span className="text-xs text-[#94A3B8]">{accountsLoading ? "Đang tải tài khoản…" : "Chưa chọn tài khoản"}</span>
             )}
@@ -308,6 +458,15 @@ export default function ProfileScanInfo() {
           <p className="mt-5 text-xs font-medium text-[#334155]">Đổi tài khoản mới khi quét được:</p>
           <div className="mt-2 flex items-center gap-3 text-xs text-[#64748B]">
             <NumCtrl label="số profile mỗi tài khoản" value={rotateEvery} step={10} onChange={setRotateEvery} /> profile / acc
+          </div>
+          <p className="mt-5 text-xs font-medium text-[#334155]">Số tài khoản chạy song song:</p>
+          <div className="mt-2 flex items-center gap-3 text-xs text-[#64748B]">
+            <NumCtrl label="số tài khoản chạy song song" max={maxWorkers} value={workerCount} onChange={setWorkers} /> Chrome cùng lúc (tối đa {maxWorkers})
+          </div>
+          <div className="mt-5 space-y-2 text-xs text-[#334155]">
+            <label className="flex cursor-pointer items-center gap-2"><Checkbox checked={skipScanned} onCheckedChange={setSkipScanned} /> Bỏ qua người đã quét (dùng lại dữ liệu có sẵn)</label>
+            <label className="flex cursor-pointer items-center gap-2"><Checkbox checked={minFriends} onCheckedChange={setMinFriends} /> Chỉ lấy người có từ 500 bạn bè (ẩn số bạn bè vẫn lấy)</label>
+            <label className="flex cursor-pointer items-center gap-2"><Checkbox checked={directIp} onCheckedChange={setDirectIp} /> Proxy lỗi thì tự chuyển sang IP của máy (có ghi log; bỏ tick để dừng tài khoản đó)</label>
           </div>
         </div>
 
@@ -430,83 +589,98 @@ export default function ProfileScanInfo() {
         </div>
       </section>
 
-      <button type="button" disabled={starting} onClick={start} className="inline-flex h-12 w-full items-center justify-center gap-3.5 rounded-xl bg-[#004AC6] text-base font-bold text-white hover:bg-[#003EA8] disabled:opacity-60"><Play className="size-4" /> BẮT ĐẦU THỰC THI</button>
+      <ScanActionButtons
+        live={live}
+        paused={paused}
+        stopping={controlling === "stop"}
+        showNewScan={showResults}
+        startDisabled={starting}
+        controlDisabled={Boolean(controlling)}
+        onStart={start}
+        onPauseResume={() => control(paused ? "resume" : "pause")}
+        onStop={emergencyStop}
+        onNewScan={newScan}
+      />
 
-      <section className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="flex items-center gap-2 text-base font-bold uppercase tracking-[0.6px] text-[#0F172A]">
-              <Database className="size-4 text-[#1877F2]" /> Kết quả quét profile
-              <span className="rounded-full bg-[#F1F5F9] px-2.5 py-0.5 text-xs font-normal normal-case tracking-normal text-[#64748B]">({fmtNum(results.length)} profile)</span>
-            </h2>
-            <p className="mt-1 text-xs text-[#64748B]">Danh sách dữ liệu người dùng bóc tách theo từng nguồn chiến dịch</p>
-          </div>
-          <div className="flex flex-wrap gap-2.5">
-            <button type="button" onClick={() => exportRows(results, "quet_profile")} className="inline-flex h-8 items-center gap-2 rounded-lg border border-[#CBD5E1] bg-white px-4 text-xs font-semibold text-[#1E293B] hover:bg-slate-50"><Download className="size-3.5 text-[#059669]" /> {bySource ? "Xuất toàn bộ file Excel" : "Xuất file"}</button>
-            <button type="button" onClick={openSave} className="inline-flex h-8 items-center gap-2 rounded-lg bg-[#2563EB] px-4 text-xs font-semibold text-white hover:bg-[#1D4ED8]"><Save className="size-3.5" /> Lưu vào danh sách chung</button>
-          </div>
-        </div>
-
-        {bySource ? (
-          <div className="grid gap-6 lg:grid-cols-[300px_minmax(0,1fr)]">
-            <div className={`${CARD} p-4`}>
-              <p className="flex items-center gap-2 border-b border-[#F1F5F9] pb-3 text-xs font-bold uppercase tracking-[0.5px] text-[#334155]"><ListChecks className="size-4 text-[#1877F2]" /> Danh mục nguồn quét ({entries.length})</p>
-              <div className="mt-3 flex gap-2">
-                <div className="relative min-w-0 flex-1">
-                  <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-[#94A3B8]" />
-                  <input aria-label="Tìm nguồn" value={sourceSearch} onChange={(e) => setSourceSearch(e.target.value)} placeholder="Tìm kiếm" className="h-[30px] w-full rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] pl-8 pr-2 text-xs outline-none focus:border-[#1877F2]" />
-                </div>
-                <CustomSelect className="w-[118px]" buttonClassName="!h-[30px] !border-[#E2E8F0] !shadow-none" value={sourceType} onChange={setSourceType} options={[{ value: "ALL", label: "Tất cả loại" }, ...Object.entries(SOURCE_TYPES).map(([value, label]) => ({ value, label }))]} />
-              </div>
-              <div className="mt-3 max-h-[420px] space-y-2.5 overflow-y-auto">
-                {shownSources.length === 0 && <p className="py-8 text-center text-xs text-[#94A3B8]">Chưa có nguồn nào.</p>}
-                {shownSources.map(([key, s]) => {
-                  const n = results.filter((r) => r.sourceKey === key).length;
-                  return (
-                    <button key={key} type="button" onClick={() => setActiveSource(key)} className={`w-full rounded-xl border p-3 text-left text-xs ${key === activeKey ? "border-2 border-[#1877F2] bg-[#F8FAFF]" : "border-[#E2E8F0] hover:border-[#93C5FD]"}`}>
-                      <span className="rounded bg-[#F1F5F9] px-1.5 py-0.5 text-[10px] text-[#475569]">{SOURCE_TYPES[s.type]}</span>
-                      <span className={`mt-1.5 block truncate text-[#0F172A] ${key === activeKey ? "font-bold" : ""}`}>{s.name}</span>
-                      {s.type === "post" && s.likes != null && (
-                        <span className="mt-1 flex gap-3 text-[#64748B]">
-                          <span className="inline-flex items-center gap-1"><ThumbsUp className="size-3" /> {s.likes}</span>
-                          <span className="inline-flex items-center gap-1"><MessageCircle className="size-3" /> {s.comments}</span>
-                          <span className="inline-flex items-center gap-1"><Share2 className="size-3" /> {s.shares}</span>
-                        </span>
-                      )}
-                      <span className="mt-1 block text-[11px] text-[#64748B]">Đã quét <b className="text-[#1D4ED8]">{fmtNum(n)} profile</b> / {fmtNum(Object.keys(s.profiles).length)} đã chọn</span>
-                    </button>
-                  );
-                })}
-              </div>
+      {showResults && (
+        <section className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="flex items-center gap-2 text-base font-bold uppercase tracking-[0.6px] text-[#0F172A]">
+                <Database className="size-4 text-[#1877F2]" /> Kết quả quét profile
+                <span className="rounded-full bg-[#F1F5F9] px-2.5 py-0.5 text-xs font-normal normal-case tracking-normal text-[#64748B]">({fmtNum(results.length)} profile)</span>
+              </h2>
+              <p className="mt-1 text-xs text-[#64748B]">Danh sách dữ liệu người dùng bóc tách theo từng nguồn chiến dịch</p>
             </div>
-            <div className="min-w-0 space-y-4">
-              {active && (
-                <div className={`${CARD} p-4`}>
-                  <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[#F1F5F9] pb-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-bold text-[#0F172A]">
-                        {active.type === "page" ? "Page" : SOURCE_TYPES[active.type]}: {active.name}{" "}
-                        {active.url && <a href={active.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-mono text-xs font-normal text-[#2563EB] hover:underline">{shortFbUrl(active.url)} <ExternalLink className="size-3" /></a>}
-                      </p>
-                      <p className="mt-0.5 text-xs text-[#64748B]">Quy mô: <b>{active.scale != null ? fmtNum(active.scale) : active.scaleLabel || "—"}</b> {active.scale != null && SCALE_UNITS[active.type]}</p>
+            <div className="flex flex-wrap gap-2.5">
+              <button type="button" onClick={() => exportRows(results, "quet_profile")} className="inline-flex h-8 items-center gap-2 rounded-lg border border-[#CBD5E1] bg-white px-4 text-xs font-semibold text-[#1E293B] hover:bg-slate-50"><Download className="size-3.5 text-[#059669]" /> {resultsBySource ? "Xuất toàn bộ file Excel" : "Xuất file"}</button>
+              {!resultsBySource && <button type="button" onClick={openSave} className="inline-flex h-8 items-center gap-2 rounded-lg bg-[#2563EB] px-4 text-xs font-semibold text-white hover:bg-[#1D4ED8]"><Save className="size-3.5" /> Lưu vào danh sách chung</button>}
+            </div>
+          </div>
+
+          {resultsBySource ? (
+            <div className="grid gap-6 lg:grid-cols-[300px_minmax(0,1fr)]">
+              <div className={`${CARD} p-4`}>
+                <p className="flex items-center gap-2 border-b border-[#F1F5F9] pb-3 text-xs font-bold uppercase tracking-[0.5px] text-[#334155]"><ListChecks className="size-4 text-[#1877F2]" /> Danh mục nguồn quét ({entries.length})</p>
+                <div className="mt-3 flex gap-2">
+                  <div className="relative min-w-0 flex-1">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-[#94A3B8]" />
+                    <input aria-label="Tìm nguồn" value={sourceSearch} onChange={(e) => setSourceSearch(e.target.value)} placeholder="Tìm kiếm" className="h-[30px] w-full rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] pl-8 pr-2 text-xs outline-none focus:border-[#1877F2]" />
+                  </div>
+                  <CustomSelect className="w-[118px]" buttonClassName="!h-[30px] !border-[#E2E8F0] !shadow-none" value={sourceType} onChange={setSourceType} options={[{ value: "ALL", label: "Tất cả loại" }, ...Object.entries(SOURCE_TYPES).map(([value, label]) => ({ value, label }))]} />
+                </div>
+                <div className="mt-3 max-h-[420px] space-y-2.5 overflow-y-auto">
+                  {shownSources.length === 0 && <p className="py-8 text-center text-xs text-[#94A3B8]">Chưa có nguồn nào.</p>}
+                  {shownSources.map(([key, s]) => {
+                    const n = results.filter((r) => r.sourceKey === key).length;
+                    return (
+                      <button key={key} type="button" onClick={() => setActiveSource(key)} className={`w-full rounded-xl border p-3 text-left text-xs ${key === activeKey ? "border-2 border-[#1877F2] bg-[#F8FAFF]" : "border-[#E2E8F0] hover:border-[#93C5FD]"}`}>
+                        <span className="rounded bg-[#F1F5F9] px-1.5 py-0.5 text-[10px] text-[#475569]">{SOURCE_TYPES[s.type]}</span>
+                        <span className={`mt-1.5 block truncate text-[#0F172A] ${key === activeKey ? "font-bold" : ""}`}>{s.name}</span>
+                        {s.type === "post" && s.likes != null && (
+                          <span className="mt-1 flex gap-3 text-[#64748B]">
+                            <span className="inline-flex items-center gap-1"><ThumbsUp className="size-3" /> {s.likes}</span>
+                            <span className="inline-flex items-center gap-1"><MessageCircle className="size-3" /> {s.comments}</span>
+                            <span className="inline-flex items-center gap-1"><Share2 className="size-3" /> {s.shares}</span>
+                          </span>
+                        )}
+                        <span className="mt-1 block text-[11px] text-[#64748B]">Đã quét <b className="text-[#1D4ED8]">{fmtNum(n)} profile</b> / {fmtNum(s.target_count ?? Object.keys(s.profiles).length)} đã chọn</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="min-w-0 space-y-4">
+                {active && (
+                  <div className={`${CARD} p-4`}>
+                    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[#F1F5F9] pb-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-[#0F172A]">
+                          {active.type === "page" ? "Page" : SOURCE_TYPES[active.type]}: {active.name}{" "}
+                          {active.url && <a href={active.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-mono text-xs font-normal text-[#2563EB] hover:underline">{shortFbUrl(active.url)} <ExternalLink className="size-3" /></a>}
+                        </p>
+                        <p className="mt-0.5 text-xs text-[#64748B]">Quy mô: <b>{active.scale != null ? fmtNum(active.scale) : active.scaleLabel || "—"}</b> {active.scale != null && SCALE_UNITS[active.type]}</p>
+                      </div>
+                      <button type="button" onClick={() => exportRows(activeRows, "quet_profile_nguon")} className="inline-flex h-[26px] items-center gap-2 rounded-md bg-[#F1F5F9] px-3 text-xs font-semibold text-[#1E293B] hover:bg-slate-200"><FileSpreadsheet className="size-3.5 text-[#059669]" /> Xuất Excel</button>
                     </div>
-                    <button type="button" onClick={() => exportRows(activeRows, "quet_profile_nguon")} className="inline-flex h-[26px] items-center gap-2 rounded-md bg-[#F1F5F9] px-3 text-xs font-semibold text-[#1E293B] hover:bg-slate-200"><FileSpreadsheet className="size-3.5 text-[#059669]" /> Xuất Excel</button>
+                    <div className="mt-3 rounded-lg bg-[#F8FAFC] py-2.5 text-center">
+                      <p className="text-[11px] text-[#64748B]">Số profile đã quét</p>
+                      <p className="font-mono text-lg font-semibold text-[#0F172A]">{fmtNum(activeRows.length)}</p>
+                    </div>
                   </div>
-                  <div className="mt-3 rounded-lg bg-[#F8FAFC] py-2.5 text-center">
-                    <p className="text-[11px] text-[#64748B]">Số profile đã quét</p>
-                    <p className="font-mono text-lg font-semibold text-[#0F172A]">{fmtNum(activeRows.length)}</p>
-                  </div>
-                </div>
-              )}
-              <ProfileTable key={activeKey} rows={activeRows} selected={selected} onSelect={setSelected} />
+                )}
+                <ProfileTable key={activeKey} rows={activeRows} selected={selected} onSelect={setSelected} />
+              </div>
             </div>
-          </div>
-        ) : (
-          <ProfileTable rows={results} selected={selected} onSelect={setSelected} />
-        )}
-      </section>
+          ) : (
+            <ProfileTable rows={results} selected={selected} onSelect={setSelected} />
+          )}
+        </section>
+      )}
 
-      <LiveLogConsole title="Live Automation Console: Quét Profile" logs={logs} phase="idle" />
+      {(showResults || logs.length > 0) && (
+        <LiveLogConsole title="Live Automation Console: Quét Profile" logs={logs} phase={session?.status === "PAUSED" ? "paused" : live ? "running" : session ? "done" : "idle"} />
+      )}
 
       <SelectAccountsModal
         open={showAccounts}

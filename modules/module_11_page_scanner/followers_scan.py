@@ -21,7 +21,6 @@ from .browser_session import (
     release_account_job,
     try_acquire_account_job,
 )
-from .follower_flags import suspect_by_page
 from .page_source import extract_page_identifier
 from .scanner import (
     _PICK_AVATAR_JS,
@@ -1051,7 +1050,8 @@ def run_follower_scan_flow(
     total_dup = 0
     batches = 0
     start_time = time.time()
-    session_keys: Set[str] = set()
+    session_keys: Set[str] = set()  # UID đã lưu trong phiên, dùng lọc trùng giữa các Page
+    cross_skipped = 0
     final_status = "COMPLETED"
 
     driver = None
@@ -1172,7 +1172,8 @@ def run_follower_scan_flow(
                     break
                 continue
 
-            known = existing_follower_keys(owner_key, page_key) if skip_existing else set()
+            # Quét lại cùng Page luôn bỏ qua người đã lưu; skip_existing chỉ quyết định lọc trùng giữa các Page
+            known = existing_follower_keys(owner_key, page_key)
             known_n = len(known)
             view = opened.get("view") or {}
             append_session_log(
@@ -1192,6 +1193,7 @@ def run_follower_scan_flow(
             page_got = 0
             page_seen: Set[str] = set()
             avatar_saved: Set[str] = set()
+            page_cross = 0  # UID bỏ qua vì đã lưu ở Page khác trong phiên
             known_passed = 0
             known_logged = 0
             last_new_at = time.time()
@@ -1241,9 +1243,13 @@ def run_follower_scan_flow(
                     has_new_avatar = bool(item.get("avatar_url")) and fk not in avatar_saved
                     if has_new_avatar:
                         avatar_saved.add(fk)
-                    if fk in session_keys or fk in known:
+                    # Bỏ tick kiểm tra trùng → mỗi Page lưu đủ follower, chỉ lọc trong chính Page
+                    cross_page = skip_existing and fk in session_keys and fk not in known
+                    if cross_page or fk in known:
                         total_dup += 1
                         dup_this += 1
+                        if cross_page and first_seen_on_page:
+                            page_cross += 1
                         if first_seen_on_page:
                             fresh_known += 1
                         # Đã có trong kho (quét lại) hoặc avatar hiện muộn → bổ sung avatar
@@ -1261,7 +1267,7 @@ def run_follower_scan_flow(
                         owner_key, page_key, new_items, session_id
                     )
                     page_got += len(new_items)
-                    total_unique = len(session_keys)
+                    total_unique += len(new_items)
                     batches += 1
                     last_new_at = time.time()
                     stagnant = 0
@@ -1279,7 +1285,7 @@ def run_follower_scan_flow(
                         "success",
                     )
                 elif fresh_known:
-                    # Quét lại (skip_existing): danh sách vẫn đang cuộn qua UID đã có trong kho
+                    # Quét lại: danh sách vẫn đang cuộn qua UID đã có trong kho
                     # → coi là tiến triển để đi tiếp tới UID mới phía dưới, không dừng "all_duplicates".
                     known_passed += fresh_known
                     last_new_at = time.time()
@@ -1386,18 +1392,13 @@ def run_follower_scan_flow(
                 except Exception:
                     pass
 
-            try:
-                flag = suspect_by_page(owner_key, [page_key]).get(page_key)
-                if flag and flag["keys"]:
-                    n, tot = len(flag["keys"]), flag["total"]
-                    append_session_log(
-                        session_id,
-                        f"{page_key}: {n}/{tot} follower đã lưu nghi nick ảo (UID dồn một dải)"
-                        + (" — phần lớn, cân nhắc bỏ Page này" if n * 2 >= tot else ""),
-                        "warn",
-                    )
-            except Exception as flag_exc:
-                logger.debug(f"[FOLLOW] suspect flag: {flag_exc}")
+            if page_cross:
+                cross_skipped += page_cross
+                append_session_log(
+                    session_id,
+                    f"{page_key}: bỏ qua {page_cross} follower trùng với Page khác trong phiên",
+                    "info",
+                )
 
             bump_account_usage(rotation.uid, "FOLLOW", 1)
             pages_quota_left -= 1
@@ -1473,7 +1474,10 @@ def run_follower_scan_flow(
         )
         append_session_log(
             session_id,
-            f"Kết thúc FOLLOW · {final_status}/{stop_reason} · unique={total_unique}",
+            (
+                f"Kết thúc FOLLOW · {final_status}/{stop_reason} · unique={total_unique}"
+                f"{f' · bỏ {cross_skipped} follower trùng Page khác' if cross_skipped else ''}"
+            ),
             "success" if final_status == "COMPLETED" else "warn",
         )
         with _ACTIVE_SESSIONS_LOCK:

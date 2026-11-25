@@ -93,6 +93,7 @@ const NEVER_CACHE = [
   /\/scan\/sessions\/[^/?]+(\?|$)/,     // getScanSessionDetail (module 10)
   /\/api\/seeding\/post-fetch\//,       // module 08 — lấy bài từ page: tiến độ + danh sách bài đổi liên tục khi đang lấy
   /\/api\/seeding\/campaigns\/(active|[^/?]+\/(batch-progress|detail))(\?|$)/, // module 08 — lô đang chạy / tiến độ (poll)
+  /\/api\/profile-scan\//,              // module 13 — tiến độ, log và kết quả đổi liên tục khi đang quét
   /\/api\/v1\/auth\//,                  // đăng nhập, refresh, /me — danh tính không được cache
   /\/api\/v1\/admin\//,
 ];

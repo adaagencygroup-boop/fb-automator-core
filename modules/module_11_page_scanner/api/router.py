@@ -32,7 +32,6 @@ from ..browser_session import (
     mark_stale_running_sessions,
     stop_owner_page_scanner_jobs,
 )
-from ..follower_flags import suspect_by_page
 from ..followers_scan import start_follower_scan_background
 from ..page_detail_scan import start_page_detail_background
 from ..posts_scan import start_post_scan_background
@@ -1383,9 +1382,8 @@ async def list_page_followers(
     page_key: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None),
     session_id: Optional[int] = Query(None),
-    hide_suspect: bool = Query(False),
 ):
-    """Danh sách người theo dõi đã lưu (DS followers). Mỗi hàng kèm suspect_fake (nghi nick ảo)."""
+    """Danh sách người theo dõi đã lưu (DS followers)."""
     owner = _get_owner()
     offset = (page - 1) * page_size
     params: List[Any] = [owner]
@@ -1402,13 +1400,6 @@ async def list_page_followers(
         )
         kw = f"%{keyword.strip()}%"
         params.extend([kw, kw, kw, kw])
-    flags: Optional[Dict[str, Dict[str, Any]]] = None
-    if hide_suspect:
-        flags = suspect_by_page(owner, [page_key.strip()] if page_key else None)
-        for pk, info in flags.items():
-            if info["keys"]:
-                where.append("NOT (f.page_key = %s AND f.follower_key = ANY(%s))")
-                params.extend([pk, sorted(info["keys"])])
     cond = " AND ".join(where)
     count_row = db.fetch_one(
         f"SELECT COUNT(*) AS total FROM scanned_page_followers f WHERE {cond}",
@@ -1427,10 +1418,6 @@ async def list_page_followers(
         tuple(params + [page_size, offset]),
     )
     items = [dict(r) for r in rows or []]
-    if flags is None:
-        flags = suspect_by_page(owner, sorted({r["page_key"] for r in items}))
-    for r in items:
-        r["suspect_fake"] = r["follower_key"] in (flags.get(r["page_key"]) or {}).get("keys", ())
     return {
         "items": items,
         "total": total,
@@ -1808,7 +1795,6 @@ async def list_pages_with_followers():
         """,
         (owner,),
     )
-    flags = suspect_by_page(owner)
     items = []
     total_uids = 0
     for r in rows or []:
@@ -1822,7 +1808,6 @@ async def list_pages_with_followers():
                 "avatar_url": r.get("avatar_url"),
                 "follower_count": r.get("follower_count"),
                 "scanned_uid_count": cnt,
-                "suspect_count": len((flags.get(r.get("page_key")) or {}).get("keys", ())),
                 "last_follower_at": r.get("last_follower_at"),
             }
         )

@@ -2,12 +2,9 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
-  CircleStop,
   Link2,
   FileUp,
   Download,
-  Play,
-  RotateCcw,
   Check,
   ExternalLink,
   Loader2,
@@ -39,6 +36,7 @@ import {
   saveSelectedAccountUids,
   resolveUsableSavedUids,
 } from "../shared/accountStorage";
+import { ScanActionButtons } from "../shared/ScanActionButtons";
 import { clearScanState, fetchSavedSessions, loadScanState, saveScanState } from "../shared/scanStateStorage";
 import { useClickLock } from "../shared/useClickLock";
 import {
@@ -1461,8 +1459,8 @@ export default function PageScannerSearch() {
   return (
     <div className={`-m-6 min-h-full space-y-6 ${FIGMA.pageBg} p-6`}>
       <div>
-        <h1 className="font-heading text-2xl font-bold tracking-tight text-[#1E293B]">Quét thông tin page</h1>
-        <p className="mt-1 max-w-[763px] text-sm leading-5 text-[#64748B]">
+        <h1 className="font-heading text-xl font-bold text-[#0F172A]">Quét thông tin page</h1>
+        <p className="mt-1 max-w-3xl text-xs text-[#64748B]">
           Tìm kiếm, lọc danh sách Fanpage Facebook theo từ khóa, dán danh sách link hoặc tải tệp file và trích
           xuất dữ liệu chi tiết liên hệ (Số điện thoại, Email, Website, Follower).
         </p>
@@ -2018,50 +2016,17 @@ export default function PageScannerSearch() {
       </div>
 
       {/* Controls: idle = Start; đang chạy = Pause + Emergency */}
-      <div className="space-y-3">
-        {!isBusy && (
-          <button
-            type="button"
-            onClick={() => runStartLocked(handleStart)}
-            disabled={startLocked}
-            className="disabled:cursor-not-allowed disabled:opacity-60 inline-flex h-12 w-full items-center justify-center gap-3.5 rounded-xl bg-[#004AC6] text-base font-bold text-white hover:bg-[#003EA8]"
-          >
-            <Play className="size-4" />
-            BẮT ĐẦU THỰC THI
-          </button>
-        )}
-        {!isBusy && showResults && (
-          <button
-            type="button"
-            onClick={handleNewScan}
-            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[#CBD5E1] bg-white text-xs font-bold text-[#475569] hover:bg-slate-50"
-          >
-            <RotateCcw className="size-3.5" />
-            QUÉT MỚI (XÓA KẾT QUẢ ĐANG XEM)
-          </button>
-        )}
-        {isBusy && (
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <button
-              type="button"
-              onClick={handlePauseResume}
-              className="inline-flex h-12 flex-1 items-center justify-center gap-1.5 rounded-xl border border-[#BE123C] bg-[#F8F9FF] px-4 text-base font-semibold text-[#93000A] hover:bg-[#FFF1F2]"
-            >
-              {isPaused ? <Play className="size-5" /> : <CircleStop className="size-5 [&>rect]:fill-current" />}
-              {isPaused ? "TIẾP TỤC" : "TẠM DỪNG"}
-            </button>
-            <button
-              type="button"
-              onClick={handleEmergencyStop}
-              disabled={isStopping}
-              className="inline-flex h-12 shrink-0 items-center justify-center gap-1.5 rounded-xl bg-[#FFDAD6] px-4 text-base font-semibold text-[#93000A] hover:bg-[#FFC9C3] disabled:opacity-50 cursor-pointer"
-            >
-              <CircleStop className="size-5 [&>rect]:fill-current" />
-              {isStopping ? "ĐANG DỪNG..." : "DỪNG KHẨN CẤP"}
-            </button>
-          </div>
-        )}
-      </div>
+      <ScanActionButtons
+        live={isBusy}
+        paused={isPaused}
+        stopping={isStopping}
+        showNewScan={showResults}
+        startDisabled={startLocked}
+        onStart={() => runStartLocked(handleStart)}
+        onPauseResume={handlePauseResume}
+        onStop={handleEmergencyStop}
+        onNewScan={handleNewScan}
+      />
 
       {/* Kết quả + log: chỉ hiện sau khi bắt đầu chạy */}
       {showResults && (

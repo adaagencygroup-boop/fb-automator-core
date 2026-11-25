@@ -1,46 +1,34 @@
 import api from "@/services/api";
 import { getScanCategories, getScannedGroups } from "@/modules/module_10_group_scan/service";
-import { UNCATEGORIZED } from "./utils.mjs";
-import { getPageLists, getPagesWithFollowers, getPageFollowers, getScannedPages } from "@/modules/module_11_page_scanner/service";
+import { getPageLists, getPagesWithFollowers, getScannedPages } from "@/modules/module_11_page_scanner/service";
 
-/** Backend Module 13 chưa có: các thao tác dưới báo rõ thay vì giả vờ thành công. */
-export const BACKEND_READY = false;
-const NOT_READY = "Backend Quét profile (module 13) chưa được xây dựng.";
+const BASE = "/api/profile-scan";
 
-export async function startProfileScan() {
-  throw new Error(NOT_READY);
-}
-export async function getProfileLists() {
-  return [];
-}
-export async function saveProfilesToList() {
-  throw new Error(NOT_READY);
-}
+// ── Phiên quét ──
+export const startProfileScan = (payload) => api.post(`${BASE}/sessions`, payload);
+export const getLatestScan = async () => (await api.get(`${BASE}/sessions/latest`)).session;
+/** { session, logs } — chỉ log mới hơn afterLog */
+export const getScanProgress = (id, afterLog = 0) => api.get(`${BASE}/sessions/${id}`, { params: { after_log: afterLog } });
+/** { items, sources } */
+export const getScanResults = (id) => api.get(`${BASE}/sessions/${id}/results`);
+/** action: pause | resume | stop */
+export const controlScan = (id, action, body = {}) => api.post(`${BASE}/sessions/${id}/${action}`, body);
+
+export const getProfileLists = async () => (await api.get(`${BASE}/categories`)).items;
+export const saveProfilesToList = ({ id, name, color, profiles }) =>
+  api.post(`${BASE}/categories/save`, { category_id: id, name, color, uids: profiles.map((p) => p.uid) });
 
 // ── Danh sách profile ──
 /** [{ key, type: group|post|page|category, name, url, scale, color, profile_count, ... }] */
-export async function getProfileCollections() {
-  return [{ key: UNCATEGORIZED, type: "category", name: "Chưa có danh mục", profile_count: 0 }];
-}
-export async function getCollectionProfiles() {
-  return [];
-}
-export async function createProfileCategory() {
-  throw new Error(NOT_READY);
-}
-export async function updateProfileCategory() {
-  throw new Error(NOT_READY);
-}
+export const getProfileCollections = async () => (await api.get(`${BASE}/collections`)).items;
+export const getCollectionProfiles = async (key) => (await api.get(`${BASE}/collections/profiles`, { params: { key } })).items;
+const categoryId = (key) => key.replace("category:", "");
+export const createProfileCategory = ({ name, color }) => api.post(`${BASE}/categories`, { name, color });
+export const updateProfileCategory = (key, { name, color }) => api.put(`${BASE}/categories/${categoryId(key)}`, { name, color });
 /** Xóa danh mục: profile bên trong về "Chưa có danh mục" */
-export async function deleteProfileCategory() {
-  throw new Error(NOT_READY);
-}
-export async function moveProfiles() {
-  throw new Error(NOT_READY);
-}
-export async function deleteProfiles() {
-  throw new Error(NOT_READY);
-}
+export const deleteProfileCategory = (key) => api.delete(`${BASE}/categories/${categoryId(key)}`);
+export const moveProfiles = (fromKey, toKey, uids) => api.post(`${BASE}/members/move`, { key: fromKey, to_key: toKey, uids });
+export const deleteProfiles = (key, uids) => api.post(`${BASE}/members/delete`, { key, uids });
 
 // ── Nguồn: nhóm (kho Module 10) ──
 export async function loadGroupSource() {
@@ -68,6 +56,7 @@ export async function loadPageSource() {
     url: p.page_url,
     scale: p.follower_count,
     scanned: p.scanned_uid_count,
+    avatar: p.avatar_url,
   }));
   return { items, categories: lists.map((l) => ({ id: l.id, name: l.name })) };
 }
@@ -83,32 +72,22 @@ export async function loadPageListKeys(listId) {
   return keys;
 }
 
-const toFollower = (f) => ({ uid: String(f.follower_key), name: f.follower_name || f.follower_key, url: f.profile_url, avatar: f.avatar_url });
-const toMember = (m) => ({ uid: String(m.uid), name: m.name, url: m.profile_url, avatar: m.avatar_url });
-
-/** 1 trang profile đã quét của nguồn → { items, total } */
+/** 1 trang profile của nguồn → { items: [{ …, scanned }], total }; người đã quét thông tin ở cuối */
 export async function loadSourceProfiles(type, id, { page = 1, pageSize = 20, search = "" } = {}) {
-  if (type === "group") {
-    const res = await api.get("/api/group-scan/members", {
-      params: { group_id: id, page, page_size: pageSize, search: search || undefined },
-    });
-    return { items: (res?.members || []).map(toMember), total: res?.total || 0 };
-  }
-  if (type === "page") {
-    const res = await getPageFollowers({ page_key: id, page, page_size: pageSize, keyword: search || undefined });
-    return { items: (res?.items || []).map(toFollower), total: res?.total || 0 };
-  }
-  return { items: [], total: 0 };
+  if (type === "post") return { items: [], total: 0 };
+  const res = await api.get(`${BASE}/source-people`, { params: { type, id, page, page_size: pageSize, search: search || undefined } });
+  return { items: res.items.map((p) => ({ ...p, uid: String(p.uid), name: p.name || p.uid })), total: res.total };
 }
 
-/** N profile đầu tiên của nguồn (từ trên xuống, theo đúng bộ lọc đang tìm) */
+/** N profile đầu tiên chưa quét thông tin của nguồn (từ trên xuống, theo đúng bộ lọc đang tìm) */
 export async function loadTopProfiles(type, id, count, search = "") {
   const size = 500;
   const out = [];
   for (let page = 1; out.length < count; page += 1) {
     const { items } = await loadSourceProfiles(type, id, { page, pageSize: size, search });
-    out.push(...items);
-    if (items.length < size) break;
+    const fresh = items.filter((p) => !p.scanned);
+    out.push(...fresh);
+    if (fresh.length < size) break; // hết người chưa quét
   }
   return out.slice(0, count);
 }

@@ -30,6 +30,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "@/lib/toast";
 import { askConfirm } from "./askConfirm";
 import { getCategories } from "@/modules/module_02_account_manager/service";
+import useDragRowSelect from "./useDragRowSelect";
 import { attachDragSelection } from "@/modules/module_02_account_manager/utils/drag-selection.mjs";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
 import {
@@ -833,6 +834,14 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
     );
   };
 
+  // Kéo chọn nhiều page trong trang đang xem (giữ lựa chọn ở trang / danh mục khác)
+  const drag = useDragRowSelect({
+    ids: currentPageKeys,
+    isSelected: (key) => draftKeys.includes(key),
+    onSet: (keys) => setDraftKeys((prev) => [...new Set([...prev.filter((k) => !currentPageKeys.includes(k)), ...keys])]),
+    onToggle: toggleSinglePage,
+  });
+
   const activeCategoryObj = useMemo(() => {
     return categoriesData.allList.find((c) => c.key === activeCategory) || {
       name: activeCategory === NO_TAG_KEY ? "Chưa có tag" : activeCategory,
@@ -1255,8 +1264,8 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
             </div>
 
             {/* Bảng danh sách Page */}
-            <div className="flex-1 min-h-0 overflow-auto [scrollbar-width:thin] [scrollbar-color:#CBD5E1_transparent] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-slate-300 hover:[&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-button]:hidden">
-              <table className="w-full min-w-[760px] text-left text-xs">
+            <div ref={drag.setContainer} className="flex-1 min-h-0 overflow-auto [scrollbar-width:thin] [scrollbar-color:#CBD5E1_transparent] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-slate-300 hover:[&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-button]:hidden">
+              <table className="w-full min-w-[760px] select-none text-left text-xs">
                 <thead className="sticky top-0 z-10 bg-white text-[10px] font-bold text-[#64748B] uppercase tracking-wider">
                   <tr className="border-b border-[#E2E8F0]">
                     <th className="w-10 px-4 py-3">
@@ -1300,7 +1309,7 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
                       return (
                         <tr
                           key={pg.page_key || idx}
-                          onClick={() => toggleSinglePage(pg.page_key)}
+                          {...drag.rowProps(pg.page_key)}
                           className={`cursor-pointer transition ${
                             isChecked ? "bg-[#F0F7FF]/50 hover:bg-[#F0F7FF]" : "hover:bg-[#F8FAFC]"
                           }`}

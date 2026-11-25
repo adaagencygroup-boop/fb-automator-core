@@ -55,7 +55,6 @@ export default function PageScannerListFollowers() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [keyword, setKeyword] = useState("");
-  const [hideSuspect, setHideSuspect] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState([]);
 
@@ -105,7 +104,6 @@ export default function PageScannerListFollowers() {
         page_size: pageSize,
         keyword: keyword.trim() || undefined,
         page_key: activePageKey !== ALL_ID ? activePageKey : undefined,
-        hide_suspect: hideSuspect || undefined,
       })
         .then((data) => {
           setItems(data.items || []);
@@ -118,12 +116,12 @@ export default function PageScannerListFollowers() {
         })
         .finally(() => setLoading(false));
     },
-    [pageSize, keyword, activePageKey, hideSuspect],
+    [pageSize, keyword, activePageKey],
   );
 
   useEffect(() => {
     load(1);
-  }, [activePageKey, pageSize, hideSuspect]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activePageKey, pageSize]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const reload = (p = 1) => {
     setLoading(true);
@@ -153,7 +151,6 @@ export default function PageScannerListFollowers() {
       "Profile Link",
       "Avatar",
       "Page nguồn",
-      "Nghi nick ảo",
     ];
     const rows = rowsSrc.map((r, i) => {
       const uid = String(r.follower_key || r.user_uid || "").replace(
@@ -167,7 +164,6 @@ export default function PageScannerListFollowers() {
         r.profile_url || (uid ? `https://facebook.com/${uid}` : ""),
         r.avatar_url || "",
         r.page_name || r.page_key || "",
-        r.suspect_fake ? "Có" : "",
       ];
     });
     const csv = [headers, ...rows]
@@ -312,11 +308,7 @@ export default function PageScannerListFollowers() {
                   active={activePageKey === p.page_key}
                   onClick={() => selectPage(p.page_key)}
                   title={p.page_name || p.page_key}
-                  subtitle={
-                    p.suspect_count > 0
-                      ? `⚠ ${Number(p.suspect_count).toLocaleString("vi-VN")}/${Number(uidCount || 0).toLocaleString("vi-VN")} nghi nick ảo`
-                      : `ID: ${String(p.page_key || "").replace(/^id:|^user:/, "")}`
-                  }
+                  subtitle={`ID: ${String(p.page_key || "").replace(/^id:|^user:/, "")}`}
                   badge={
                     uidCount != null
                       ? `${Number(uidCount).toLocaleString("vi-VN")} UID`
@@ -422,13 +414,6 @@ export default function PageScannerListFollowers() {
                 className="h-9 text-[11px]"
               />
             </div>
-            <label className="flex cursor-pointer items-center gap-2 text-[11px] font-medium text-slate-700 select-none">
-              <Checkbox
-                checked={hideSuspect}
-                onCheckedChange={(c) => setHideSuspect(!!c)}
-              />
-              Ẩn nick nghi ảo
-            </label>
           </div>
 
           <div className="px-5">
@@ -536,14 +521,6 @@ export default function PageScannerListFollowers() {
                             <span className="font-semibold text-slate-800">
                               {fullName}
                             </span>
-                            {r.suspect_fake && (
-                              <span
-                                className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700"
-                                title="Nhiều UID của page này dồn một dải — chỉ là nghi ngờ, chưa kiểm chứng"
-                              >
-                                Nghi nick ảo
-                              </span>
-                            )}
                           </div>
                         </td>
                         <td className="px-3 py-2.5 font-mono text-slate-600">
