@@ -26,14 +26,15 @@ export const seedingApi = {
     return await api.post("/api/seeding/targets/validate", { target_type: targetType, urls });
   },
 
-  getSeedingTargets: async (targetType, includeCompleted = false) => {
+  getSeedingTargets: async (targetType, includeCompleted = false, fresh = false) => {
     try {
       const params = {};
       if (targetType) params.target_type = targetType;
       if (includeCompleted) params.include_completed = true;
-      const res = await api.get("/api/seeding/targets", { params });
+      const res = await api.get("/api/seeding/targets", { params, ...(fresh ? { fresh: true } : {}) });
       return res || { total: 0, targets: [] };
-    } catch {
+    } catch (error) {
+      if (fresh) throw error;
       return { total: 0, targets: [] };
     }
   },
@@ -49,12 +50,8 @@ export const seedingApi = {
   },
 
   clearSeedingTargets: async (targetType) => {
-    try {
-      const params = targetType ? { target_type: targetType } : {};
-      return await api.delete("/api/seeding/targets/clear", { params });
-    } catch {
-      return { success: false };
-    }
+    const params = targetType ? { target_type: targetType } : {};
+    return await api.delete("/api/seeding/targets/clear", { params });
   },
 
   getSeedingComments: async () => {

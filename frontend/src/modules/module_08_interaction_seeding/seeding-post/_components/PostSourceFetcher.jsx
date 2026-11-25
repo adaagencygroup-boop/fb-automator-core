@@ -579,7 +579,7 @@ export default function PostSourceFetcher({
                   const { Icon, label } = TYPES[p.post_type] || TYPES.text;
                   const checked = p.added || isSelected(sel, p.id);
                   const { title, desc } = splitContent(p.content);
-                    const date = formatDateOnly(p.published_at || p.published_text);
+                    const date = formatDateOnly(p.published_text || p.published_at);
                   return (
                     <label
                       key={p.id}

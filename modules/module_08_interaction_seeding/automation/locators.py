@@ -501,38 +501,78 @@ class PostLocators:
     # Nút Like chính của bài viết. Bố cục mới: khung nút chỉ có icon (sprite -441px khi chưa thích)
     # + div[data-ad-rendering-role="like_button"] RỖNG, không có chữ "Thích".
     JS_FIND_LIKE_BUTTON = """
-        // Ưu tiên hộp thoại (mở sau cùng) có chứa nút Like của bài viết, không có thì tìm trên cả trang
+        const visible = (el) => {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight &&
+                   style.visibility !== 'hidden' && style.display !== 'none';
+        };
+        const hasLikeIcon = (el) => Array.from(el.querySelectorAll('svg path')).some((path) =>
+            (path.getAttribute('d') || '').startsWith('M10.999.5a2.5')
+        );
         const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).reverse();
-        let root = null, marker = null;
-        for (const d of dialogs) {
-            const m = d.querySelector('div[data-ad-rendering-role="like_button"]');
-            if (m) { root = d; marker = m; break; }
-        }
-        if (!marker) {
-            marker = document.querySelector('div[data-ad-rendering-role="like_button"]');
-            root = marker ? document : (dialogs[0] || document);
-        }
-        let target = null;
+        const root = dialogs.find((dialog) => visible(dialog) && hasLikeIcon(dialog)) || document;
+
+        // Reel buttons expose both the thumbs-up SVG and a counted aria-label,
+        // e.g. "Like, 743 reactions". Restrict selection to visible controls so
+        // a suggested Reel lower on the page is not mistaken for the target.
+        const iconButtons = Array.from(root.querySelectorAll('svg path'))
+            .filter((path) => (path.getAttribute('d') || '').startsWith('M10.999.5a2.5'))
+            .map((path) => path.closest('svg')?.closest('button, [role="button"]'))
+            .filter(Boolean);
+        const visibleIconButton = iconButtons.find((button) => {
+            const label = (button.getAttribute('aria-label') || '').trim();
+            return visible(button) && (/^like,\\s*\\d+\\s+reactions?$/i.test(label) ||
+                /^th\\u00edch,/i.test(label));
+        }) || iconButtons.find(visible);
+        if (visibleIconButton) return visibleIconButton;
+
+        const marker = root.querySelector('div[data-ad-rendering-role="like_button"]');
         if (marker) {
-            target = marker.closest('div[role="button"]') || marker.closest('div.x1i10hfl');
-            if (!target && marker.parentElement && marker.parentElement.parentElement) {
-                target = marker.parentElement.parentElement.querySelector('div[role="button"], div.x1i10hfl');
-            }
+            const markedButton = marker.closest('div[role="button"]') || marker.closest('div.x1i10hfl');
+            if (markedButton && visible(markedButton)) return markedButton;
         }
-        if (!target) {
-            target = Array.from(root.querySelectorAll('div[role="button"], div.x1i10hfl, div[tabindex="0"]')).find(el => {
-                if (el.closest('ul') || el.closest('form')) return false;
-                const a = (el.getAttribute('aria-label') || '').toLowerCase().trim();
-                return a === 'like' || a === 'thích' || a === 'react' || a === 'thích bài viết';
-            }) || null;
-        }
-        if (!target && marker && marker.parentElement) target = marker.parentElement;
-        return target;
+        const labeledButton = Array.from(root.querySelectorAll('button, [role="button"]')).find((el) => {
+            const a = (el.getAttribute('aria-label') || '').trim().toLowerCase();
+            return visible(el) && (a === 'like' || a === 'th\\u00edch' || a === 'react' || a === 'th\\u00edch b\\u00e0i vi\\u1ebft');
+        });
+        if (labeledButton) return labeledButton;
+        if (marker) return marker.closest('div[role="button"]') || marker.closest('div.x1i10hfl') || marker;
+        return iconButtons[0] || null;
     """
 
-    # Nút Like đã ở trạng thái "đã thích" chưa — chỉ tin dấu hiệu chắc chắn: aria-pressed, nhãn "Remove/Gỡ...",
-    # hoặc CHỮ "Thích/Like" có màu (chữ xám r≈g≈b = chưa thích). Không dùng màu khung nút (khung thừa hưởng
-    # màu chữ đen của trang nên luôn bị tưởng là "có màu" -> nhận nhầm là đã thích rồi bỏ qua, không bấm).
+    JS_FIND_COMMENT_BUTTON = """
+        const visible = (el) => {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight &&
+                   style.visibility !== 'hidden' && style.display !== 'none';
+        };
+        const hasCommentIcon = (el) => Array.from(el.querySelectorAll('svg path')).some((path) =>
+            (path.getAttribute('d') || '').startsWith('M12 .5C18.351')
+        );
+        const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).reverse();
+        const root = dialogs.find((dialog) => visible(dialog) && hasCommentIcon(dialog)) || document;
+        const iconButtons = Array.from(root.querySelectorAll('svg path'))
+            .filter((path) => (path.getAttribute('d') || '').startsWith('M12 .5C18.351'))
+            .map((path) => path.closest('svg')?.closest('button, [role="button"]'))
+            .filter(Boolean);
+        const visibleIconButton = iconButtons.find((button) => {
+            const label = (button.getAttribute('aria-label') || '').trim();
+            return visible(button) && (/^comment,\\s*\\d+\\s+comments?$/i.test(label) ||
+                /^b\\u00ecnh lu\\u1eadn,/i.test(label));
+        }) || iconButtons.find(visible);
+        if (visibleIconButton) return visibleIconButton;
+        const labelButton = Array.from(root.querySelectorAll('button, [role="button"]')).find((button) => {
+            const label = (button.getAttribute('aria-label') || '').trim();
+            return visible(button) && (/^comment,\\s*\\d+\\s+comments?$/i.test(label) ||
+                /^b\\u00ecnh lu\\u1eadn,/i.test(label));
+        });
+        return labelButton || iconButtons[0] || null;
+    """
+
     JS_IS_LIKE_BUTTON_LIKED = """
         const btn = (() => {""" + JS_FIND_LIKE_BUTTON + """})();
         if (!btn) return false;
@@ -573,6 +613,7 @@ class PostLocators:
 
     # 4.2. Khung Comment (Facebook Lexical Editor)
     COMMENT_BOX_XPATHS = [
+        "//div[@data-lexical-editor='true' and @role='textbox' and @contenteditable='true']",
         "//div[@data-lexical-editor='true' and @role='textbox']",
         "//div[@role='textbox' and (contains(@aria-label, 'Bình luận dưới tên') or contains(@aria-placeholder, 'Bình luận dưới tên'))]",
         "//div[@role='textbox' and (contains(@aria-label, 'Bình luận') or contains(@aria-placeholder, 'Bình luận'))]",
@@ -587,53 +628,81 @@ class PostLocators:
     ]
 
     JS_FIND_COMMENT_BOX = """
-        return document.querySelector('div[data-lexical-editor="true"][role="textbox"]') ||
-               document.querySelector('div[role="textbox"][aria-label*="Bình luận dưới tên" i]') ||
-               document.querySelector('div[role="textbox"][aria-placeholder*="Bình luận dưới tên" i]') ||
-               document.querySelector('div[role="textbox"][aria-label*="bình luận" i]') ||
-               document.querySelector('div[role="textbox"][contenteditable="true"]') ||
-               document.querySelector('div[contenteditable="true"][data-lexical-editor="true"]') ||
-               document.querySelector('div[contenteditable="true"]');
+        const visible = (el) => {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight &&
+                   style.visibility !== 'hidden' && style.display !== 'none';
+        };
+        const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).reverse();
+        const editorSelector = 'div[contenteditable="true"][role="textbox"][data-lexical-editor="true"]';
+        const root = dialogs.find((dialog) => visible(dialog) && dialog.querySelector(editorSelector)) || document;
+        const editors = Array.from(root.querySelectorAll(
+            editorSelector + ', div[role="textbox"][contenteditable="true"]'
+        ));
+        const visibleEditor = editors.find((editor) => {
+            const label = ((editor.getAttribute('aria-label') || '') + ' ' +
+                           (editor.getAttribute('aria-placeholder') || '')).trim().toLowerCase();
+            return visible(editor) && (label.includes('comment as') || label.includes('write a comment') ||
+                label.includes('b\\u00ecnh lu\\u1eadn'));
+        }) || editors.find(visible);
+        return visibleEditor || null;
     """
 
     # 4.3. Nút Chia sẻ (Share) & Hộp thoại Audience
     SHARE_BUTTON_XPATHS = [
+        "//div[@role='dialog']//button[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'share') or contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'chia sẻ')]",
         "//div[@role='dialog']//div[@data-ad-rendering-role='share_button']/ancestor::div[@role='button' or contains(@class, 'x9f619')][1]",
         "//div[@role='dialog']//i[contains(@style, '-567px')]/ancestor::div[@role='button' or contains(@class, 'x9f619')][1]",
         "//div[@role='dialog']//div[@role='button' and (@aria-label='Chia sẻ' or @aria-label='Share')]",
         "//div[@data-ad-rendering-role='share_button']/ancestor::div[@role='button' or contains(@class, 'x9f619')][1]",
         "//i[contains(@style, '-567px')]/ancestor::div[@role='button' or contains(@class, 'x9f619')][1]",
+        "//button[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'share') or contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'chia sẻ')]",
         "//div[@role='button' and (@aria-label='Chia sẻ' or @aria-label='Share')]",
     ]
 
     JS_FIND_SHARE_BUTTON = """
-        const modal = document.querySelector('div[role="dialog"]');
-        const root = modal || document;
+        const visible = (el) => {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight &&
+                   style.visibility !== 'hidden' && style.display !== 'none';
+        };
+        const isCountedShare = (button) => {
+            const label = (button.getAttribute('aria-label') || '').trim().toLowerCase();
+            return /^share,\\s*\\d+\\s+shares?$/.test(label) ||
+                   /^chia s\\u1ebb,\\s*\\d+\\s+l\\u01b0\\u1ee3t chia s\\u1ebb$/.test(label);
+        };
+        const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).reverse();
+        const root = dialogs.find((dialog) => visible(dialog) &&
+            Array.from(dialog.querySelectorAll('button, [role="button"]')).some(isCountedShare)) || document;
 
-        // 1. Quét theo data-ad-rendering-role='share_button'
+        // Reel share control is labeled with its count, e.g. "Share, 1 share".
+        // Prefer the visible target action before falling back to Comet markers.
+        const countedShare = Array.from(root.querySelectorAll('button, [role="button"]'))
+            .find((button) => visible(button) && isCountedShare(button));
+        if (countedShare) return countedShare;
+
         const marker = root.querySelector('div[data-ad-rendering-role="share_button"]');
         if (marker) {
-            return marker.closest('div[role="button"]') || marker.closest('.x1i10hfl') || marker.closest('div.x9f619') || marker.parentElement;
+            const markedButton = marker.closest('div[role="button"]') || marker.closest('.x1i10hfl') ||
+                                 marker.closest('div.x9f619') || marker.parentElement;
+            if (visible(markedButton)) return markedButton;
         }
 
-        // 2. Quét theo CSS sprite icon Share (background-position: 0px -567px)
-        const shareIcons = Array.from(root.querySelectorAll('i[data-visualcompletion="css-img"]')).filter(i => {
-            return (i.getAttribute('style') || '').includes('-567px');
-        });
-        if (shareIcons.length > 0) {
-            return shareIcons[0].closest('div[role="button"]') || shareIcons[0].closest('.x1i10hfl') || shareIcons[0].parentElement;
-        }
+        const shareIcons = Array.from(root.querySelectorAll('i[data-visualcompletion="css-img"]'))
+            .filter((icon) => (icon.getAttribute('style') || '').includes('-567px'));
+        const iconButton = shareIcons.map((icon) =>
+            icon.closest('div[role="button"]') || icon.closest('.x1i10hfl') || icon.parentElement
+        ).find(visible);
+        if (iconButton) return iconButton;
 
-        // 3. Quét theo aria-label='Chia sẻ' hoặc 'Share'
-        const ariaBtns = Array.from(root.querySelectorAll('div[role="button"], span[role="button"]')).filter(b => {
-            const a = (b.getAttribute('aria-label') || '').toLowerCase();
-            return a === 'chia sẻ' || a === 'share' || a.includes('share') || a.includes('chia sẻ');
-        });
-        if (ariaBtns.length > 0) {
-            return ariaBtns[0];
-        }
-
-        return null;
+        return Array.from(root.querySelectorAll('button, [role="button"]')).find((button) => {
+            const label = (button.getAttribute('aria-label') || '').trim().toLowerCase();
+            return visible(button) && (label === 'share' || label === 'chia s\\u1ebb');
+        }) || null;
     """
 
     JS_GET_AUDIENCE_PILL = """

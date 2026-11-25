@@ -23,6 +23,15 @@ import { seedingApi } from "@/modules/module_08_interaction_seeding/service";
 
 const emptySubscribe = () => () => {};
 const useIsMounted = () => useSyncExternalStore(emptySubscribe, () => true, () => false);
+const shareConfirmationFailure = /facebook (?:closed the share dialog without confirming the reel was shared|đã đóng hộp thoại chia sẻ nhưng không xác nhận reel đã được chia sẻ)/i;
+const taskErrorMessage = (task, fallback = "Không thể hoàn thành tác vụ") => {
+  const message = task?.error_message || fallback;
+  if (!shareConfirmationFailure.test(message)) return message;
+  const isReel = /\/(?:reels?)\/\d+(?:[/?#]|$)/i.test(task?.target_url || "");
+  return isReel
+    ? "Facebook đã đóng hộp thoại chia sẻ nhưng không xác nhận Reel đã được chia sẻ"
+    : "Facebook đã đóng hộp thoại chia sẻ nhưng không xác nhận bài viết đã được chia sẻ";
+};
 
 export default function CampaignDetailModal({
   isOpen,
@@ -414,7 +423,7 @@ export default function CampaignDetailModal({
                         <XCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />
                         <div>
                           <strong>{t.account_name || t.account_uid}:</strong>{" "}
-                          <span>{t.error_message || "Không thể hoàn thành tác vụ"}</span>
+                          <span>{taskErrorMessage(t)}</span>
                         </div>
                       </div>
                     ))}
@@ -491,12 +500,12 @@ export default function CampaignDetailModal({
                                   isFailed ? (
                                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-rose-50 text-rose-700 border border-rose-200/70 font-medium text-[11px]">
                                       <XCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                                      {t.error_message}
+                                      {taskErrorMessage(t)}
                                     </span>
                                   ) : (
                                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200/70 font-medium text-[11px]">
                                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                      {t.error_message}
+                                      {taskErrorMessage(t)}
                                     </span>
                                   )
                                 ) : isSuccess ? (

@@ -143,12 +143,69 @@ def post_target_fields(post_url: str) -> tuple[str, str]:
     return target_url, extract_fb_id(target_url, "POST")
 
 
+def _resolve_post_url_from_embed_menu(driver, selector: str, candidate_index: int) -> str:
+    """Use Facebook's Embed dialog when the feed omits a post permalink href."""
+    try:
+        opened = driver.execute_script(r"""
+const node = document.querySelectorAll(arguments[0])[arguments[1]];
+if (!node) return false;
+const action = Array.from(node.querySelectorAll('[role="button"]')).find((button) =>
+  /^actions for this post/i.test(button.getAttribute('aria-label') || '')
+);
+if (!action) return false;
+action.click();
+return true;
+""", selector, int(candidate_index))
+        if not opened:
+            return ""
+        time.sleep(0.35)
+        clicked = driver.execute_script(r"""
+const embed = Array.from(document.querySelectorAll('[role="menuitem"], [role="button"]')).find((item) =>
+  /^(embed|nhúng)$/i.test((item.innerText || item.textContent || '').replace(/\s+/g, ' ').trim())
+);
+if (!embed) return false;
+embed.click();
+return true;
+""")
+        if not clicked:
+            driver.execute_script("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));")
+            return ""
+        time.sleep(0.45)
+        post_url = driver.execute_script(r"""
+const link = Array.from(document.querySelectorAll('a[href]')).find((anchor) =>
+  anchor.href.includes('/docs/plugins/embedded-posts/') && anchor.href.includes('prefill_href=')
+);
+if (!link) return '';
+try { return new URL(link.href).searchParams.get('prefill_href') || ''; }
+catch { return ''; }
+""") or ""
+        driver.execute_script(r"""
+const dialog = Array.from(document.querySelectorAll('[role="dialog"]')).pop();
+const close = dialog?.querySelector('[aria-label="Close"]');
+if (close) close.click();
+else document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+""")
+        post_url = str(post_url).strip()
+        if not re.search(r"/posts/[^/?#]+|/permalink(?:\.php)?(?:/[^/?#]+)?(?:[?#]|$)|/(?:reels?|videos?)/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)|[?&]story_fbid=", post_url, re.I):
+            return ""
+        return post_url
+    except Exception as exc:
+        logger.debug("Unable to get post permalink from Embed dialog: %s", exc)
+        try:
+            driver.execute_script("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));")
+        except Exception:
+            pass
+        return ""
+
+
 def _read_post_batch(driver, selector: str) -> List[Dict[str, Any]]:
     """Đọc bài riêng cho Module 8, không trích số like/comment/share từ DOM."""
     rows = driver.execute_script(_READ_POST_BATCH_JS, selector) or []
     posts: List[Dict[str, Any]] = []
     for row in rows:
         post_url = str(row.get("post_url") or "").strip()
+        if not post_url and row.get("candidate_index") is not None:
+            post_url = _resolve_post_url_from_embed_menu(driver, selector, int(row["candidate_index"]))
         if not post_url:
             continue
         raw = str(row.get("content") or "").replace("\xa0", " ")
@@ -172,15 +229,53 @@ def _read_post_batch(driver, selector: str) -> List[Dict[str, Any]]:
 # JavaScript chạy trên trang Facebook
 # ─────────────────────────────────────────────────────────────
 # Đánh dấu tối đa N bài GỐC (không phải bình luận lồng trong bài), chưa đọc, đã có link bài.
+_OPEN_POSTS_TAB_JS = r"""
+const labels = new Set(['posts', 'bài viết']);
+const visible = (el) => {
+  const rect = el.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+};
+const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+// Profile feeds can show their posts directly without exposing a separate Posts tab.
+// Use explicit profile-only markers so a Page with a missing Posts tab still stops
+// instead of accidentally scanning its Featured section.
+const headings = Array.from(document.querySelectorAll('[role="heading"], h1, h2'))
+  .filter(visible)
+  .map((el) => normalize(el.innerText || el.textContent));
+const pagelets = Array.from(document.querySelectorAll('[data-pagelet]'))
+  .map((el) => normalize(el.getAttribute('data-pagelet')));
+const bodyText = normalize(document.body?.innerText || '');
+const isProfile = pagelets.some((name) => /profile.*(timeline|feed|comet)|profiletimeline/.test(name))
+  || ((headings.some((text) => /personal details|personal information|chi tiết cá nhân|thông tin cá nhân/.test(text))
+    || /personal details|personal information|chi tiết cá nhân|thông tin cá nhân/.test(bodyText))
+    && (headings.some((text) => /friends|bạn bè/.test(text)) || /\bfriends\b|bạn bè/.test(bodyText)));
+// Facebook's current tab label is a plain span; start from that exact node, then
+// climb to the interactive tab instead of relying on its unstable class names.
+const postsSpan = Array.from(document.querySelectorAll('span'))
+  .filter(visible)
+  .find((el) => normalize(el.innerText || el.textContent) === 'posts');
+const postsControl = postsSpan?.closest('[role="tab"], a, button, [role="link"], [role="button"]') || postsSpan;
+const controls = Array.from(document.querySelectorAll('[role="tab"], a, button, [role="link"], [role="button"]'))
+  .filter(visible)
+  .map((el) => ({ el, label: normalize(el.getAttribute('aria-label') || el.innerText || el.textContent) }))
+  .filter(({ label }) => labels.has(label));
+if (postsControl && !controls.some(({ el }) => el === postsControl)) {
+  controls.unshift({ el: postsControl, label: 'posts' });
+}
+if (!controls.length) return { found: false, selected: false, is_profile: isProfile };
+const selected = controls.find(({ el }) => el.getAttribute('aria-selected') === 'true' || el.getAttribute('aria-current') === 'page');
+if (selected) return { found: true, selected: true, is_profile: isProfile };
+controls[0].el.click();
+return { found: true, selected: false, clicked: true, is_profile: isProfile };
+"""
+
 _MARK_BATCH_JS = r"""
 const token = arguments[0];
 const maxN = arguments[1] || 12;
 const MESSAGE_SEL = '[data-ad-rendering-role="story_message"], [data-ad-comet-preview="message"], [data-ad-preview="message"]';
-const LINK_RE = /\/(posts|permalink|reels?)\b|[?&]story_fbid=/i;
-const POST_LINK_RE = LINK_RE;
+const LINK_RE = /\/posts\/[^/?#]+|\/permalink(?:\.php)?(?:\/[^/?#]+)?(?:[?#]|$)|\/(?:reels?|videos?)\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)|[?&]story_fbid=/i;
 const candidates = [];
 const hasPostLink = (el) => Array.from(el.querySelectorAll('a[href]')).some((a) => LINK_RE.test(a.href || a.getAttribute('href') || ''));
-const hasPrimaryPostLink = (el) => Array.from(el.querySelectorAll('a[href]')).some((a) => POST_LINK_RE.test(a.href || a.getAttribute('href') || ''));
 const postKey = (el) => {
   const links = Array.from(el.querySelectorAll('a[href]')).filter((a) => LINK_RE.test(a.href || a.getAttribute('href') || ''));
   const isInComment = (anchor) => {
@@ -237,18 +332,35 @@ const topMessageCount = (root) => Array.from(root.querySelectorAll(MESSAGE_SEL))
 for (const message of messages) {
   if (candidates.length >= maxN) break;
   let best = null;
+  let postActionRoot = null;
   let current = message.parentElement;
-  for (let depth = 0; current && current !== document.body && depth < 18; depth++, current = current.parentElement) {
+  for (let depth = 0; current && current !== document.body && depth < 12; depth++, current = current.parentElement) {
     refreshMarker(current);
     if (current.hasAttribute('data-m8-done') || current.hasAttribute('data-m8-batch')) break;
     if (candidates.some((candidate) => candidate.contains(current))) break;
-    const isPostContainer = current.matches('[role="article"], div[data-pagelet*="FeedUnit"]');
-    if (hasPostLink(current) && (hasPostActions(current) || isPostContainer)) {
-      best = current;
-      if (hasPrimaryPostLink(current)) break;
+    if (hasPostActions(current)) {
+      if (!postActionRoot) postActionRoot = current;
+      if (hasPostLink(current)) {
+        best = current;
+        break;
+      }
     }
   }
-  if (best) addCandidate(best);
+  if (!best && postActionRoot) {
+    best = postActionRoot;
+    current = postActionRoot.parentElement;
+    for (let depth = 0; current && current !== document.body && depth < 6; depth++, current = current.parentElement) {
+      if (topMessageCount(current) > 1) break;
+      if (hasPostLink(current)) {
+        best = current;
+        break;
+      }
+    }
+  }
+  if (best) {
+    message.setAttribute('data-m8-message-root', token);
+    addCandidate(best);
+  }
 }
 
 // Giữ cả bài chỉ có ảnh/video, không có story_message để trích nội dung.
@@ -258,6 +370,33 @@ for (const el of document.querySelectorAll(SEMANTIC_POST_SEL)) {
   if (el.parentElement && el.parentElement.closest(SEMANTIC_POST_SEL)) continue;
   if (topMessageCount(el) > 0 || !hasPostLink(el) || !hasPostActions(el)) continue;
   addCandidate(el);
+}
+
+// New profile layouts often render a video/Reel post without an article or
+// story_message marker. Find its card from the real media permalink and the
+// nearest post-level Like/Comment/Share actions, excluding navigation links.
+const isCommentLink = (anchor) => {
+  if (anchor.closest('[role="navigation"]')) return true;
+  for (let current = anchor; current && current !== document.body; current = current.parentElement) {
+    const label = [current.getAttribute('aria-label'), current.getAttribute('data-testid'), current.getAttribute('data-pagelet')]
+      .filter(Boolean).join(' ').toLowerCase();
+    if (/comment|bình luận|phản hồi|reply/.test(label)) return true;
+  }
+  return false;
+};
+for (const anchor of document.querySelectorAll(
+  'a[href*="/posts/"], a[href*="/permalink"], a[href*="/reel/"], a[href*="/reels/"], a[href*="/videos/"], a[href*="story_fbid="]'
+)) {
+  if (candidates.length >= maxN) break;
+  if (!LINK_RE.test(anchor.href || anchor.getAttribute('href') || '') || isCommentLink(anchor)) continue;
+  let current = anchor.parentElement;
+  for (let depth = 0; current && current !== document.body && depth < 24; depth++, current = current.parentElement) {
+    if (current.hasAttribute('data-m8-done') || current.hasAttribute('data-m8-batch')) break;
+    if (candidates.some((candidate) => candidate.contains(current) || current.contains(candidate))) break;
+    if (!hasPostActions(current)) continue;
+    addCandidate(current);
+    break;
+  }
 }
 
 let marked = 0;
@@ -288,15 +427,25 @@ const result = [];
 const normalize = (value) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 const cleanTimeText = (value) => normalize(value).replace(/[\u034f\u200b-\u200f\u2060\ufeff]/g, '');
 const isTimeLabel = (value) => /just\s*now|yesterday|ago|hôm\s*qua|trước|\d+\s*(?:minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|months?|years?|y|phút|giờ|ngày|tuần|tháng|năm)(?=\s|$|[^a-z])|tháng\s*\d|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|january|february|march|april|may|june|july|august|september|october|november|december/i.test(value || '');
+const isCommentLink = (anchor, postNode) => {
+  if (anchor.closest('[role="navigation"]')) return true;
+  for (let current = anchor; current && current !== postNode; current = current.parentElement) {
+    const label = [current.getAttribute('aria-label'), current.getAttribute('data-testid'), current.getAttribute('data-pagelet')]
+      .filter(Boolean).join(' ').toLowerCase();
+    if (/comment|bình luận|phản hồi|reply/.test(label)) return true;
+  }
+  return false;
+};
 
-for (const node of document.querySelectorAll(selector)) {
+const postNodes = Array.from(document.querySelectorAll(selector));
+for (const [candidateIndex, node] of postNodes.entries()) {
   // Chọn anchor hợp lệ đầu tiên theo thứ tự DOM như luồng trước.
   const postLink = Array.from(node.querySelectorAll('a[href]')).find((a) => {
     const href = a.href || a.getAttribute('href') || '';
-    return /\/(posts|permalink|reels?)\b/i.test(href) || /[?&]story_fbid=/i.test(href);
+    return /\/posts\/[^/?#]+|\/permalink(?:\.php)?(?:\/[^/?#]+)?(?:[?#]|$)|\/(?:reels?|videos?)\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)|[?&]story_fbid=/i.test(href)
+      && !isCommentLink(a, node);
   });
-  if (!postLink) continue;
-  const postUrl = postLink.href || postLink.getAttribute('href') || '';
+  const postUrl = postLink ? (postLink.href || postLink.getAttribute('href') || '') : '';
 
   // Trích xuất CHÍNH XÁC nội dung bài viết qua element [data-ad-comet-preview="message"] / [data-ad-preview="message"] / [data-ad-rendering-role="story_message"]
   // Tuyệt đối KHÔNG đọc nhầm bình luận (bình luận không có các data-ad-* marker này).
@@ -313,9 +462,12 @@ for (const node of document.querySelectorAll(selector)) {
   };
 
   // 1. Chỉ tìm trong các phần tử ĐƯỢC FACEBOOK ĐÁNH DẤU CHÍNH XÁC là message bài viết
-  const messageRoot = node.querySelector(
-    '[data-ad-comet-preview="message"], [data-ad-preview="message"], [data-ad-rendering-role="story_message"]'
-  );
+  const messageRoot = node.querySelector(`[data-m8-message-root="${node.getAttribute('data-m8-batch')}"]`) ||
+    node.querySelector('[data-ad-rendering-role="story_message"]') ||
+    node.querySelector('[data-ad-comet-preview="message"]') ||
+    node.querySelector('[data-ad-preview="message"]');
+
+  if (!postUrl && !messageRoot) continue;
 
   if (messageRoot) {
     // Ưu tiên 1: Lấy các div[dir="auto"] bên trong x126k92a (cấu trúc chuẩn của bài viết Facebook Comet)
@@ -401,6 +553,10 @@ for (const node of document.querySelectorAll(selector)) {
       if (!Number.isNaN(parsed.getTime())) publishedDate = parsed;
     }
   }
+  // Facebook labels sometimes omit the year; a future date without an explicit year is last year.
+  if (publishedDate && !/\b\d{4}\b/.test(rawTimeText) && publishedDate > new Date()) {
+    publishedDate.setFullYear(publishedDate.getFullYear() - 1);
+  }
   const publishedAt = publishedDate ? publishedDate.toISOString() : null;
   const publishedText = publishedDate
     ? `${String(publishedDate.getDate()).padStart(2, '0')}-${String(publishedDate.getMonth() + 1).padStart(2, '0')}-${publishedDate.getFullYear()}`
@@ -411,7 +567,7 @@ for (const node of document.querySelectorAll(selector)) {
     : /\/photo\/?\?/.test(lowerUrl) || node.querySelector('img[src*="scontent"]')
       ? 'photo'
       : 'text';
-  result.push({ post_url: postUrl, content, post_type: postType, published_at: publishedAt, published_text: publishedText });
+  result.push({ post_url: postUrl, candidate_index: candidateIndex, content, post_type: postType, published_at: publishedAt, published_text: publishedText });
 }
 return result;
 """
@@ -420,6 +576,9 @@ return result;
 _FINISH_BATCH_JS = r"""
 const token = arguments[0];
 const trim = !!arguments[1];
+for (const message of document.querySelectorAll('[data-m8-message-root="' + token + '"]')) {
+  message.removeAttribute('data-m8-message-root');
+}
 for (const el of document.querySelectorAll('[data-m8-batch="' + token + '"]')) {
   el.removeAttribute('data-m8-batch');
   el.setAttribute('data-m8-done', '1');
@@ -456,7 +615,7 @@ _SCROLL_JS = r"""(() => {
 
   // Một số layout Facebook cuộn trong vùng feed thay vì document.
   const anchors = document.querySelectorAll(
-    'a[href*="/posts/"], a[href*="/permalink"], a[href*="/reel/"], a[href*="story_fbid="]'
+    'a[href*="/posts/"], a[href*="/permalink"], a[href*="/reel/"], a[href*="/reels/"], a[href*="/videos/"], a[href*="story_fbid="]'
   );
   const candidates = new Set();
   for (const anchor of anchors) {
@@ -490,7 +649,7 @@ _SCROLL_BOTTOM_JS = r"""(() => {
   const root = document.scrollingElement || document.documentElement;
   window.scrollTo(0, root.scrollHeight);
   const anchors = document.querySelectorAll(
-    'a[href*="/posts/"], a[href*="/permalink"], a[href*="/reel/"], a[href*="story_fbid="]'
+    'a[href*="/posts/"], a[href*="/permalink"], a[href*="/reel/"], a[href*="/reels/"], a[href*="/videos/"], a[href*="story_fbid="]'
   );
   const candidates = new Set();
   for (const anchor of anchors) {
@@ -626,6 +785,23 @@ def _source_name(driver) -> str:
     return re.sub(r"\s*[|\-–]\s*Facebook\s*$", "", title).strip()[:255]
 
 
+def _select_posts_tab(driver, stop: threading.Event) -> bool:
+    """Select Posts on Pages; profiles may expose their posts directly in the feed."""
+    try:
+        state = driver.execute_script(_OPEN_POSTS_TAB_JS) or {}
+        if not state.get("found"):
+            if state.get("is_profile"):
+                logger.info("Profile page has no separate Posts tab; continuing with its default feed.")
+                return True
+            return False
+        if state.get("clicked"):
+            stop.wait(1.5)
+        return True
+    except Exception as exc:
+        logger.debug("Unable to select Facebook Posts tab: %s", exc)
+        return False
+
+
 def _browser_gone(exc: Exception) -> bool:
     msg = str(exc).lower()
     return any(s in msg for s in ("no such window", "not reachable", "invalid session id", "disconnected", "target window already closed"))
@@ -696,6 +872,10 @@ def _run_fetch_job(
 
         log("info", f"Mở {source_url}")
         _open_and_wait(driver, source_url, stop)
+        if not _select_posts_tab(driver, stop):
+            error = "Không tìm thấy mục Bài viết trên trang nguồn; đã dừng để tránh quét mục Đáng chú ý."
+            reason = "POSTS_TAB_NOT_FOUND"
+            return
         if on_checkpoint() or not has_session_cookie(driver):
             log("warning", "Phiên đăng nhập bị mất — thử đăng nhập lại 1 lần…")
             if not bot.apply_facebook_support_data(account, HWID, callback=lambda m: log("info", m)):
@@ -704,6 +884,10 @@ def _run_fetch_job(
             _open_and_wait(driver, source_url, stop)
             if on_checkpoint():
                 reason, error = "CHECKPOINT", "Nick bị checkpoint khi mở trang."
+                return
+            if not _select_posts_tab(driver, stop):
+                error = "Không tìm thấy mục Bài viết trên trang nguồn; đã dừng để tránh quét mục Đáng chú ý."
+                reason = "POSTS_TAB_NOT_FOUND"
                 return
 
         name = _source_name(driver)

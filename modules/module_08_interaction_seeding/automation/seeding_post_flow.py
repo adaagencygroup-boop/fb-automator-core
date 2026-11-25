@@ -10,6 +10,7 @@ import time
 import random
 import json
 import logging
+import re
 from typing import Optional, Callable
 
 from selenium.webdriver.common.by import By
@@ -208,6 +209,16 @@ class PostSeedingFlow:
                     hover_elem = elem
                     break
 
+            # Reel controls may expose only the thumbs-up SVG, without a Like
+            # label or Comet data marker.
+            if not hover_elem:
+                try:
+                    hover_elem = self.driver.execute_script(PostLocators.JS_FIND_LIKE_BUTTON)
+                    if hover_elem and not hover_elem.is_displayed():
+                        hover_elem = None
+                except Exception:
+                    hover_elem = None
+
             if hover_elem:
                 try:
                     self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'instant', block: 'center'});", hover_elem)
@@ -389,12 +400,50 @@ class PostSeedingFlow:
                     "//div[@role='button' and (contains(., 'Bình luận') or contains(., 'Comment'))]",
                     "//span[contains(text(), 'Bình luận') or contains(text(), 'Comment')]",
                 ]
+                comments_opened = False
                 for ob_xp in open_btn_xpaths:
                     open_btn = self.bot.safe_find_element(By.XPATH, ob_xp, timeout=2)
                     if open_btn and open_btn.is_displayed():
                         self.bot.safe_click(open_btn)
                         self.bot.random_sleep(1.5, 2.5)
+                        comments_opened = True
                         break
+
+                # Reel layouts may expose an unlabeled comment action tile.
+                if not comment_box and not comments_opened:
+                    try:
+                        comment_button = self.driver.execute_script(PostLocators.JS_FIND_COMMENT_BUTTON)
+                        if comment_button and comment_button.is_displayed():
+                            self.driver.execute_script(
+                                "arguments[0].scrollIntoView({behavior: 'instant', block: 'center'});",
+                                comment_button,
+                            )
+                            ActionChains(self.driver).move_to_element(comment_button).click().perform()
+                            comments_opened = True
+                            self.bot.random_sleep(1.5, 2.5)
+                    except Exception:
+                        pass
+
+                # Some Reel layouts expose a native labeled button instead.
+                if not comment_box and not comments_opened:
+                    try:
+                        comments_opened = self.driver.execute_script("""
+                            const controls = Array.from(document.querySelectorAll('button, [role="button"]'));
+                            const button = controls.find((el) => {
+                                const label = (el.getAttribute('aria-label') || el.innerText || el.textContent || '')
+                                    .replace(/\s+/g, ' ').trim().toLowerCase();
+                                const rect = el.getBoundingClientRect();
+                                return rect.width > 0 && rect.height > 0 &&
+                                    /^(comment|comments)(\b|\s|$)/i.test(label) &&
+                                    !el.closest('form');
+                            });
+                            if (button) { button.click(); return true; }
+                            return false;
+                        """)
+                        if comments_opened:
+                            self.bot.random_sleep(1.5, 2.5)
+                    except Exception:
+                        pass
 
                 for cb_xp in PostLocators.COMMENT_BOX_XPATHS:
                     box = self.bot.safe_find_element(By.XPATH, cb_xp, timeout=3)
@@ -423,6 +472,11 @@ class PostSeedingFlow:
 
             if not comment_box:
                 return False, "Không tìm thấy khung nhập bình luận trên bài viết này"
+
+            baseline_comment_count = self.driver.execute_script("""
+                const text = document.body?.innerText || '';
+                return text.split(arguments[0]).length - 1;
+            """, content)
 
             try:
                 self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", comment_box)
@@ -481,12 +535,20 @@ class PostSeedingFlow:
                     except Exception as err2:
                         logger.warning(f"Fallback send_keys error: {err2}")
 
+            editor_text = self.driver.execute_script(
+                "return arguments[0]?.innerText || arguments[0]?.textContent || '';",
+                comment_box,
+            )
+            if content not in (editor_text or ""):
+                return False, "Comment text was not confirmed in the Reel comment editor"
+
             self.bot.random_sleep(1.0, 1.8)
 
             if callback:
                 callback("🚀 Đang gửi bình luận...")
 
             submit_btn_xpaths = [
+                "//div[@role='button' and @aria-label='Post comment']",
                 "//div[@role='button' and @aria-label='Đăng bình luận']",
                 "//div[@role='button' and contains(@aria-label, 'Đăng bình luận')]",
                 "//div[@role='button' and (@aria-label='Post comment' or @aria-label='Comment' or @aria-label='Gửi' or @aria-label='Đăng')]",
@@ -518,7 +580,7 @@ class PostSeedingFlow:
                 try:
                     is_disabled = submit_btn.get_attribute("aria-disabled")
                     if is_disabled != "true":
-                        self.bot.safe_click(submit_btn)
+                        ActionChains(self.driver).move_to_element(submit_btn).click().perform()
                         submitted = True
                 except Exception as e:
                     logger.warning(f"Submit button click error: {e}")
@@ -530,16 +592,37 @@ class PostSeedingFlow:
                 except Exception:
                     pass
 
-            self.bot.random_sleep(1.0, 1.8)
-            if submit_btn:
+            if not submitted:
+                return False, "Could not find or activate the comment submit button"
+
+            comment_posted = False
+            for _ in range(12):
                 try:
-                    is_disabled = submit_btn.get_attribute("aria-disabled")
-                    if is_disabled != "true" and submit_btn.is_displayed():
-                        self.bot.safe_click(submit_btn)
+                    state = self.driver.execute_script("""
+                        const text = document.body?.innerText || '';
+                        const editorHasText = Array.from(document.querySelectorAll(
+                            'div[contenteditable="true"][role="textbox"]'
+                        )).some((editor) => {
+                            const r = editor.getBoundingClientRect();
+                            return r.width > 0 && r.height > 0 &&
+                                (editor.innerText || editor.textContent || '').includes(arguments[0]);
+                        });
+                        return {
+                            occurrences: text.split(arguments[0]).length - 1,
+                            editorHasText,
+                        };
+                    """, content)
+                    if state and state.get("occurrences", 0) > baseline_comment_count and not state.get("editorHasText"):
+                        comment_posted = True
+                        break
                 except Exception:
                     pass
+                time.sleep(0.75)
 
-            self.bot.random_sleep(2.0, 3.5)
+            if not comment_posted:
+                return False, "Facebook did not confirm that the comment was posted"
+
+            self.bot.random_sleep(0.8, 1.4)
             if callback:
                 callback(f"✓ Đã gửi bình luận: \"{content[:30]}...\"")
             return True, "Thành công"
@@ -599,6 +682,7 @@ class PostSeedingFlow:
     ) -> tuple[bool, str]:
         """Thực hiện chia sẻ bài viết lên Bảng tin cá nhân ở chế độ Công khai (Public)."""
         try:
+            is_reel_target = bool(re.search(r"/(?:reels?)/\d+(?:/|$)", target_url or "", re.IGNORECASE))
             if callback:
                 callback("🔄 Chuẩn bị chia sẻ bài viết...")
 
@@ -614,6 +698,14 @@ class PostSeedingFlow:
                 callback("🔍 Đang tìm nút Chia sẻ (Share) của bài viết...")
 
             share_btn = self.driver.execute_script(PostLocators.JS_FIND_SHARE_BUTTON)
+            share_count_before = self.driver.execute_script(
+                """
+                    const button = (() => {""" + PostLocators.JS_FIND_SHARE_BUTTON + """})();
+                    const label = (button?.getAttribute('aria-label') || '').trim();
+                    const match = label.match(/^share,\\s*(\\d+)\\s+shares?$/i);
+                    return match ? Number(match[1]) : null;
+                """
+            )
             if not share_btn:
                 for xp in PostLocators.SHARE_BUTTON_XPATHS:
                     btn = self.bot.safe_find_element(By.XPATH, xp, timeout=2)
@@ -626,7 +718,10 @@ class PostSeedingFlow:
 
             if callback:
                 callback("🚀 Đang bấm nút Chia sẻ (Share) bài viết...")
-            perform_robust_click(self.driver, share_btn)
+            try:
+                ActionChains(self.driver).move_to_element(share_btn).click().perform()
+            except Exception:
+                share_btn.click()
             self.bot.random_sleep(2.5, 3.5)
 
             # Menu 'Share to Feed' nếu có
@@ -825,18 +920,10 @@ class PostSeedingFlow:
             if not share_now_elem:
                 return False, "Không tìm thấy nút Share now để hoàn tất chia sẻ"
 
-            perform_robust_click(self.driver, share_now_elem)
-            if share_now_obj and share_now_obj.get("span"):
-                try:
-                    self.driver.execute_script("""
-                        const s = arguments[0];
-                        if (s) {
-                            s.click();
-                            if (s.parentElement) s.parentElement.click();
-                        }
-                    """, share_now_obj.get("span"))
-                except Exception:
-                    pass
+            try:
+                ActionChains(self.driver).move_to_element(share_now_elem).click().perform()
+            except Exception:
+                share_now_elem.click()
 
             # 5. Xác minh tiến trình hoàn tất
             if callback:
@@ -862,16 +949,42 @@ class PostSeedingFlow:
                     share_completed = True
                     break
 
-                if w == 3:
-                    logger.info("Hộp thoại Share vẫn mở sau 4s, thử click lại nút Share now...")
-                    perform_robust_click(self.driver, share_now_elem)
-
             if not share_completed:
                 return False, "Không thể hoàn tất chia sẻ (hộp thoại Share now không đóng sau khi bấm)"
 
             self.bot.random_sleep(2.5, 4.0)
             if self._identity_confirmation_required():
                 return False, "Facebook yêu cầu mở ứng dụng trên điện thoại để xác nhận danh tính; lượt chia sẻ thất bại"
+            share_confirmation_js = """
+                const button = (() => {""" + PostLocators.JS_FIND_SHARE_BUTTON + """})();
+                const label = (button?.getAttribute('aria-label') || '').trim();
+                const match = label.match(/^share,\\s*(\\d+)\\s+shares?$/i);
+                const notices = Array.from(document.querySelectorAll('[role="alert"], [aria-live]'))
+                    .map((el) => (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase());
+                return {
+                    shareCount: match ? Number(match[1]) : null,
+                    successNotice: notices.some((text) => /shared successfully|your post was shared|post has been shared/.test(text)),
+                };
+            """
+            share_confirmed = False
+            for _ in range(8):
+                share_state = self.driver.execute_script(share_confirmation_js)
+                count_increased = (
+                    share_count_before is not None
+                    and share_state
+                    and share_state.get("shareCount") is not None
+                    and share_state["shareCount"] > share_count_before
+                )
+                if count_increased or (share_state and share_state.get("successNotice")):
+                    share_confirmed = True
+                    break
+                time.sleep(0.75)
+
+            if not share_confirmed:
+                if is_reel_target:
+                    return False, "Facebook đã đóng hộp thoại chia sẻ nhưng không xác nhận Reel đã được chia sẻ"
+                return False, "Facebook đã đóng hộp thoại chia sẻ nhưng không xác nhận bài viết đã được chia sẻ"
+
             if callback:
                 callback("✓ Đã chia sẻ bài viết ở chế độ Công khai (Public) thành công!")
             return True, "Thành công (Chia sẻ Public)"

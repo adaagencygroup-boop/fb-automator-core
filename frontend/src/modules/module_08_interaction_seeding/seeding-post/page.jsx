@@ -5,7 +5,7 @@ import { normalizeTargetUrl } from "@/modules/module_08_interaction_seeding/vali
 import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
 import { toast } from "@/components/ui/toast";
 import { Send } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import PostAccountConfig from "./_components/PostAccountConfig";
 import PostActionBar from "./_components/PostActionBar";
 import PostCommentsManager from "./_components/PostCommentsManager";
@@ -19,6 +19,7 @@ import { loadSavedUids, resolveInitialUids, saveSelectedUids } from "../accountS
 
 export default function SeedingPostPage() {
   const [targets, setTargets] = useState([]);
+  const targetMutationVersion = useRef(0);
   const [successMessage, setSuccessMessage] = useState(null);
 
   // Interaction options - Mặc định ban đầu không tích chọn mục nào (người dùng tự chọn)
@@ -150,19 +151,27 @@ export default function SeedingPostPage() {
   // Poll campaign status while running
   useEffect(() => {
     if (!isRunning || !currentCampaignId) return;
-
-    const interval = setInterval(async () => {
+    let cancelled = false;
+    let inFlight = false;
+    let lastSuccessCount = -1;
+    const pollStatus = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
       try {
-        const detail =
-          await seedingApi.getSeedingCampaignDetail(currentCampaignId);
-        if (detail) {
-          // Đồng bộ danh sách khi chạy: bài có toàn bộ thao tác thành công sẽ được ẩn ngay.
-          seedingApi
-            .getSeedingTargets("POST")
-            .then((res) => setTargets(res?.targets || []))
-            .catch(() => {});
-          const status = detail.status || detail.campaign?.status;
-          const isBatchActive = detail.is_batch_active;
+        const progress = await seedingApi.getBatchProgress(currentCampaignId);
+        if (!cancelled && progress) {
+          const status = progress.posts?.find((post) => post.campaign_id === currentCampaignId)?.status || progress.posts?.[0]?.status;
+          const isBatchActive = progress.running;
+          const successCount = Number(progress.totals?.success || 0);
+          const successChanged = successCount !== lastSuccessCount;
+          if (successChanged) {
+            lastSuccessCount = successCount;
+            const requestVersion = targetMutationVersion.current;
+            const targets = await seedingApi.getSeedingTargets("POST");
+            if (!cancelled && requestVersion === targetMutationVersion.current) {
+              setTargets(targets?.targets || []);
+            }
+          }
           if (
             !isBatchActive &&
             (status === "COMPLETED" ||
@@ -171,24 +180,43 @@ export default function SeedingPostPage() {
           ) {
             setIsRunning(false);
             addLog(
-              `Chiến dịch hoàn tất với trạng thái: ${detail.status_display || status}.`,
+              `Chiến dịch hoàn tất với trạng thái: ${status}.`,
               status === "COMPLETED" ? "success" : "warn",
             );
+            if (!successChanged) {
+              const requestVersion = targetMutationVersion.current;
+              seedingApi
+                .getSeedingTargets("POST")
+                .then((res) => {
+                  if (requestVersion === targetMutationVersion.current) {
+                    setTargets(res?.targets || []);
+                  }
+                })
+                .catch(() => {});
+            }
           }
         }
       } catch (err) {
         // Ignore polling error
+      } finally {
+        inFlight = false;
       }
-    }, 4000);
-
-    return () => clearInterval(interval);
+    };
+    pollStatus();
+    const interval = setInterval(pollStatus, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [isRunning, currentCampaignId]);
 
   // Load saved targets and comments from database on mount
   useEffect(() => {
+    const requestVersion = targetMutationVersion.current;
     seedingApi
       .getSeedingTargets("POST")
       .then((res) => {
+        if (requestVersion !== targetMutationVersion.current) return;
         setTargets(res?.targets || []);
         if (res && res.targets && res.targets.length > 0) {
           setSuccessMessage(
@@ -210,7 +238,9 @@ export default function SeedingPostPage() {
 
   // Tải lại danh sách bài sẽ seeding (sau khi thêm bài lấy từ page)
   const reloadTargets = useCallback(async () => {
+    const requestVersion = ++targetMutationVersion.current;
     const res = await seedingApi.getSeedingTargets("POST");
+    if (requestVersion !== targetMutationVersion.current) return;
     setTargets(res?.targets || []);
     setSuccessMessage(res?.targets?.length ? `Danh sách có ${res.targets.length} bài viết` : null);
   }, []);
@@ -230,11 +260,14 @@ export default function SeedingPostPage() {
       const normalizedUrls = (rawUrls || []).map((u) => normalizeTargetUrl(u, "POST"));
       const res = await seedingApi.validateSeedingTargets("POST", normalizedUrls);
       if (res && res.targets) {
-        setTargets(res.targets);
+        targetMutationVersion.current += 1;
+        const saved = await seedingApi.getSeedingTargets("POST", false, true).catch(() => null);
+        const currentTargets = saved?.targets || res.targets;
+        setTargets(currentTargets);
         setSuccessMessage(
-          `Đã lưu thành công ${res.targets.length} bài viết vào cơ sở dữ liệu`,
+          `Đã lưu thành công ${currentTargets.length} bài viết vào cơ sở dữ liệu`,
         );
-        return res.targets;
+        return currentTargets;
       }
     } catch (e) {
       addLog(`Lỗi lưu link bài viết: ${e.message}`, "error");
@@ -251,6 +284,7 @@ export default function SeedingPostPage() {
     if (targetToRemove) {
       try {
         await seedingApi.deleteSeedingTarget(targetToRemove.url, "POST");
+        targetMutationVersion.current += 1;
       } catch (err) {
         addLog(`Lỗi xóa target: ${err.message}`, "error");
         throw err;
@@ -275,11 +309,13 @@ export default function SeedingPostPage() {
       return;
     }
     try {
-      await seedingApi.clearSeedingTargets("POST");
+      const res = await seedingApi.clearSeedingTargets("POST");
+      if (!res?.success) throw new Error("Máy chủ chưa xác nhận xóa danh sách bài viết.");
     } catch (err) {
       addLog(`Lỗi xóa danh sách bài viết: ${err.message}`, "error");
       throw err;
     }
+    targetMutationVersion.current += 1;
     setTargets([]);
     setSuccessMessage(null);
   };
@@ -438,10 +474,10 @@ export default function SeedingPostPage() {
 
       setCurrentCampaignId(campaign.id);
       const totalPosts = campaign.total_targets || targets.length;
-      addLog(campaign.message || `Đã khởi tạo ${totalPosts} chiến dịch riêng biệt (${campaign.total_tasks} tác vụ).`, "success");
+      addLog(campaign.message || `Đã khởi tạo ${totalPosts} chiến dịch riêng biệt (${campaign.total_tasks} tác vụ).`, "info");
 
       await seedingApi.startSeedingCampaign(campaign.id);
-      toast.success(`Chiến dịch đã được khởi chạy với ${totalPosts} bài viết!`, "KHỞI CHẠY THÀNH CÔNG");
+      toast.info(`Chiến dịch đang chạy với ${totalPosts} bài viết.`, "ĐANG CHẠY");
     } catch (e) {
       setIsRunning(false);
       addLog(`Lỗi khởi chạy seeding: ${e.message}`, "error");

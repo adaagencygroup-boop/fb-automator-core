@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { FileSpreadsheet, RotateCcw, CheckCircle2, Trash2, ExternalLink, Copy, AlertCircle, Link2 } from "lucide-react";
 import ConfirmDialog from "@/components/ui/confirm-dialog";
-import Pagination from "@/components/ui/pagination";
 import { toast } from "@/components/ui/toast";
 import ExcelImportModal from "../../_components/ExcelImportModal";
 import { seedingApi } from "../../service";
@@ -11,7 +10,6 @@ import PostFetchModal from "./PostFetchModal";
 import PostSourceFetcher from "./PostSourceFetcher";
 import StepCard from "./StepCard";
 
-const TARGETS_PAGE_SIZE = 10;
 import {
   normalizeTargetUrl,
   parseInputTargetsStats,
@@ -37,14 +35,11 @@ export default function PostTargetSection({
   const [textInput, setTextInput] = useState("");
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
   const [dbHistoryTargets, setDbHistoryTargets] = useState([]);
-  const [targetsPage, setTargetsPage] = useState(1);
   const [targetsVersion, setTargetsVersion] = useState(0);
 
   // Danh sách thay đổi → làm mới nhãn "Đã thêm" ở tab lấy bài; giữ trang hợp lệ
   useEffect(() => {
     setTargetsVersion((v) => v + 1);
-    const pages = Math.max(1, Math.ceil((targets?.length || 0) / TARGETS_PAGE_SIZE));
-    setTargetsPage((p) => Math.min(p, pages));
   }, [targets]);
 
   // Tải danh sách toàn bộ mục tiêu trong DB (bao gồm cả các link đã chạy) để kiểm tra trùng lặp thời gian thực
@@ -297,10 +292,6 @@ export default function PostTargetSection({
     }
   };
 
-  const targetsTotalPages = Math.max(1, Math.ceil(targets.length / TARGETS_PAGE_SIZE));
-  const targetsOffset = (targetsPage - 1) * TARGETS_PAGE_SIZE;
-  const visibleTargets = targets.slice(targetsOffset, targetsOffset + TARGETS_PAGE_SIZE);
-
   const openExcel = () => {
     if (isRunning) return;
     setIsExcelModalOpen(true);
@@ -496,7 +487,7 @@ export default function PostTargetSection({
           </div>
 
           <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
-            <div className="overflow-x-auto">
+            <div className="max-h-60 overflow-y-auto overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
                 <thead className="bg-slate-50 sticky top-0 z-10 text-slate-600 font-semibold border-b border-slate-200">
                   <tr>
@@ -507,8 +498,7 @@ export default function PostTargetSection({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 text-gray-700 font-medium">
-                  {visibleTargets.map((item, i) => {
-                    const idx = targetsOffset + i; // vị trí trong cả danh sách (onRemoveTarget dùng index)
+                  {targets.map((item, idx) => {
                     return (
                     <tr key={item.id ?? idx} className="hover:bg-blue-50/30 transition-colors">
                       <td className="py-2.5 px-4 text-center text-gray-400 font-mono whitespace-nowrap">
@@ -553,16 +543,6 @@ export default function PostTargetSection({
               </table>
             </div>
           </div>
-          {targetsTotalPages > 1 && (
-            <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-gray-500">
-              <span>
-                Hiển thị {(targetsOffset + 1).toLocaleString("vi-VN")}–
-                {Math.min(targetsOffset + TARGETS_PAGE_SIZE, targets.length).toLocaleString("vi-VN")} /{" "}
-                {targets.length.toLocaleString("vi-VN")} bài
-              </span>
-              <Pagination currentPage={targetsPage} totalPages={targetsTotalPages} onPageChange={setTargetsPage} siblingCount={1} />
-            </div>
-          )}
         </div>
       )}
 
@@ -615,7 +595,7 @@ export default function PostTargetSection({
         onClose={() => !isClearing && setClearAllOpen(false)}
         onConfirm={handleConfirmClearAll}
         title="Xác nhận xóa toàn bộ danh sách bài viết"
-        description={`Bạn có chắc chắn muốn xóa toàn bộ ${targets.length} bài viết chưa chạy khỏi danh sách không? Các bài viết đã chạy trong lịch sử vẫn sẽ được bảo toàn.`}
+        description={`Bạn có chắc chắn muốn xóa toàn bộ ${targets.length} bài viết đã lưu khỏi danh sách không? Lịch sử seeding vẫn được bảo toàn.`}
         confirmText="Xóa toàn bộ"
         cancelText="Hủy bỏ"
         variant="danger"
