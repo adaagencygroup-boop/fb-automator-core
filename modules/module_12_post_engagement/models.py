@@ -457,6 +457,15 @@ def save_comments(owner: Optional[str], post_key: str, comments: list[dict[str, 
     return len(rows)
 
 
+def is_known_page(owner: Optional[str], source_id: str) -> bool:
+    """Nguồn này đã từng được nhận là fanpage ở bài khác (trang reel không có dấu hiệu fanpage)."""
+    owner = _owner(owner)
+    if not owner or not source_id:
+        return False
+    return bool(db.fetch_all("SELECT 1 FROM pe_posts WHERE owner_username = ? AND source_id = ? AND source_type = 'page' LIMIT 1",
+                             (owner, str(source_id))))
+
+
 def known_uids(owner: Optional[str], post_key: str, action: str) -> set[str]:
     owner = _owner(owner)
     col = {"like": "has_like", "comment": "has_comment"}.get(action)
