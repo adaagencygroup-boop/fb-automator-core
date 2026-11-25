@@ -16,7 +16,9 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "@/lib/toast";
-import { runDelete } from "../_shared";
+import { useActionLock } from "../shared/useActionLock";
+import { saveCsvContent } from "../shared/saveFile.mjs";
+import { runDelete, notifyExportResult } from "../_shared";
 import CreateCategoryModal from "@/modules/module_10_group_scan/member-list/_components/CreateCategoryModal";
 import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
@@ -43,6 +45,10 @@ import {
 const ALL_ID = "__all__";
 
 export default function PageScannerListFollowers() {
+  // Khoá nút xuất file / sao chép / chuyển danh mục trong lúc xử lý (bấm liên tục chỉ chạy / báo 1 lần)
+  const [isExporting, guardExport] = useActionLock();
+  const [isCopyingUid, guardCopyUid] = useActionLock();
+  const [isMovingCategory, guardMoveCategory] = useActionLock();
   const [pages, setPages] = useState([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [newListName, setNewListName] = useState("");
@@ -136,12 +142,12 @@ export default function PageScannerListFollowers() {
 
   const rowId = (r) => r.id || `${r.page_key}-${r.follower_key}`;
 
-  const handleExport = () => {
+  const handleExport = async () => {
     const rowsSrc = selectedIds.length
       ? items.filter((r) => selectedIds.includes(rowId(r)))
       : items;
     if (!rowsSrc.length) {
-      toast.warning("Không có dữ liệu để xuất.");
+      toast.warning("Không có dữ liệu để xuất.", { key: "m11-list-followers-export" });
       return;
     }
     const headers = [
@@ -171,16 +177,17 @@ export default function PageScannerListFollowers() {
         row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","),
       )
       .join("\n");
-    const blob = new Blob(["\uFEFF" + csv], {
-      type: "text/csv;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `followers_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success("Đã xuất Excel/CSV.");
+    try {
+      const res = await saveCsvContent(csv, `followers_${new Date().toISOString().slice(0, 10)}.csv`);
+      notifyExportResult(res, {
+        successMessage: `Đã xuất ${rowsSrc.length.toLocaleString("vi-VN")} followers ra file "${res.fileName}".`,
+        key: "m11-list-followers-export",
+      });
+    } catch (err) {
+      toast.error(`Lỗi xuất file: ${err?.message || "Không lưu được file."}`, {
+        key: "m11-list-followers-export",
+      });
+    }
   };
 
   const handleDeleteSelected = async () => {
@@ -387,7 +394,8 @@ export default function PageScannerListFollowers() {
                 size="sm"
                 variant="outline"
                 className="h-8 gap-1.5 border-emerald-600 bg-emerald-600 text-[11px] text-white hover:bg-emerald-700 hover:text-white"
-                onClick={handleExport}
+                onClick={() => guardExport(handleExport)}
+                disabled={isExporting}
               >
                 <Download className="size-3.5" /> Xuất Excel
               </Button>
@@ -419,12 +427,17 @@ export default function PageScannerListFollowers() {
           <div className="px-5">
             <SelectionBar
               count={selectedIds.length}
-              onExport={handleExport}
+              onExport={() => guardExport(handleExport)}
+              exportDisabled={isExporting}
               onMoveCategory={() =>
-                toast.info(
-                  `Đã chuyển ${selectedIds.length} followers sang danh mục mới.`,
+                guardMoveCategory(() =>
+                  toast.info(
+                    `Đã chuyển ${selectedIds.length} followers sang danh mục mới.`,
+                    { key: "m11-list-followers-move" },
+                  ),
                 )
               }
+              moveDisabled={isMovingCategory}
               onDelete={handleDeleteSelected}
             />
           </div>
@@ -529,10 +542,17 @@ export default function PageScannerListFollowers() {
                             {rawUid && (
                               <button
                                 type="button"
-                                onClick={() => {
-                                  navigator.clipboard?.writeText(rawUid);
-                                  toast.success(`Đã sao chép UID ${rawUid}`);
-                                }}
+                                onClick={() =>
+                                  guardCopyUid(async () => {
+                                    try {
+                                      await navigator.clipboard?.writeText(rawUid);
+                                      toast.success(`Đã sao chép UID ${rawUid}`, { key: "m11-list-followers-copy" });
+                                    } catch {
+                                      toast.error("Không sao chép được UID", { key: "m11-list-followers-copy" });
+                                    }
+                                  })
+                                }
+                                disabled={isCopyingUid}
                                 className="text-slate-400 hover:text-primary"
                                 title="Sao chép UID"
                               >

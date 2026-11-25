@@ -10,6 +10,7 @@ import { Folder, Search, PlusCircle, X, Save, Palette, Loader2 } from "lucide-re
 import { toast } from "@/lib/toast";
 import { savePagesToList } from "../service";
 import { usePageLists } from "./usePageLists";
+import { useActionLock } from "./useActionLock";
 
 export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSaved }) {
   const [mounted, setMounted] = useState(false);
@@ -22,7 +23,7 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
   const [selectedId, setSelectedId] = useState(null);
   const [newCatName, setNewCatName] = useState("");
   const [deduplicate, setDeduplicate] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [saving, guardSave, savingApi] = useActionLock();
 
   // Mỗi lần mở: làm sạch ô nhập
   useEffect(() => {
@@ -56,31 +57,30 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
   const typedName = newCatName.trim();
   const canSave = !saving && pageKeys.length > 0 && (typedName || selectedId != null);
 
-  const handleConfirmSave = async () => {
+  const handleConfirmSave = () => {
     if (!pageKeys.length) {
-      toast.warning("Không có page nào để lưu vào danh mục!");
+      toast.warning("Không có page nào để lưu vào danh mục!", { key: "m11-save-list" });
       return;
     }
     if (!typedName && selectedId == null) {
-      toast.warning("Vui lòng chọn hoặc nhập tên danh mục!");
+      toast.warning("Vui lòng chọn hoặc nhập tên danh mục!", { key: "m11-save-list" });
       return;
     }
-    setSaving(true);
-    try {
-      const res = await savePagesToList(
-        typedName
-          ? { categoryName: typedName, pageKeys, deduplicate }
-          : { categoryId: selectedId, pageKeys, deduplicate },
-      );
-      toast.success(res?.message || "Đã lưu page vào danh mục.");
-      onSaved?.(res);
-      onClose();
-    } catch (err) {
-      console.error(err);
-      toast.error(err?.message || "Lỗi khi lưu danh sách page!");
-    } finally {
-      setSaving(false);
-    }
+    return (async () => {
+      try {
+        const res = await savePagesToList(
+          typedName
+            ? { categoryName: typedName, pageKeys, deduplicate }
+            : { categoryId: selectedId, pageKeys, deduplicate },
+        );
+        toast.success(res?.message || "Đã lưu page vào danh mục.", { key: "m11-save-list" });
+        onSaved?.(res);
+        onClose();
+      } catch (err) {
+        console.error(err);
+        toast.error(err?.message || "Lỗi khi lưu danh sách page!", { key: "m11-save-list" });
+      }
+    })();
   };
 
   if (!isOpen || !mounted) return null;
@@ -203,7 +203,7 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
               onChange={(e) => setNewCatName(e.target.value)}
               placeholder="Nhập tên danh mục mới... (VD: Page Mỹ Phẩm Hà Nội 2026)"
               className="w-full h-10 px-3.5 pr-10 rounded-xl border border-slate-300 bg-white text-xs text-[#0F172A] placeholder:text-slate-400 focus:outline-none focus:border-[#2563EB] transition-colors"
-              onKeyDown={(e) => e.key === "Enter" && canSave && handleConfirmSave()}
+              onKeyDown={(e) => e.key === "Enter" && canSave && guardSave(handleConfirmSave)}
             />
             <Palette className="size-4 absolute right-3.5 top-3 text-slate-400 pointer-events-none" />
           </div>
@@ -234,11 +234,12 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
           </button>
           <button
             type="button"
-            onClick={handleConfirmSave}
+            onClick={() => guardSave(handleConfirmSave)}
             disabled={!canSave}
+            aria-busy={savingApi}
             className="h-10 px-5 rounded-xl bg-[#2563EB] hover:bg-blue-700 text-xs font-bold text-white shadow-sm flex items-center gap-2 transition-colors disabled:opacity-50"
           >
-            {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+            {savingApi ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
             <span>Xác nhận lưu</span>
           </button>
         </div>

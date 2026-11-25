@@ -27,9 +27,11 @@ import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/lib/toast";
+import { useActionLock } from "../shared/useActionLock";
+import { saveCsvContent } from "../shared/saveFile.mjs";
 import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { getPagesWithPosts, getScannedPosts, deleteScannedPosts } from "../service";
-import { runDelete } from "../_shared";
+import { runDelete, notifyExportResult } from "../_shared";
 
 const PAGE_SIZE = 5;
 
@@ -137,6 +139,10 @@ function FilterSelect({ label, value, onChange, options }) {
 }
 
 export default function PageScannerListPosts() {
+  // Khoá nút xuất file / sao chép / chuyển danh mục trong lúc xử lý (bấm liên tục chỉ chạy / báo 1 lần)
+  const [isExporting, guardExport] = useActionLock();
+  const [isCopying, guardCopy] = useActionLock();
+  const [isMovingCategory, guardMoveCategory] = useActionLock();
   const [pages, setPages] = useState([]);
   const [totalPostsAllPages, setTotalPostsAllPages] = useState(0);
   const [sideSearch, setSideSearch] = useState("");
@@ -259,10 +265,10 @@ export default function PageScannerListPosts() {
     [items, selectedIds],
   );
 
-  const handleExport = (rowsSrc) => {
+  const handleExport = async (rowsSrc) => {
     const rows = rowsSrc?.length ? rowsSrc : items;
     if (!rows.length) {
-      toast.warning("Không có dữ liệu để xuất.");
+      toast.warning("Không có dữ liệu để xuất.", { key: "m11-list-posts-export" });
       return;
     }
     const headers = ["STT", "Page", "Nội dung", "Link", "Reactions", "Comments", "Shares", "Thời gian"];
@@ -279,14 +285,18 @@ export default function PageScannerListPosts() {
     const csv = [headers, ...body]
       .map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
       .join("\n");
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `posts_${activePageKey || "all"}_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success("Đã xuất CSV.");
+    try {
+      const res = await saveCsvContent(
+        csv,
+        `posts_${activePageKey || "all"}_${new Date().toISOString().slice(0, 10)}.csv`,
+      );
+      notifyExportResult(res, {
+        successMessage: `Đã xuất ${rows.length.toLocaleString("vi-VN")} bài viết ra file "${res.fileName}".`,
+        key: "m11-list-posts-export",
+      });
+    } catch (err) {
+      toast.error(`Lỗi xuất CSV: ${err?.message || "Không lưu được file."}`, { key: "m11-list-posts-export" });
+    }
   };
 
   const handleCopyContent = async () => {
@@ -296,14 +306,14 @@ export default function PageScannerListPosts() {
       .filter(Boolean)
       .join("\n\n---\n\n");
     if (!text) {
-      toast.warning("Không có nội dung để sao chép.");
+      toast.warning("Không có nội dung để sao chép.", { key: "m11-list-posts-copy" });
       return;
     }
     try {
       await navigator.clipboard.writeText(text);
-      toast.success(`Đã sao chép ${rows.filter((r) => r.content).length} bài.`);
+      toast.success(`Đã sao chép ${rows.filter((r) => r.content).length} bài.`, { key: "m11-list-posts-copy" });
     } catch {
-      toast.error("Không sao chép được — kiểm tra quyền clipboard.");
+      toast.error("Không sao chép được — kiểm tra quyền clipboard.", { key: "m11-list-posts-copy" });
     }
   };
 
@@ -437,7 +447,8 @@ export default function PageScannerListPosts() {
                 size="sm"
                 variant="outline"
                 className="h-9 gap-1.5 border-slate-200 text-[11px]"
-                onClick={() => handleExport(items)}
+                onClick={() => guardExport(() => handleExport(items))}
+                disabled={isExporting}
               >
                 <Download className="size-3.5" /> Xuất Excel/CSV
               </Button>
@@ -446,7 +457,8 @@ export default function PageScannerListPosts() {
                 size="sm"
                 variant="outline"
                 className="h-9 gap-1.5 border-slate-200 text-[11px]"
-                onClick={handleCopyContent}
+                onClick={() => guardCopy(handleCopyContent)}
+                disabled={isCopying}
               >
                 <Copy className="size-3.5" /> Sao chép nội dung
               </Button>
@@ -505,7 +517,14 @@ export default function PageScannerListPosts() {
                   size="sm"
                   variant="outline"
                   className="h-7 gap-1 border-blue-200 bg-white text-[11px]"
-                  onClick={() => toast.info(`Đã chuyển ${selectedIds.length} bài viết vào danh mục lưu.`)}
+                  onClick={() =>
+                    guardMoveCategory(() =>
+                      toast.info(`Đã chuyển ${selectedIds.length} bài viết vào danh mục lưu.`, {
+                        key: "m11-list-posts-move",
+                      }),
+                    )
+                  }
+                  disabled={isMovingCategory}
                 >
                   <FolderInput className="size-3.5" /> Chuyển danh mục
                 </Button>
@@ -514,7 +533,8 @@ export default function PageScannerListPosts() {
                   size="sm"
                   variant="outline"
                   className="h-7 gap-1 border-emerald-200 bg-emerald-50 text-[11px] text-emerald-700"
-                  onClick={() => handleExport(selectedRows)}
+                  onClick={() => guardExport(() => handleExport(selectedRows))}
+                  disabled={isExporting}
                 >
                   <Download className="size-3.5" /> Xuất dữ liệu chọn
                 </Button>

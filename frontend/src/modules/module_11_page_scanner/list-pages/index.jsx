@@ -18,6 +18,8 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "@/lib/toast";
+import { useActionLock } from "../shared/useActionLock";
+import { saveCsvContent } from "../shared/saveFile.mjs";
 import { askConfirm } from "../shared/askConfirm";
 import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
@@ -42,7 +44,7 @@ import {
 } from "../_listLayout";
 import { usePageLists } from "../shared/usePageLists";
 import SavePageListModal from "../shared/SavePageListModal";
-import { runDelete } from "../_shared";
+import { runDelete, notifyExportResult } from "../_shared";
 import CreateCategoryModal from "@/modules/module_10_group_scan/member-list/_components/CreateCategoryModal";
 
 const ALL_ID = "__all__";
@@ -89,6 +91,8 @@ function pageTags(row) {
 }
 
 export default function PageScannerListPages() {
+  // Khoá nút xuất file trong lúc xử lý (bấm liên tục chỉ xuất / báo 1 lần)
+  const [isExporting, guardExport] = useActionLock();
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -220,12 +224,12 @@ export default function PageScannerListPages() {
     setActiveId(id);
   };
 
-  const handleExport = () => {
+  const handleExport = async () => {
     const rowsSrc = selectedKeys.length
       ? items.filter((r) => selectedKeys.includes(r.page_key))
       : items;
     if (!rowsSrc.length) {
-      toast.warning("Không có dữ liệu để xuất.");
+      toast.warning("Không có dữ liệu để xuất.", { key: "m11-list-pages-export" });
       return;
     }
     const headers = [
@@ -255,14 +259,15 @@ export default function PageScannerListPages() {
     const csv = [headers, ...rows]
       .map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
       .join("\n");
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `danh_sach_page_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success("Đã xuất CSV.");
+    try {
+      const res = await saveCsvContent(csv, `danh_sach_page_${new Date().toISOString().slice(0, 10)}.csv`);
+      notifyExportResult(res, {
+        successMessage: `Đã xuất ${rowsSrc.length.toLocaleString("vi-VN")} page ra file "${res.fileName}".`,
+        key: "m11-list-pages-export",
+      });
+    } catch (err) {
+      toast.error(`Lỗi xuất CSV: ${err?.message || "Không lưu được file."}`, { key: "m11-list-pages-export" });
+    }
   };
 
   const openCreateList = () => {
@@ -475,7 +480,8 @@ export default function PageScannerListPages() {
                 size="sm"
                 variant="outline"
                 className="h-8 gap-1.5 border-emerald-600 bg-emerald-600 text-[11px] text-white hover:bg-emerald-700 hover:text-white"
-                onClick={handleExport}
+                onClick={() => guardExport(handleExport)}
+                disabled={isExporting}
               >
                 <Download className="size-3.5" /> Xuất Excel
               </Button>
@@ -541,7 +547,8 @@ export default function PageScannerListPages() {
           <div className="px-5">
             <SelectionBar
               count={selectedKeys.length}
-              onExport={handleExport}
+              onExport={() => guardExport(handleExport)}
+              exportDisabled={isExporting}
               onMoveCategory={handleMoveToList}
               onDelete={handleDeleteSelected}
             />

@@ -40,7 +40,9 @@ import {
   getScannedPages,
   getSearchKeywords,
 } from "../service";
-import { Pager } from "../_shared";
+import { Pager, notifyExportResult } from "../_shared";
+import { useActionLock } from "./useActionLock";
+import { saveCsvContent } from "./saveFile.mjs";
 
 const fmtNum = (n) => Number(n || 0).toLocaleString("vi-VN");
 
@@ -142,6 +144,7 @@ export function SelectAccountsModal({
   const [farmTime, setFarmTime] = useState("ALL");
   const [page, setPage] = useState(1);
   const [categoriesById, setCategoriesById] = useState({});
+  const [isCopyingUid, guardCopyUid] = useActionLock();
   const pageSize = 5;
 
   const usableAccounts = useMemo(() => accounts.filter(isAccountUsable), [accounts]);
@@ -445,10 +448,17 @@ export function SelectAccountsModal({
                               onMouseDown={(e) => e.stopPropagation()}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                navigator.clipboard?.writeText(acc.uid);
-                                toast.success(`Đã sao chép UID ${acc.uid}`);
+                                guardCopyUid(async () => {
+                                  try {
+                                    await navigator.clipboard?.writeText(acc.uid);
+                                    toast.success(`Đã sao chép UID ${acc.uid}`, { key: "m11-modal-acc-copy" });
+                                  } catch {
+                                    toast.error("Không sao chép được UID", { key: "m11-modal-acc-copy" });
+                                  }
+                                });
                               }}
-                              className="text-[#94A3B8] hover:text-[#1877F2]"
+                              disabled={isCopyingUid}
+                              className="text-[#94A3B8] hover:text-[#1877F2] disabled:cursor-not-allowed disabled:opacity-40"
                               aria-label="Sao chép UID"
                             >
                               <Copy className="size-3" />
@@ -607,6 +617,7 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
   const [currentPage, setCurrentPage] = useState(1);
   const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
+  const [isExporting, guardExport] = useActionLock();
 
   const [prevOpen, setPrevOpen] = useState(open);
   if (open !== prevOpen) {
@@ -849,10 +860,10 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
     };
   }, [categoriesData.allList, activeCategory, filteredPages.length]);
 
-  const handleExportExcel = () => {
+  const handleExportExcel = async () => {
     const exportItems = filteredPages;
     if (!exportItems.length) {
-      toast.warning("Không có dữ liệu để xuất.");
+      toast.warning("Không có dữ liệu để xuất.", { key: "m11-modal-pages-export" });
       return;
     }
     const headers = ["STT", "Tên Page", "UID", "Link Page", "Số điện thoại", "Email", "Website", "Địa chỉ", "Danh mục/Tag"];
@@ -870,14 +881,15 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
     const csvContent = [headers, ...rows]
       .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
       .join("\n");
-    const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `danh_sach_page_${activeCategory || "all"}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-    toast.success(`Đã xuất ${exportItems.length} page ra file Excel/CSV.`);
+    try {
+      const res = await saveCsvContent(csvContent, `danh_sach_page_${activeCategory || "all"}.csv`);
+      notifyExportResult(res, {
+        successMessage: `Đã xuất ${exportItems.length} page ra file "${res.fileName}".`,
+        key: "m11-modal-pages-export",
+      });
+    } catch (err) {
+      toast.error(`Lỗi xuất file: ${err?.message || "Không lưu được file."}`, { key: "m11-modal-pages-export" });
+    }
   };
 
   const handleDeleteSelected = async () => {
@@ -1157,8 +1169,9 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={handleExportExcel}
-                  className="inline-flex h-8 sm:h-9 items-center gap-1.5 rounded-lg bg-[#059669] hover:bg-[#047857] px-3 sm:px-3.5 text-xs font-semibold text-white shadow-xs transition"
+                  onClick={() => guardExport(handleExportExcel)}
+                  disabled={isExporting}
+                  className="inline-flex h-8 sm:h-9 items-center gap-1.5 rounded-lg bg-[#059669] hover:bg-[#047857] px-3 sm:px-3.5 text-xs font-semibold text-white shadow-xs transition disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <FileSpreadsheet className="size-3.5" />
                   <span>Xuất Excel</span>
