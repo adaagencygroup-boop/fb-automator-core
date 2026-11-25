@@ -25,8 +25,7 @@ const SORT_OPTIONS = [
 const TIER_OPTIONS = [
   { value: "all", label: "Mức: Tất cả" },
   { value: "1", label: "Mức 1 (Cao)" },
-  { value: "2", label: "Mức 2 (Vừa)" },
-  { value: "3", label: "Mức 3 (Cơ bản)" },
+  { value: "2", label: "Mức 2 (Cơ bản)" },
 ];
 const PAGE_SIZES = [
   { value: 20, label: "20 / trang" },
@@ -34,7 +33,7 @@ const PAGE_SIZES = [
 ];
 const TABS = [
   { id: "like", label: "Đã Like" },
-  { id: "share", label: "Đã Share" },
+  // Không có tab "Đã Share": Facebook chỉ cho xem tổng số lượt chia sẻ (thẻ "Lượt chia sẻ"), không cho xem ai đã chia sẻ
   { id: "comment", label: "Bình luận" },
 ];
 const SOURCE_TEXT = { group: "Nhóm", page: "Page", profile: "Trang cá nhân" };
@@ -255,13 +254,11 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
   const totalPages = Math.max(1, Math.ceil(data.total / pageSize));
   const emptyRowsText = debQuery || tier !== "all"
     ? "Không tìm thấy tài khoản tương tác nào khớp với từ khóa / bộ lọc."
-    : tab === "share"
-      ? `Facebook không cho xem danh sách người chia sẻ — bài này có ${nf(post?.fb_share_count)} lượt chia sẻ (chỉ lấy được tổng số).`
-      : tab === "like"
-        ? post?.source_type && post.source_type !== "group" && post.fb_like_count > 0
-          ? "Chưa có người bày tỏ cảm xúc nào. Với bài ngoài nhóm, Facebook chỉ cho xem người là bạn bè của nick quét."
-          : "Chưa có tài khoản bày tỏ cảm xúc nào được quét cho bài này."
-        : "Chưa có bình luận nào được quét cho bài này.";
+    : tab === "like"
+      ? post?.source_type && post.source_type !== "group" && post.fb_like_count > 0
+        ? "Chưa có người bày tỏ cảm xúc nào. Với bài ngoài nhóm, Facebook chỉ cho xem người là bạn bè của nick quét."
+        : "Chưa có tài khoản bày tỏ cảm xúc nào được quét cho bài này."
+      : "Chưa có bình luận nào được quét cho bài này.";
 
   return (
     <section className="rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
@@ -348,22 +345,30 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
           <div className="grid gap-3 sm:grid-cols-3">
             {[
               { id: "like", label: "Tài khoản Like", value: counts.like },
-              { id: "share", label: "Lượt chia sẻ", value: counts.share, hint: "Facebook chỉ cho xem tổng số" },
+              { id: "share", label: "Lượt chia sẻ", value: counts.share, hint: "Facebook chỉ cho xem tổng số", info: true },
               { id: "comment", label: "Bình luận chi tiết", value: counts.comment },
-            ].map((k) => (
-              <button
-                key={k.id}
-                type="button"
-                onClick={() => setTab(k.id)}
-                className={`rounded-xl border bg-white px-5 py-4 text-left transition-all ${
-                  tab === k.id ? "border-[#2563EB] shadow-[0_0_0_1px_#2563EB]" : "border-[#E2E8F0] hover:border-slate-300"
-                }`}
-              >
-                <p className={`text-[13px] font-semibold uppercase ${tab === k.id ? "text-[#2563EB]" : "text-[#475569]"}`}>{k.label}</p>
-                <p className={`mt-1 text-3xl font-bold tabular-nums ${tab === k.id ? "text-[#2563EB]" : "text-[#0F172A]"}`}>{nf(k.value)}</p>
-                {k.hint && <p className="mt-0.5 text-[11px] text-slate-400">{k.hint}</p>}
-              </button>
-            ))}
+            ].map((k) =>
+              // Thẻ chia sẻ chỉ hiện tổng số: không có tab danh sách để mở
+              k.info ? (
+                <div key={k.id} className="rounded-xl border border-[#E2E8F0] bg-white px-5 py-4 text-left">
+                  <p className="text-[13px] font-semibold uppercase text-[#475569]">{k.label}</p>
+                  <p className="mt-1 text-3xl font-bold tabular-nums text-[#0F172A]">{nf(k.value)}</p>
+                  <p className="mt-0.5 text-[11px] text-slate-400">{k.hint}</p>
+                </div>
+              ) : (
+                <button
+                  key={k.id}
+                  type="button"
+                  onClick={() => setTab(k.id)}
+                  className={`rounded-xl border bg-white px-5 py-4 text-left transition-all ${
+                    tab === k.id ? "border-[#2563EB] shadow-[0_0_0_1px_#2563EB]" : "border-[#E2E8F0] hover:border-slate-300"
+                  }`}
+                >
+                  <p className={`text-[13px] font-semibold uppercase ${tab === k.id ? "text-[#2563EB]" : "text-[#475569]"}`}>{k.label}</p>
+                  <p className={`mt-1 text-3xl font-bold tabular-nums ${tab === k.id ? "text-[#2563EB]" : "text-[#0F172A]"}`}>{nf(k.value)}</p>
+                </button>
+              ),
+            )}
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3">

@@ -87,7 +87,7 @@ export function downloadUidText(baseName, uids) {
   return fileName;
 }
 
-const TIER_TEXT = { 1: "Mức 1 (Cao)", 2: "Mức 2 (Vừa)", 3: "Mức 3 (Cơ bản)" };
+const TIER_TEXT = { 1: "Mức 1 (Cao)", 2: "Mức 2 (Cơ bản)" };
 const ACTION_TEXT = { like: "Cảm xúc", share: "Chia sẻ", comment: "Bình luận" };
 export const REACTION_TEXT = {
   LIKE: "Thích", LOVE: "Yêu thích", CARE: "Thương thương", HAHA: "Haha", WOW: "Wow", SAD: "Buồn", ANGRY: "Phẫn nộ",

@@ -38,7 +38,8 @@ from modules.module_12_post_engagement.links import numeric_post_id, parse_post_
 logger = logging.getLogger(__name__)
 
 MAX_POSTS = 20
-QUOTA_LIMITS = {"like": 10000, "comment": 5000, "share": 2000}
+# Không có hạn mức Share: Facebook chỉ cho xem tổng số lượt chia sẻ, không cho xem ai đã chia sẻ
+QUOTA_LIMITS = {"like": 10000, "comment": 5000}
 FLUSH_EVERY = 25
 MIN_DELAY_SEC = 3.0
 
@@ -168,7 +169,7 @@ def _clean_uids(uids: list[Any]) -> list[str]:
 
 
 def normalize_targets(items: list[Any]) -> list[dict[str, Any]]:
-    """Link / bài gửi lên → [{post_key, post_url, source_hint, like_quota, comment_quota, share_quota, title}], bỏ trùng."""
+    """Link / bài gửi lên → [{post_key, post_url, source_hint, like_quota, comment_quota, title}], bỏ trùng."""
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for it in items or []:
@@ -179,7 +180,7 @@ def normalize_targets(items: list[Any]) -> list[dict[str, Any]]:
         seen.add(info["post_key"])
         row = {"post_key": info["post_key"], "post_url": info["url"], "source_hint": info["source_hint"]}
         if isinstance(it, dict):
-            for kind in ("like", "comment", "share"):
+            for kind in QUOTA_LIMITS:
                 val = it.get(f"{kind}_quota")
                 try:
                     row[f"{kind}_quota"] = max(0, min(QUOTA_LIMITS[kind], int(val)))
@@ -198,7 +199,7 @@ def _new_job(owner: str, kind: str, uids: list[str], posts: list[dict[str, Any]]
         _jobs[job_id] = {
             "job_id": job_id, "kind": kind, "owner": owner, "uids": uids, "posts": posts, "status": "running",
             "control": "run", "logs": [], "progress": {p["post_key"]: {"status": "pending"} for p in posts},
-            "totals": {"likes": 0, "comments": 0, "shares": 0}, "started_at": time.time(), "finished_at": None,
+            "totals": {"likes": 0, "comments": 0}, "started_at": time.time(), "finished_at": None,
             "error": "", **extra,
         }
     return job_id
@@ -230,8 +231,8 @@ def start_scan(owner: str, uids: list[Any], posts: list[Any], *, delay_min: floa
         raise ValueError("Chưa có bài viết hợp lệ để quét.")
     if len(targets) > MAX_POSTS:
         raise ValueError(f"Mỗi phiên tối đa {MAX_POSTS} bài viết.")
-    if not any(t["like_quota"] or t["comment_quota"] or t["share_quota"] for t in targets):
-        raise ValueError("Số lượng quét Like / Bình luận / Chia sẻ đều bằng 0.")
+    if not any(t["like_quota"] or t["comment_quota"] for t in targets):
+        raise ValueError("Số lượng quét Like / Bình luận đều bằng 0.")
     lo, hi = max(MIN_DELAY_SEC, float(delay_min or 0)), max(MIN_DELAY_SEC, float(delay_max or 0))
     lo, hi = min(lo, hi, 3600.0), min(max(lo, hi), 3600.0)
     job_id = _new_job(owner, "scan", uids, targets, delay_min=lo, delay_max=hi)
@@ -641,10 +642,10 @@ def _scan_one(job_id: str, session: dict[str, Any], idx: int, post: dict[str, An
     elif like_quota > 0 and row["fb_like_count"] == 0:
         _log(job_id, f"Bài số {idx + 1} chưa có lượt cảm xúc nào.", "info")
 
-    # 2) Chia sẻ: Facebook không còn cho xem danh sách người chia sẻ
-    if int(post.get("share_quota") or 0) > 0 and (row["fb_share_count"] or 0) > 0:
-        _log(job_id, f"🔗 Bài số {idx + 1} có {row['fb_share_count']:,} lượt chia sẻ — Facebook không cho xem danh sách người "
-                     f"chia sẻ nên chỉ ghi nhận tổng số.", "warn")
+    # 2) Chia sẻ: Facebook không còn cho xem danh sách người chia sẻ → chỉ ghi nhận tổng số (đã lưu lúc mở bài)
+    if (row["fb_share_count"] or 0) > 0:
+        _log(job_id, f"🔗 Bài số {idx + 1} có {row['fb_share_count']:,} lượt chia sẻ — Facebook chỉ cho xem tổng số, "
+                     f"không cho xem ai đã chia sẻ.", "info")
 
     # 3) Bình luận (gốc + trả lời, toàn văn)
     comment_quota = max(0, int(post.get("comment_quota") or 0) - comments_before)

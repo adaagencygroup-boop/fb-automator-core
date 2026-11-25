@@ -124,6 +124,7 @@ def init_models() -> None:
     global _schema_ready
     for stmt in SCHEMA:
         db.execute(stmt)
+    db.execute(_RETIER_SQL)
     _schema_ready = True
     print("[Module 12 DB] Schema pe_posts / pe_users / pe_comments / pe_sessions ready.")
 
@@ -228,22 +229,21 @@ def upsert_post(owner: Optional[str], post: dict[str, Any]) -> None:
 
 
 def refresh_post_counts(owner: Optional[str], post_key: str) -> dict[str, int]:
-    """Đếm lại số người Like / Share và số bình luận đã quét được của bài."""
+    """Đếm lại số người Like và số bình luận đã quét được của bài (Share chỉ có tổng số của Facebook)."""
     owner = _owner(owner)
     row = db.fetch_one(
         """
         SELECT
           (SELECT COUNT(*) FROM pe_users WHERE owner_username = ? AND post_key = ? AND has_like) AS likes,
-          (SELECT COUNT(*) FROM pe_users WHERE owner_username = ? AND post_key = ? AND has_share) AS shares,
           (SELECT COUNT(*) FROM pe_comments WHERE owner_username = ? AND post_key = ?) AS comments
         """,
-        (owner, post_key, owner, post_key, owner, post_key),
+        (owner, post_key, owner, post_key),
     ) or {}
-    counts = {k: int(row.get(k) or 0) for k in ("likes", "shares", "comments")}
+    counts = {k: int(row.get(k) or 0) for k in ("likes", "comments")}
     db.execute(
-        "UPDATE pe_posts SET like_count = ?, share_count = ?, comment_count = ?, scanned_at = CURRENT_TIMESTAMP, "
+        "UPDATE pe_posts SET like_count = ?, comment_count = ?, scanned_at = CURRENT_TIMESTAMP, "
         "updated_at = CURRENT_TIMESTAMP WHERE owner_username = ? AND post_key = ?",
-        (counts["likes"], counts["shares"], counts["comments"], owner, post_key),
+        (counts["likes"], counts["comments"], owner, post_key),
     )
     return counts
 
@@ -311,7 +311,7 @@ def list_posts(owner: Optional[str], *, search: str = "", source: str = "all", s
             cond.append("search_fold LIKE ?")
             params.append(f"%{word}%")
     order = {
-        "most": "(like_count + comment_count + share_count) DESC, scanned_at DESC",
+        "most": "(like_count + comment_count + fb_share_count) DESC, scanned_at DESC",
         "oldest": "scanned_at ASC",
     }.get(sort, "scanned_at DESC")
     where = " AND ".join(cond)
@@ -344,20 +344,28 @@ def delete_posts(owner: Optional[str], keys: list[str]) -> int:
 # Người tương tác + phân tầng
 # ---------------------------------------------------------------------------
 
+# Mức tiềm năng (khớp fb_parse.tier_of): vừa Like vừa bình luận → 1, chỉ 1 trong 2 → 2. Không tính Share vì Facebook
+# chỉ cho xem tổng số lượt chia sẻ; cột has_share / shared_at giữ lại trong bảng nhưng không còn được ghi.
 _TIER_SQL = (
-    "CASE ((pe_users.has_like OR EXCLUDED.has_like)::int + (pe_users.has_share OR EXCLUDED.has_share)::int"
-    " + (pe_users.has_comment OR EXCLUDED.has_comment)::int) WHEN 3 THEN 1 WHEN 2 THEN 2 ELSE 3 END"
+    "CASE WHEN (pe_users.has_like OR EXCLUDED.has_like) AND (pe_users.has_comment OR EXCLUDED.has_comment) "
+    "THEN 1 ELSE 2 END"
 )
+# Dữ liệu quét trước khi đổi quy tắc (3 mức có tính Share) → tính lại 1 lần lúc khởi động
+_RETIER_SQL = (
+    "UPDATE pe_users SET tier = CASE WHEN has_like AND has_comment THEN 1 ELSE 2 END "
+    "WHERE tier <> CASE WHEN has_like AND has_comment THEN 1 ELSE 2 END"
+)
+TIERS = (1, 2)
 
 
 def save_users(owner: Optional[str], post_key: str, users: list[dict[str, Any]], *, action: str) -> int:
-    """Ghi người tương tác (action: like | share | comment). Đã có thì bật thêm cờ hành động và NÂNG HẠNG ngay.
+    """Ghi người tương tác (action: like | comment). Đã có thì bật thêm cờ hành động và NÂNG HẠNG ngay.
 
-    Mức tiềm năng = số hành động khác nhau trên bài: 3 → Mức 1, 2 → Mức 2, 1 → Mức 3 (người không có hành động
-    nào thì không bao giờ được ghi).
+    Mức tiềm năng: vừa Like vừa bình luận → Mức 1, chỉ 1 trong 2 → Mức 2 (người không có hành động nào thì không
+    bao giờ được ghi).
     """
     owner = _owner(owner)
-    if not owner or not post_key or action not in ("like", "share", "comment"):
+    if not owner or not post_key or action not in ("like", "comment"):
         return 0
     seen: dict[str, dict[str, Any]] = {}
     for u in users or []:
@@ -368,7 +376,7 @@ def save_users(owner: Optional[str], post_key: str, users: list[dict[str, Any]],
     for part in _chunks(rows):
         values, params = [], []
         for u in part:
-            values.append("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 3)")
+            values.append("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2)")
             when = utc_from_epoch(u.get("ts")) or _dt.now(_tz.utc).replace(tzinfo=None)
             params.extend([
                 owner, post_key, str(u["uid"]), (u.get("name") or "")[:255] or None, fold(u.get("name"))[:255] or None,
@@ -451,7 +459,7 @@ def save_comments(owner: Optional[str], post_key: str, comments: list[dict[str, 
 
 def known_uids(owner: Optional[str], post_key: str, action: str) -> set[str]:
     owner = _owner(owner)
-    col = {"like": "has_like", "share": "has_share", "comment": "has_comment"}.get(action)
+    col = {"like": "has_like", "comment": "has_comment"}.get(action)
     if not owner or not col:
         return set()
     rows = db.fetch_all(f"SELECT uid FROM pe_users WHERE owner_username = ? AND post_key = ? AND {col}", (owner, post_key))
@@ -466,7 +474,7 @@ def known_comment_ids(owner: Optional[str], post_key: str) -> set[str]:
     return {str(r["comment_id"]) for r in rows}
 
 
-TABS = ("like", "share", "comment")
+TABS = ("like", "comment")  # không có tab Share: Facebook chỉ cho xem tổng số lượt chia sẻ
 
 
 def list_engagements(owner: Optional[str], post_key: str, *, tab: str = "like", search: str = "", tier: Optional[int] = None,
@@ -483,7 +491,7 @@ def list_engagements(owner: Optional[str], post_key: str, *, tab: str = "like", 
         for word in q.split(" ")[:6] if q else []:
             cond.append("(COALESCE(u.name_fold, '') LIKE ? OR c.uid LIKE ? OR COALESCE(c.text_fold, '') LIKE ?)")
             params.extend([f"%{word}%", f"%{word}%", f"%{word}%"])
-        if tier in (1, 2, 3):
+        if tier in TIERS:
             cond.append("u.tier = ?")
             params.append(int(tier))
         where = " AND ".join(cond)
@@ -493,36 +501,33 @@ def list_engagements(owner: Optional[str], post_key: str, *, tab: str = "like", 
         lim = "" if export else " LIMIT ? OFFSET ?"
         rows = db.fetch_all(
             f"SELECT c.id, c.comment_id, c.parent_id, c.depth, c.uid, COALESCE(u.name, c.name) AS name, u.profile_url, "
-            f"u.avatar_url, u.reaction_type, u.tier, u.has_like, u.has_share, u.has_comment, c.text, c.commented_at AS at "
+            f"u.avatar_url, u.reaction_type, u.tier, u.has_like, u.has_comment, c.text, c.commented_at AS at "
             f"{base} ORDER BY c.commented_at ASC NULLS LAST, c.id ASC{lim}",
             tuple(params) + (() if export else (max(1, min(500, int(limit))), max(0, int(offset)))),
         )
     else:
-        col = "has_like" if tab == "like" else "has_share"
-        cond, params = ["owner_username = ?", "post_key = ?", col], [owner, post_key]
+        cond, params = ["owner_username = ?", "post_key = ?", "has_like"], [owner, post_key]
         for word in q.split(" ")[:6] if q else []:
             cond.append("(COALESCE(name_fold, '') LIKE ? OR uid LIKE ?)")
             params.extend([f"%{word}%", f"%{word}%"])
-        if tier in (1, 2, 3):
+        if tier in TIERS:
             cond.append("tier = ?")
             params.append(int(tier))
         where = " AND ".join(cond)
         total = int((db.fetch_one(f"SELECT COUNT(*) AS n FROM pe_users WHERE {where}", tuple(params)) or {}).get("n") or 0)
-        at = "liked_at" if tab == "like" else "shared_at"
         lim = "" if export else " LIMIT ? OFFSET ?"
         rows = db.fetch_all(
-            f"SELECT id, uid, name, profile_url, avatar_url, reaction_type, tier, has_like, has_share, has_comment, "
-            f"{at} AS at, '' AS text FROM pe_users WHERE {where} ORDER BY id ASC{lim}",
+            f"SELECT id, uid, name, profile_url, avatar_url, reaction_type, tier, has_like, has_comment, "
+            f"liked_at AS at, '' AS text FROM pe_users WHERE {where} ORDER BY id ASC{lim}",
             tuple(params) + (() if export else (max(1, min(500, int(limit))), max(0, int(offset)))),
         )
     counts = db.fetch_one(
         """
         SELECT
           (SELECT COUNT(*) FROM pe_users WHERE owner_username = ? AND post_key = ? AND has_like) AS like_count,
-          (SELECT COUNT(*) FROM pe_users WHERE owner_username = ? AND post_key = ? AND has_share) AS share_count,
           (SELECT COUNT(*) FROM pe_comments WHERE owner_username = ? AND post_key = ?) AS comment_count
         """,
-        (owner, post_key, owner, post_key, owner, post_key),
+        (owner, post_key, owner, post_key),
     ) or {}
     out = []
     for r in rows:
@@ -534,9 +539,8 @@ def list_engagements(owner: Optional[str], post_key: str, *, tab: str = "like", 
             "profile_url": r.get("profile_url") or f"https://www.facebook.com/{uid}",
             "avatar_url": r.get("avatar_url") or "",
             "reaction": r.get("reaction_type") or "",
-            "tier": int(r.get("tier") or 3),
+            "tier": int(r.get("tier") or 2),
             "has_like": bool(r.get("has_like")),
-            "has_share": bool(r.get("has_share")),
             "has_comment": bool(r.get("has_comment")),
             "time": fmt_dt(r.get("at"), "%d/%m/%Y %H:%M"),
             "text": r.get("text") or "",
@@ -546,13 +550,13 @@ def list_engagements(owner: Optional[str], post_key: str, *, tab: str = "like", 
     return {
         "rows": out,
         "total": total,
-        "counts": {k: int(counts.get(k) or 0) for k in ("like_count", "share_count", "comment_count")},
+        "counts": {k: int(counts.get(k) or 0) for k in ("like_count", "comment_count")},
     }
 
 
 def export_engagements(owner: Optional[str], post_keys: list[str], *, scope: str = "all", tab: str = "like",
                        search: str = "", tier: Optional[int] = None) -> list[dict[str, Any]]:
-    """Dữ liệu xuất file. scope=tab: đúng tab đang xem; scope=all: Like + Share + Bình luận của các bài."""
+    """Dữ liệu xuất file. scope=tab: đúng tab đang xem; scope=all: Like + Bình luận của các bài."""
     owner = _owner(owner)
     posts = get_posts(owner, post_keys)
     tabs = [tab] if scope == "tab" else list(TABS)
@@ -645,7 +649,7 @@ def resume_remaining(state: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
             "like_quota": max(0, int(p.get("like_quota") or 0) - int(row.get("likes") or 0)),
             "comment_quota": max(0, int(p.get("comment_quota") or 0) - int(row.get("comments") or 0)),
         })
-    return [p for p in out if p["like_quota"] > 0 or p["comment_quota"] > 0 or int(p.get("share_quota") or 0) > 0]
+    return [p for p in out if p["like_quota"] > 0 or p["comment_quota"] > 0]
 
 
 def get_resume_info(owner: Optional[str], session_id: str) -> Optional[dict[str, Any]]:

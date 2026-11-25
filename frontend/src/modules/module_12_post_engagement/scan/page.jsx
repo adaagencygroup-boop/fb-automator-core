@@ -22,7 +22,8 @@ import {
 } from "../service";
 
 const MAX_POSTS = 20;
-const LIMITS = { like: 10000, comment: 5000, share: 2000 };
+// Không có ô Share: Facebook chỉ cho xem tổng số lượt chia sẻ, không cho xem ai đã chia sẻ
+const LIMITS = { like: 10000, comment: 5000 };
 const nf = (n) => Number(n || 0).toLocaleString("vi-VN");
 const draftKey = () => {
   const uid = getSessionUserId();
@@ -31,7 +32,6 @@ const draftKey = () => {
 const defaultQuota = (meta) => ({
   like: Math.min(LIMITS.like, Number(meta?.fb_like_count || 0)),
   comment: Math.min(LIMITS.comment, Number(meta?.fb_comment_count || 0)),
-  share: Math.min(LIMITS.share, Number(meta?.fb_share_count || 0)),
 });
 const SOURCE_TEXT = { group: "Nhóm", page: "Page", profile: "Cá nhân" };
 
@@ -54,7 +54,6 @@ function QuotaInput({ value, onChange, max, tone, label, disabled }) {
   const tones = {
     like: "border-[#BFDBFE] bg-[#EFF6FF] text-[#1D4ED8]",
     comment: "border-[#A7F3D0] bg-[#ECFDF5] text-[#047857]",
-    share: "border-[#FDE68A] bg-[#FFFBEB] text-[#B45309]",
   };
   return (
     <label className={`inline-flex h-8 items-center gap-1 rounded-lg border px-2 text-[11px] font-semibold ${tones[tone]}`}>
@@ -89,7 +88,7 @@ export default function PostEngagementScanPage() {
   const [file, setFile] = useState(draft.file || null); // {name, size, rows}
   const [removed, setRemoved] = useState(() => new Set(draft.removed || []));
   const [checked, setChecked] = useState(draft.checked || {}); // post_key → {status, meta}
-  const [quotas, setQuotas] = useState(draft.quotas || {}); // post_key → {like, comment, share}
+  const [quotas, setQuotas] = useState(draft.quotas || {}); // post_key → {like, comment}
   const [delayMin, setDelayMin] = useState(draft.delayMin ?? 5);
   const [delayMax, setDelayMax] = useState(draft.delayMax ?? 10);
 
@@ -165,9 +164,8 @@ export default function PostEngagementScanPage() {
     const q = quotas[r.post_key] || defaultQuota(checked[r.post_key]?.meta);
     acc.like += Number(q.like || 0);
     acc.comment += Number(q.comment || 0);
-    acc.share += Number(q.share || 0);
     return acc;
-  }, { like: 0, comment: 0, share: 0 }), [available, quotas, checked]);
+  }, { like: 0, comment: 0 }), [available, quotas, checked]);
 
   // ---- Khôi phục kết quả Kiểm tra đã lưu cho các link (mở lại trang / dán lại link cũ)
   useEffect(() => {
@@ -384,10 +382,9 @@ export default function PostEngagementScanPage() {
         post_url: r.url,
         like_quota: Number(q.like || 0),
         comment_quota: Number(q.comment || 0),
-        share_quota: Number(q.share || 0),
         title: (checked[r.post_key]?.meta?.content || "").slice(0, 120),
       };
-    }).filter((p) => p.like_quota || p.comment_quota || p.share_quota);
+    }).filter((p) => p.like_quota || p.comment_quota);
     if (!posts.length) {
       toast.warning("Chưa có bài khả dụng nào có số lượng quét lớn hơn 0.");
       return;
@@ -646,7 +643,7 @@ export default function PostEngagementScanPage() {
             <li>• Mỗi nick mở 1 Chrome (tối đa 5 chạy song song), bài viết chia đều cho các nick; nick bị checkpoint / chặn tạm thời tự nhường bài cho nick khác.</li>
             <li>• Nghỉ ngẫu nhiên trong khoảng trên giữa 2 lượt tải danh sách và giữa 2 bài viết.</li>
             <li>• <b>Like:</b> lấy hết người bày tỏ cảm xúc của bài trong nhóm. Bài fanpage / cá nhân: Facebook chỉ cho xem người là bạn bè của nick.</li>
-            <li>• <b>Share:</b> Facebook không cho xem danh sách người chia sẻ — chỉ ghi nhận tổng số.</li>
+            <li>• <b>Share:</b> Facebook chỉ cho xem tổng số lượt chia sẻ, không cho xem ai đã chia sẻ — chỉ ghi nhận tổng số, không tính vào mức tiềm năng.</li>
             <li>• <b>Bình luận:</b> lấy cả bình luận gốc và trả lời, kèm toàn văn nội dung.</li>
           </ul>
         </section>
@@ -718,7 +715,6 @@ export default function PostEngagementScanPage() {
                           <div className="flex flex-wrap gap-1.5">
                             <QuotaInput label="Like" tone="like" max={LIMITS.like} value={q.like} disabled={locked} onChange={(v) => setQ("like", v)} />
                             <QuotaInput label="Cmt" tone="comment" max={LIMITS.comment} value={q.comment} disabled={locked} onChange={(v) => setQ("comment", v)} />
-                            <QuotaInput label="Share" tone="share" max={LIMITS.share} value={q.share} disabled={locked} onChange={(v) => setQ("share", v)} />
                           </div>
                         ) : (
                           <span className="text-xs text-slate-400">{info.status === "unavailable" ? "Bỏ qua — bài đã xoá / riêng tư" : "Chờ kiểm tra"}</span>
@@ -737,8 +733,7 @@ export default function PostEngagementScanPage() {
             </table>
           </div>
           <p className="mt-3 text-[13px] text-[#334155]">
-            Tổng tương tác dự kiến quét: <b>{nf(totals.like + totals.comment + totals.share)}</b> ({nf(totals.like)} Like, {nf(totals.comment)} Cmt,{" "}
-            {nf(totals.share)} Share) · để trống = quét toàn bộ số hiện có.
+            Tổng tương tác dự kiến quét: <b>{nf(totals.like + totals.comment)}</b> ({nf(totals.like)} Like, {nf(totals.comment)} Cmt) · để trống = quét toàn bộ số hiện có.
           </p>
         </section>
       )}

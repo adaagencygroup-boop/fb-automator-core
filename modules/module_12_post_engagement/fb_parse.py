@@ -408,10 +408,13 @@ def merge_reactors(json_rows: list[dict[str, Any]], dom_rows: list[dict[str, Any
     return list(out.values())
 
 
-def tier_of(has_like: bool, has_share: bool, has_comment: bool) -> Optional[int]:
-    """Mức tiềm năng: 3 hành động → 1 (Cao), 2 → 2 (Vừa), 1 → 3 (Cơ bản), 0 → None (không lưu)."""
-    total = int(bool(has_like)) + int(bool(has_share)) + int(bool(has_comment))
-    return {3: 1, 2: 2, 1: 3}.get(total)
+def tier_of(has_like: bool, has_comment: bool) -> Optional[int]:
+    """Mức tiềm năng: vừa Like vừa bình luận → 1 (Cao), 1 trong 2 → 2 (Cơ bản), không có → None (không lưu).
+
+    Không tính Share: Facebook chỉ cho xem tổng số lượt chia sẻ, không cho xem ai đã chia sẻ.
+    """
+    total = int(bool(has_like)) + int(bool(has_comment))
+    return {2: 1, 1: 2}.get(total)
 
 
 def most_common_post_id(objs: list[Any]) -> str:

@@ -207,10 +207,11 @@ class ParseTests(unittest.TestCase):
         self.assertNotIn("x", by)
 
     def test_tier_rule(self):
-        self.assertEqual(fb_parse.tier_of(True, True, True), 1)
-        self.assertEqual(fb_parse.tier_of(True, False, True), 2)
-        self.assertEqual(fb_parse.tier_of(False, True, False), 3)
-        self.assertIsNone(fb_parse.tier_of(False, False, False))
+        # Không tính Share (Facebook chỉ cho xem tổng số): Like + bình luận → 1, chỉ 1 trong 2 → 2
+        self.assertEqual(fb_parse.tier_of(True, True), 1)
+        self.assertEqual(fb_parse.tier_of(True, False), 2)
+        self.assertEqual(fb_parse.tier_of(False, True), 2)
+        self.assertIsNone(fb_parse.tier_of(False, False))
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +399,8 @@ class ModelTests(unittest.TestCase):
         sql, params = rec.calls[0]
         self.assertIn("ON CONFLICT (owner_username, post_key, uid) DO UPDATE", sql)
         self.assertIn("has_like = pe_users.has_like OR EXCLUDED.has_like", sql)
-        self.assertIn("WHEN 3 THEN 1 WHEN 2 THEN 2 ELSE 3 END", sql)
+        self.assertIn("THEN 1 ELSE 2 END", sql)
+        self.assertNotIn("has_share OR EXCLUDED.has_share)::int", sql)
         self.assertEqual(sql.count("?"), len(params))
         self.assertIn(True, params)  # cờ has_like
 
@@ -417,6 +419,16 @@ class ModelTests(unittest.TestCase):
         user_sql = rec.calls[1]
         self.assertIn("INSERT INTO pe_users", user_sql[0])
         self.assertIn(models.utc_from_epoch(100), user_sql[1])  # thời gian bình luận sớm nhất của An
+
+    def test_share_action_is_not_saved(self):
+        rec = RecordingDB()
+        with mock.patch.object(models, "db", rec):
+            self.assertEqual(models.save_users("alice", "123", [{"uid": "100001"}], action="share"), 0)
+        self.assertEqual(rec.calls, [])
+
+    def test_no_share_tab(self):
+        self.assertEqual(models.TABS, ("like", "comment"))
+        self.assertEqual(models.TIERS, (1, 2))
 
     def test_no_owner_writes_nothing(self):
         rec = RecordingDB()
@@ -466,7 +478,8 @@ class JobTests(unittest.TestCase):
             {"post_url": "https://www.facebook.com/groups/2/posts/2222222222/"},
         ])
         self.assertEqual([x["post_key"] for x in t], ["1111111111", "2222222222"])
-        self.assertEqual((t[0]["like_quota"], t[0]["comment_quota"], t[0]["share_quota"]), (10000, 5, 2000))
+        self.assertEqual((t[0]["like_quota"], t[0]["comment_quota"]), (10000, 5))
+        self.assertNotIn("share_quota", t[0])
 
     def test_start_validation(self):
         with self.assertRaises(ValueError):

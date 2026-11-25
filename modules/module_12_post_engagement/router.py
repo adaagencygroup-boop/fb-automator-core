@@ -36,7 +36,8 @@ class ScanPost(BaseModel):
     post_url: str = Field(..., min_length=5)
     like_quota: int = Field(0, ge=0, le=jobs.QUOTA_LIMITS["like"])
     comment_quota: int = Field(0, ge=0, le=jobs.QUOTA_LIMITS["comment"])
-    share_quota: int = Field(0, ge=0, le=jobs.QUOTA_LIMITS["share"])
+    # Bản FE cũ còn gửi share_quota: vẫn nhận để không lỗi 422 nhưng bỏ qua (không còn quét Share)
+    share_quota: int = Field(0, ge=0)
     title: Optional[str] = ""
 
 
@@ -57,7 +58,7 @@ class ExportRequest(BaseModel):
     scope: str = Field("all", pattern="^(all|tab)$")
     tab: str = Field("like", pattern="^(like|share|comment)$")
     search: Optional[str] = ""
-    tier: Optional[int] = Field(None, ge=1, le=3)
+    tier: Optional[int] = Field(None, ge=1, le=2)
 
 
 class DeletePostsRequest(BaseModel):
