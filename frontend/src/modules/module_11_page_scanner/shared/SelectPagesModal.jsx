@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Search,
   X,
@@ -28,8 +28,10 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "@/lib/toast";
+import { askConfirm } from "./askConfirm";
 import { getCategories } from "@/modules/module_02_account_manager/service";
-import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
+import useDragRowSelect from "./useDragRowSelect";
+import { attachDragSelection } from "@/modules/module_02_account_manager/utils/drag-selection.mjs";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
 import {
   deletePageFollowers,
@@ -41,6 +43,32 @@ import {
 import { Pager } from "../_shared";
 
 const fmtNum = (n) => Number(n || 0).toLocaleString("vi-VN");
+
+function initialsOf(name = "") {
+  return (
+    String(name)
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(-2)
+      .map((part) => part[0])
+      .join("")
+      .toUpperCase() || "FB"
+  );
+}
+
+function formatPhoneDisplay(p) {
+  if (!p) return "";
+  const cleaned = String(p).trim();
+  const digits = cleaned.replace(/\D/g, "");
+  if (digits.length === 10) {
+    return `${digits.slice(0, 4)} ${digits.slice(4, 7)} ${digits.slice(7)}`;
+  }
+  if (digits.length === 11) {
+    return `${digits.slice(0, 5)} ${digits.slice(5, 8)} ${digits.slice(8)}`;
+  }
+  return cleaned;
+}
 
 /** Giờ:phút:giây của mốc thời gian (bảng UID theo thiết kế chỉ hiện giờ). */
 function clockOf(value) {
@@ -68,6 +96,37 @@ const STATUS_META = {
 };
 const STATUS_DEFAULT = { label: "Chưa kiểm tra", box: "border-[#E2E8F0] bg-[#F8FAFC] text-[#64748B]", dot: "bg-[#94A3B8]" };
 
+/** Nick dùng được để quét: trạng thái Live VÀ đã đăng nhập ở Module 2. */
+export function isAccountUsable(acc) {
+  if (!acc) return false;
+  const status = String(acc.status || "").trim().toUpperCase();
+  const login = String(acc.login_status || "").trim().toLowerCase();
+  const isLive = status === "LIVE";
+  const isLoggedIn = login === "logged_in" || login === "success";
+  return isLive && isLoggedIn;
+}
+
+export function getAccountDisabledReason(acc) {
+  if (!acc) return "";
+  const status = String(acc.status || "").trim().toUpperCase();
+  const login = String(acc.login_status || "").trim().toLowerCase();
+  const isLive = status === "LIVE";
+  const isLoggedIn = login === "logged_in" || login === "success";
+
+  if (!isLive && !isLoggedIn) {
+    return "Tài khoản đã Die và chưa đăng nhập — không thể chọn để quét";
+  }
+  if (!isLive) {
+    return "Tài khoản đã Die — không thể chọn để quét";
+  }
+  if (!isLoggedIn) {
+    return login === "failed"
+      ? "Tài khoản bị lỗi đăng nhập — không thể chọn để quét"
+      : "Tài khoản chưa đăng nhập — không thể chọn để quét";
+  }
+  return "";
+}
+
 /* ─── Modal: Chọn tài khoản Facebook thực thi quét (ảnh 2) ─── */
 export function SelectAccountsModal({
   open,
@@ -85,11 +144,19 @@ export function SelectAccountsModal({
   const [categoriesById, setCategoriesById] = useState({});
   const pageSize = 5;
 
+  const usableAccounts = useMemo(() => accounts.filter(isAccountUsable), [accounts]);
+  const usableUids = useMemo(() => new Set(usableAccounts.map((a) => a.uid)), [usableAccounts]);
+  const selectedUsableCount = useMemo(
+    () => draftUids.filter((uid) => usableUids.has(uid)).length,
+    [draftUids, usableUids],
+  );
+
   const [prevOpen, setPrevOpen] = useState(open);
   if (open !== prevOpen) {
     setPrevOpen(open);
     if (open) {
-      setDraftUids(selectedUids);
+      const initialUsableSet = new Set(accounts.filter(isAccountUsable).map((a) => a.uid));
+      setDraftUids((selectedUids || []).filter((uid) => initialUsableSet.has(uid)));
       setPage(1);
     }
   }
@@ -145,12 +212,71 @@ export function SelectAccountsModal({
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages);
   const pagedAccounts = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
-  const allFilteredChecked = filtered.length > 0 && filtered.every((a) => draftUids.includes(a.uid));
+
+  const filteredUsable = useMemo(() => filtered.filter(isAccountUsable), [filtered]);
+  const filteredUsableIds = useMemo(() => filteredUsable.map((a) => a.uid), [filteredUsable]);
+  const allFilteredChecked =
+    filteredUsableIds.length > 0 &&
+    filteredUsableIds.every((uid) => draftUids.includes(uid));
+
+  const scrollRef = useRef(null);
+  const selectionRef = useRef(new Set(draftUids));
+  const visibleUidsRef = useRef([]);
+  const availableUidsRef = useRef([]);
+  const lastClickedIdxRef = useRef(null);
+
+  useLayoutEffect(() => {
+    selectionRef.current = new Set(draftUids);
+    visibleUidsRef.current = pagedAccounts.filter(isAccountUsable).map((a) => a.uid);
+    availableUidsRef.current = accounts.filter(isAccountUsable).map((a) => a.uid);
+  }, [draftUids, pagedAccounts, accounts]);
+
+  // Tích hợp thao tác kéo chọn tài khoản (drag to select) chuẩn xác như Module 03
+  useEffect(() => {
+    if (!open || !scrollRef.current) return;
+    return attachDragSelection(scrollRef.current, {
+      getVisibleUids: () => visibleUidsRef.current,
+      getAvailableUids: () => availableUidsRef.current,
+      getSelectedUids: () => [...selectionRef.current],
+      onSelectionChange: (uids) => {
+        const available = new Set(availableUidsRef.current);
+        const next = uids.filter((uid) => available.has(uid));
+        selectionRef.current = new Set(next);
+        setDraftUids(next);
+      },
+    });
+  }, [open]);
+
+  const handleRowClick = (acc, idx, e) => {
+    if (e.target.closest("button") || e.target.closest("a") || e.target.closest("input")) return;
+    if (!isAccountUsable(acc)) return;
+
+    // Shift + Click chọn dải liên tiếp
+    if (e.shiftKey && lastClickedIdxRef.current !== null) {
+      e.preventDefault();
+      const start = Math.min(lastClickedIdxRef.current, idx);
+      const end = Math.max(lastClickedIdxRef.current, idx);
+      const inRangeUsableUids = pagedAccounts
+        .slice(start, end + 1)
+        .filter(isAccountUsable)
+        .map((a) => a.uid);
+      setDraftUids((prev) => [...new Set([...prev, ...inRangeUsableUids])]);
+      return;
+    }
+
+    lastClickedIdxRef.current = idx;
+    const isCurrentlyChecked = draftUids.includes(acc.uid);
+    setDraftUids((prev) =>
+      isCurrentlyChecked ? prev.filter((u) => u !== acc.uid) : [...new Set([...prev, acc.uid])]
+    );
+  };
 
   if (!open) return null;
 
-  const toggle = (uid, checked) =>
+  const toggle = (uid, checked) => {
+    if (!usableUids.has(uid)) return;
     setDraftUids((prev) => (checked ? [...new Set([...prev, uid])] : prev.filter((u) => u !== uid)));
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1px]">
@@ -161,7 +287,7 @@ export function SelectAccountsModal({
               <h2 className="font-heading text-lg font-bold text-[#0F172A]">Chọn tài khoản Facebook thực thi quét</h2>
               <span className="inline-flex items-center gap-1.5 rounded-full border border-[#BFDBFE] bg-[#EFF6FF] px-3 py-0.5 text-xs font-semibold text-[#1D4ED8]">
                 <span className="size-1.5 rounded-full bg-[#2563EB]" />
-                Đã chọn: {draftUids.length} / {accounts.length} tài khoản khả dụng
+                Đã chọn: {selectedUsableCount} / {usableAccounts.length} tài khoản khả dụng
               </span>
             </div>
             <p className="mt-1 text-xs text-[#64748B]">
@@ -215,25 +341,32 @@ export function SelectAccountsModal({
           </select>
         </div>
 
-        <div className="flex-1 overflow-auto border-t border-[#F1F5F9]">
+        <div ref={scrollRef} className="flex-1 overflow-auto border-t border-[#F1F5F9] custom-scrollbar">
           {loading ? (
             <div className="py-12 text-center text-xs text-[#64748B]">
               <Loader2 className="mx-auto mb-2 size-6 animate-spin text-[#1877F2]" />
               Đang tải danh sách tài khoản...
             </div>
           ) : (
-            <table className="w-full min-w-[900px] text-left text-xs">
+            <table onDragStart={(e) => e.preventDefault()} className="w-full min-w-[840px] text-left text-xs select-none">
               <thead className="sticky top-0 z-10 bg-[#F8FAFC] text-[11px] font-bold text-[#475569] uppercase">
                 <tr className="border-b border-[#E2E8F0]">
                   <th className="w-12 px-6 py-3.5">
                     <Checkbox
                       checked={allFilteredChecked}
+                      disabled={filteredUsableIds.length === 0}
                       onCheckedChange={(c) => {
-                        const ids = filtered.map((a) => a.uid);
                         setDraftUids((prev) =>
-                          c ? [...new Set([...prev, ...ids])] : prev.filter((u) => !ids.includes(u)),
+                          c
+                            ? [...new Set([...prev, ...filteredUsableIds])]
+                            : prev.filter((u) => !filteredUsableIds.includes(u)),
                         );
                       }}
+                      title={
+                        filteredUsableIds.length === 0
+                          ? "Không có tài khoản khả dụng nào trong trang hiện tại"
+                          : "Chọn tất cả tài khoản khả dụng"
+                      }
                     />
                   </th>
                   <th className="w-12 px-2 py-3.5">STT</th>
@@ -256,23 +389,46 @@ export function SelectAccountsModal({
                 ) : (
                   pagedAccounts.map((acc, idx) => {
                     const realIdx = (safePage - 1) * pageSize + idx;
-                    const checked = draftUids.includes(acc.uid);
+                    const isUsable = isAccountUsable(acc);
+                    const checked = isUsable && draftUids.includes(acc.uid);
                     const status = STATUS_META[String(acc.status).toUpperCase()] || STATUS_DEFAULT;
                     const login = LOGIN_META[acc.login_status] || LOGIN_DEFAULT;
                     const days = farmDays(acc);
+                    const disabledReason = !isUsable ? getAccountDisabledReason(acc) : "";
+
                     return (
                       <tr
                         key={acc.uid}
-                        onClick={() => toggle(acc.uid, !checked)}
-                        className={`cursor-pointer transition ${checked ? "bg-[#EFF6FF]/60" : "hover:bg-[#F8FAFC]"}`}
+                        data-account-uid={acc.uid}
+                        onClick={(e) => handleRowClick(acc, idx, e)}
+                        title={disabledReason || undefined}
+                        className={`transition select-none ${
+                          !isUsable
+                            ? "opacity-50 bg-slate-50/70 cursor-not-allowed"
+                            : checked
+                            ? "cursor-pointer bg-[#EFF6FF]/70 hover:bg-[#EFF6FF]"
+                            : "cursor-pointer hover:bg-[#F8FAFC]"
+                        }`}
                       >
-                        <td className="px-6 py-3.5" onClick={(e) => e.stopPropagation()}>
-                          <Checkbox checked={checked} onCheckedChange={(c) => toggle(acc.uid, !!c)} />
+                        <td
+                          className="px-6 py-3.5"
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Checkbox
+                            checked={checked}
+                            disabled={!isUsable}
+                            onCheckedChange={(c) => {
+                              if (isUsable) toggle(acc.uid, !!c);
+                            }}
+                            className={!isUsable ? "opacity-50 cursor-not-allowed pointer-events-none" : ""}
+                            title={disabledReason || undefined}
+                          />
                         </td>
                         <td className="px-2 py-3.5 font-mono text-[#94A3B8]">{String(realIdx + 1).padStart(2, "0")}</td>
                         <td className="px-3 py-3.5">
                           <div className="flex items-center gap-2.5">
-                            <Avatar className="size-9">
+                            <Avatar className={`size-9 ${!isUsable ? "grayscale" : ""}`}>
                               {acc.avatar_url ? <AvatarImage src={acc.avatar_url} alt="" /> : null}
                               <AvatarFallback className={`font-bold text-white ${AVATAR_COLORS[realIdx % AVATAR_COLORS.length]}`}>
                                 {initialsOf(acc.name)}
@@ -286,6 +442,7 @@ export function SelectAccountsModal({
                             <span>{acc.uid}</span>
                             <button
                               type="button"
+                              onMouseDown={(e) => e.stopPropagation()}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 navigator.clipboard?.writeText(acc.uid);
@@ -330,6 +487,11 @@ export function SelectAccountsModal({
           <span>
             Hiển thị {filtered.length === 0 ? 0 : (safePage - 1) * pageSize + 1} - {Math.min(safePage * pageSize, filtered.length)} của{" "}
             {filtered.length} tài khoản
+            {accounts.length > usableAccounts.length && (
+              <span className="text-slate-400">
+                {" "}· Có {accounts.length - usableAccounts.length} tài khoản không khả dụng (chưa đăng nhập / Die)
+              </span>
+            )}
           </span>
           <Pager page={safePage} totalPages={totalPages} onChange={setPage} variant="text" />
         </div>
@@ -345,14 +507,21 @@ export function SelectAccountsModal({
           <button
             type="button"
             onClick={() => {
-              onConfirm(draftUids);
+              const finalUids = draftUids.filter((uid) => usableUids.has(uid));
+              if (finalUids.length === 0 && usableAccounts.length > 0) {
+                toast.warning("Vui lòng chọn ít nhất 1 tài khoản khả dụng để thực thi quét.");
+                return;
+              }
+              onConfirm(finalUids);
               onClose();
-              toast.success(`Đã chọn ${draftUids.length} tài khoản thực thi.`);
+              if (finalUids.length > 0) {
+                toast.success(`Đã chọn ${finalUids.length} tài khoản thực thi.`);
+              }
             }}
             className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#1D4ED8] px-6 text-sm font-semibold text-white shadow-sm hover:bg-[#1E40AF]"
           >
             <Check className="size-4" />
-            Xác nhận chọn ({draftUids.length} tài khoản)
+            Xác nhận chọn ({selectedUsableCount} tài khoản)
           </button>
         </div>
       </div>
@@ -460,27 +629,40 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
 
     async function fetchData() {
       try {
-        const [firstPageRes, resKeywords] = await Promise.all([
-          getScannedPages({ page: 1, page_size: 200, sort_by: "followers" }),
-          getSearchKeywords().catch(() => ({ items: [] })),
-        ]);
+        let firstPageRes = null;
+        try {
+          firstPageRes = await getScannedPages({ page: 1, page_size: 200, sort_by: "followers" });
+        } catch (err200) {
+          console.warn("[SelectPagesModal] fetch page_size=200 failed, trying page_size=100", err200);
+          try {
+            firstPageRes = await getScannedPages({ page: 1, page_size: 100, sort_by: "followers" });
+          } catch (err100) {
+            console.warn("[SelectPagesModal] fetch page_size=100 failed, trying page_size=50", err100);
+            firstPageRes = await getScannedPages({ page: 1, page_size: 50, sort_by: "followers" });
+          }
+        }
+
+        const resKeywords = await getSearchKeywords().catch(() => ({ items: [] }));
 
         if (cancelled) return;
 
         let allLoadedPages = firstPageRes?.items || [];
         const total = Number(firstPageRes?.total) || allLoadedPages.length;
 
-        // Nếu có nhiều hơn 200 page, tiếp tục load thêm
+        // Nếu có nhiều page hơn đợt đầu, tiếp tục load thêm
         if (total > allLoadedPages.length) {
-          const totalPagesNeeded = Math.min(Math.ceil(total / 200), 5); // Tối đa 1000 page
+          const batchSize = allLoadedPages.length || 50;
+          const totalPagesNeeded = Math.min(Math.ceil(total / batchSize), 10); // Tối đa 10 trang
           const remainingPromises = [];
           for (let p = 2; p <= totalPagesNeeded; p++) {
-            remainingPromises.push(getScannedPages({ page: p, page_size: 200, sort_by: "followers" }));
+            remainingPromises.push(
+              getScannedPages({ page: p, page_size: batchSize, sort_by: "followers" }).catch(() => ({ items: [] }))
+            );
           }
           const results = await Promise.all(remainingPromises);
           if (cancelled) return;
           results.forEach((r) => {
-            if (r?.items) {
+            if (r?.items && Array.isArray(r.items)) {
               allLoadedPages = allLoadedPages.concat(r.items);
             }
           });
@@ -652,6 +834,14 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
     );
   };
 
+  // Kéo chọn nhiều page trong trang đang xem (giữ lựa chọn ở trang / danh mục khác)
+  const drag = useDragRowSelect({
+    ids: currentPageKeys,
+    isSelected: (key) => draftKeys.includes(key),
+    onSet: (keys) => setDraftKeys((prev) => [...new Set([...prev.filter((k) => !currentPageKeys.includes(k)), ...keys])]),
+    onToggle: toggleSinglePage,
+  });
+
   const activeCategoryObj = useMemo(() => {
     return categoriesData.allList.find((c) => c.key === activeCategory) || {
       name: activeCategory === NO_TAG_KEY ? "Chưa có tag" : activeCategory,
@@ -690,10 +880,16 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
     toast.success(`Đã xuất ${exportItems.length} page ra file Excel/CSV.`);
   };
 
-  const handleDeleteSelected = () => {
+  const handleDeleteSelected = async () => {
     const selectedInCurrent = filteredPages.filter((p) => draftKeys.includes(p.page_key));
     if (!selectedInCurrent.length) return;
-    if (!window.confirm(`Bạn có chắc chắn muốn bỏ chọn ${selectedInCurrent.length} page này?`)) return;
+    const ok = await askConfirm({
+      title: "Bỏ chọn page",
+      description: `Bạn có chắc chắn muốn bỏ chọn ${selectedInCurrent.length} page này?`,
+      confirmText: "Bỏ chọn",
+      variant: "warning",
+    });
+    if (!ok) return;
     const removeKeys = new Set(selectedInCurrent.map((p) => p.page_key));
     setDraftKeys((prev) => prev.filter((k) => !removeKeys.has(k)));
     toast.success(`Đã bỏ chọn ${selectedInCurrent.length} page.`);
@@ -722,12 +918,17 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
   const [showMoveCategoryModal, setShowMoveCategoryModal] = useState(false);
   const [targetCategory, setTargetCategory] = useState("");
 
-  const handleDeleteCategory = () => {
+  const handleDeleteCategory = async () => {
     if (activeCategory === NO_TAG_KEY) {
       toast.warning("Không thể xóa mục 'Chưa có tag'.");
       return;
     }
-    if (!window.confirm(`Bạn có chắc chắn muốn gỡ từ khóa/tag "${activeCategory}" khỏi các page?`)) return;
+    const ok = await askConfirm({
+      title: "Gỡ từ khóa/tag",
+      description: `Bạn có chắc chắn muốn gỡ từ khóa/tag "${activeCategory}" khỏi các page?`,
+      confirmText: "Gỡ",
+    });
+    if (!ok) return;
     const targetLower = activeCategory.toLowerCase();
     setAllPages((prev) =>
       prev.map((p) => {
@@ -822,7 +1023,7 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
             <div className="flex shrink-0 items-center justify-between pb-3 border-b border-[#F1F5F9]">
               <div className="flex items-center gap-2 text-xs font-bold text-[#0F172A] uppercase tracking-wide">
                 <Folder className="size-4 text-[#1877F2]" />
-                <span>DANH SÁCH TỪ KHÓA (TAG)</span>
+                <span>DANH SÁCH DANH MỤC</span>
               </div>
               <button
                 type="button"
@@ -837,7 +1038,7 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
             {/* Thẻ thống kê */}
             <div className="mt-3 shrink-0 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] px-3 py-2 flex items-center justify-between text-xs text-[#64748B]">
               <span>
-                Đã quét: <strong className="text-[#0F172A] font-bold">{categoriesData.totalCategories} từ khóa</strong>
+                Đã quét: <strong className="text-[#0F172A] font-bold">{categoriesData.totalCategories} danh mục</strong>
               </span>
               <strong className="text-[#1877F2] font-bold">{fmtNum(categoriesData.totalPages)} Page</strong>
             </div>
@@ -848,13 +1049,13 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
               <input
                 value={categorySearch}
                 onChange={(e) => setCategorySearch(e.target.value)}
-                placeholder="Lọc từ khóa, tag..."
+                placeholder="Lọc danh mục thư mục..."
                 className="h-9 w-full rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] pr-3 pl-9 text-xs text-[#0F172A] placeholder:text-[#94A3B8] outline-none focus:border-[#1877F2] focus:bg-white transition"
               />
             </div>
 
             {/* Danh sách danh mục scrollable */}
-            <div className="mt-3 flex-1 min-h-0 space-y-1.5 overflow-y-auto pr-0.5">
+            <div className="mt-3 flex-1 min-h-0 space-y-1.5 overflow-y-auto pr-0.5 [scrollbar-width:thin] [scrollbar-color:#CBD5E1_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-slate-300 hover:[&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-button]:hidden">
               {filteredCategories.length === 0 ? (
                 <div className="py-8 text-center text-xs text-[#94A3B8]">
                   Không tìm thấy từ khóa phù hợp.
@@ -933,7 +1134,7 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
                 className="w-full py-2.5 rounded-xl border border-dashed border-[#CBD5E1] hover:border-[#1877F2] hover:bg-[#F0F7FF] text-xs font-semibold text-[#475569] hover:text-[#1877F2] flex items-center justify-center gap-1.5 transition"
               >
                 <Plus className="size-4" />
-                <span>Thêm từ khóa / tag mới</span>
+                <span>+ Thêm danh mục mới</span>
               </button>
             </div>
           </div>
@@ -969,7 +1170,7 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
                     className="inline-flex h-8 sm:h-9 items-center gap-1.5 rounded-lg border border-[#FECACA] hover:bg-[#FEF2F2] px-3 sm:px-3.5 text-xs font-semibold text-[#DC2626] transition"
                   >
                     <Trash2 className="size-3.5" />
-                    <span>Xóa từ khóa</span>
+                    <span>Xóa danh mục</span>
                   </button>
                 )}
               </div>
@@ -1048,7 +1249,7 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
                   className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-[#E2E8F0] bg-white hover:bg-[#F8FAFC] px-2.5 text-[11px] font-semibold text-[#334155] disabled:opacity-40 shadow-xs transition"
                 >
                   <FolderSync className="size-3.5 text-[#64748B]" />
-                  <span>Chuyển / Gán tag</span>
+                  <span>Chuyển danh mục</span>
                 </button>
                 <button
                   type="button"
@@ -1063,8 +1264,8 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
             </div>
 
             {/* Bảng danh sách Page */}
-            <div className="flex-1 min-h-0 overflow-auto">
-              <table className="w-full min-w-[760px] text-left text-xs">
+            <div ref={drag.setContainer} className="flex-1 min-h-0 overflow-auto [scrollbar-width:thin] [scrollbar-color:#CBD5E1_transparent] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-slate-300 hover:[&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-button]:hidden">
+              <table className="w-full min-w-[760px] select-none text-left text-xs">
                 <thead className="sticky top-0 z-10 bg-white text-[10px] font-bold text-[#64748B] uppercase tracking-wider">
                   <tr className="border-b border-[#E2E8F0]">
                     <th className="w-10 px-4 py-3">
@@ -1102,13 +1303,13 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
                       const isChecked = draftKeys.includes(pg.page_key);
                       const badgeText = getPageBadgeText(pg.page_name);
                       const badgeBg = BADGE_COLOR_PALETTE[idx % BADGE_COLOR_PALETTE.length];
-                      const uid = pg.uid || pg.page_key || "—";
+                      const cleanUid = pg.uid || String(pg.page_key || "").replace(/^(user|page):/, "") || "—";
                       const cleanLink = cleanLinkDisplay(pg.page_url, pg.page_name);
 
                       return (
                         <tr
                           key={pg.page_key || idx}
-                          onClick={() => toggleSinglePage(pg.page_key)}
+                          {...drag.rowProps(pg.page_key)}
                           className={`cursor-pointer transition ${
                             isChecked ? "bg-[#F0F7FF]/50 hover:bg-[#F0F7FF]" : "hover:bg-[#F8FAFC]"
                           }`}
@@ -1127,11 +1328,20 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
                           </td>
                           <td className="px-3 py-3">
                             <div className="flex items-center gap-2.5">
-                              <div
-                                className={`size-8 rounded-lg shrink-0 flex items-center justify-center font-bold text-[11px] text-white shadow-xs ${badgeBg}`}
-                              >
-                                {badgeText}
-                              </div>
+                              <Avatar className="size-8 rounded-lg shrink-0 overflow-hidden border border-slate-200 shadow-xs">
+                                {pg.avatar_url ? (
+                                  <AvatarImage
+                                    src={pg.avatar_url}
+                                    alt={pg.page_name || "Page"}
+                                    className="object-cover size-full"
+                                  />
+                                ) : null}
+                                <AvatarFallback
+                                  className={`size-full rounded-lg flex items-center justify-center font-bold text-[11px] text-white ${badgeBg}`}
+                                >
+                                  {badgeText}
+                                </AvatarFallback>
+                              </Avatar>
                               <div className="min-w-0">
                                 <div className="flex items-center gap-1">
                                   <span className="font-bold text-xs text-[#0F172A] truncate max-w-[160px]">
@@ -1142,7 +1352,7 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
                                   )}
                                 </div>
                                 <div className="text-[10px] font-mono text-[#94A3B8] truncate">
-                                  UID: {uid}
+                                  UID: {cleanUid}
                                 </div>
                               </div>
                             </div>
@@ -1167,9 +1377,9 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
                           </td>
                           <td className="px-3 py-3">
                             {pg.phone ? (
-                              <span className="inline-flex items-center gap-1 rounded-full bg-[#EFF6FF] border border-[#BFDBFE] px-2.5 py-0.5 text-[11px] font-semibold text-[#1D4ED8]">
-                                <Phone className="size-2.5 shrink-0" />
-                                <span>{pg.phone}</span>
+                              <span className="inline-flex items-center gap-1.5 rounded-full bg-[#EFF6FF] border border-[#BFDBFE] px-2.5 py-1 text-xs font-semibold text-[#1D4ED8]">
+                                <Phone className="size-3 shrink-0 text-[#2563EB]" />
+                                <span>{formatPhoneDisplay(pg.phone)}</span>
                               </span>
                             ) : (
                               <span className="text-xs text-[#CBD5E1]">—</span>
@@ -1177,7 +1387,7 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
                           </td>
                           <td className="px-3 py-3">
                             {pg.email ? (
-                              <span className="text-xs text-[#334155] truncate max-w-[130px] block" title={pg.email}>
+                              <span className="text-xs text-[#334155] truncate max-w-[140px] block" title={pg.email}>
                                 {pg.email}
                               </span>
                             ) : (
@@ -1195,20 +1405,20 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
                                 rel="noreferrer"
                                 className="inline-flex items-center gap-1 text-xs text-[#1877F2] hover:underline"
                               >
-                                <span className="max-w-[110px] truncate">
-                                  {pg.website.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+                                <span className="max-w-[120px] truncate">
+                                  {pg.website.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}
                                 </span>
                                 <ExternalLink className="size-2.5 shrink-0" />
                               </a>
                             ) : (
-                              <span className="text-xs text-[#CBD5E1]">—</span>
+                              <span className="text-xs text-[#94A3B8]">-</span>
                             )}
                           </td>
                           <td className="px-4 py-3">
                             {pg.address ? (
                               <div className="flex items-center gap-1 text-xs text-[#475569]">
                                 <MapPin className="size-3 text-[#94A3B8] shrink-0" />
-                                <span className="truncate max-w-[130px]" title={pg.address}>
+                                <span className="truncate max-w-[140px]" title={pg.address}>
                                   {pg.address}
                                 </span>
                               </div>
@@ -1286,7 +1496,7 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
 
       {/* Submodal Thêm từ khóa / tag mới */}
       {showAddCategoryModal && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 p-4">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl border border-slate-200">
             <h4 className="text-base font-bold text-slate-900 mb-2">Thêm từ khóa / tag mới</h4>
             <p className="text-xs text-slate-500 mb-4">
@@ -1323,7 +1533,7 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
 
       {/* Submodal Chuyển / Gán từ khóa tag */}
       {showMoveCategoryModal && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 p-4">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl border border-slate-200">
             <h4 className="text-base font-bold text-slate-900 mb-2">Gán từ khóa / tag</h4>
             <p className="text-xs text-slate-500 mb-4">

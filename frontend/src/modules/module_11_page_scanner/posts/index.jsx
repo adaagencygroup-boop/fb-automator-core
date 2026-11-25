@@ -5,9 +5,6 @@ import {
   Users,
   Globe,
   Trash2,
-  Play,
-  Pause,
-  Square,
   Search,
   ExternalLink,
   Eye,
@@ -17,6 +14,7 @@ import {
 import Link from "next/link";
 import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
+import { AvatarImage } from "@/components/ui/avatar";
 import { normalizeAccount, initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
 import {
@@ -32,7 +30,15 @@ import {
   getScanSessionDetail,
 } from "../service";
 import { LiveLogConsole, nowStamp, LIVE_STATUSES, Pager, parseJsonField, runDelete } from "../_shared";
-import { SelectAccountsModal, SelectPagesModal } from "../shared/SelectPagesModal";
+import { SelectAccountsModal, SelectPagesModal, isAccountUsable } from "../shared/SelectPagesModal";
+import {
+  loadSavedAccountUids,
+  saveSelectedAccountUids,
+  resolveUsableSavedUids,
+} from "../shared/accountStorage";
+import { ScanActionButtons } from "../shared/ScanActionButtons";
+import { clearScanState, fetchSavedSessions, loadScanState, saveScanState } from "../shared/scanStateStorage";
+import { useClickLock } from "../shared/useClickLock";
 import { localIsoDate, toCsv } from "../utils.mjs";
 
 const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
@@ -88,6 +94,7 @@ function mapKhoToPage(p, idx = 0) {
     followers_text: p.follower_count ? Number(p.follower_count).toLocaleString("vi-VN") : "—",
     scanned_post_count: p.scanned_post_count || 0,
     posts_count: p.scanned_post_count || 0,
+    avatar_url: p.avatar_url || "",
     avatar_initials: initialsOf(p.page_name || p.page_key || "PG"),
     avatar_color: AVATAR_COLORS[idx % AVATAR_COLORS.length],
     status: "QUEUE",
@@ -223,6 +230,8 @@ export default function PageScannerPosts() {
 
   const logId = useRef(0);
   const pollRef = useRef(null);
+  const [startLocked, runStartLocked] = useClickLock(1000); // chống bấm liên tục nút BẮT ĐẦU
+  const restoreSeqRef = useRef(0); // tăng khi bắt đầu / quét mới / rời trang → bỏ kết quả khôi phục về muộn
 
   const isBusy = runPhase === "running" || runPhase === "paused";
   const isPaused = runPhase === "paused";
@@ -328,7 +337,13 @@ export default function PageScannerPosts() {
           normalizeAccount(a, i),
         );
         setAccounts(list);
-        setSelectedUids(list.filter((a) => LIVE_STATUSES.has(String(a.status))).map((a) => a.uid));
+        const saved = loadSavedAccountUids("posts");
+        if (saved && saved.length) {
+          const usable = resolveUsableSavedUids(saved, list);
+          setSelectedUids(usable);
+        } else {
+          setSelectedUids([]);
+        }
       } catch (err) {
         toast.error(`Lỗi tải tài khoản: ${err.message}`);
       } finally {
@@ -340,16 +355,23 @@ export default function PageScannerPosts() {
     };
   }, []);
 
-  /* Khôi phục phiên POST_SCAN đang chạy / tạm dừng khi quay lại trang hoặc reload */
+  /* Khôi phục phiên POST_SCAN đang chạy; không có thì phiên quét xong gần nhất (giống Module 3) */
   useEffect(() => {
-    let cancelled = false;
+    const seq = ++restoreSeqRef.current;
+    const stale = () => seq !== restoreSeqRef.current;
     (async () => {
       try {
-        const data = await getActiveCampaign("POST_SCAN");
-        if (cancelled || !data?.active || !(data.sessions || []).length) return;
-        const top =
-          data.sessions.find((s) => s.id === data.primary_session_id) ||
-          data.sessions[data.sessions.length - 1];
+        const saved = loadScanState("posts");
+        const data = await getActiveCampaign("POST_SCAN").catch(() => null);
+        if (stale()) return;
+        const sessions =
+          data?.active && data.sessions?.length
+            ? data.sessions
+            : await fetchSavedSessions("posts", saved?.sessionIds);
+        if (stale() || !sessions.length) return;
+        const top = sessions.find((s) => s.id === data?.primary_session_id) || sessions[sessions.length - 1];
+        const isDone = DONE_STATUSES.includes(top.status);
+        const cfg = (saved?.sessionIds || []).includes(top.id) ? saved.config || {} : {};
         const settings = parseJsonField(top.settings, {});
         const pageKeys = (settings.page_keys || []).filter(Boolean);
         let kho = [];
@@ -358,24 +380,45 @@ export default function PageScannerPosts() {
         } catch {
           kho = [];
         }
-        if (cancelled) return;
-        const byKey = new Map(kho.map((p) => [p.page_key, p]));
+        if (stale()) return;
+        // Page ngoài 200 dòng đầu của kho: lấy thông tin từ lựa chọn đã lưu
+        const byKey = new Map([...(cfg.selectedPages || []), ...kho].map((p) => [p.page_key, p]));
         setSelectedPages(pageKeys.map((pk, i) => mapKhoToPage(byKey.get(pk) || { page_key: pk }, i)));
         if (settings.max_posts_per_page) setMaxPostsPerPage(Number(settings.max_posts_per_page));
         if (typeof settings.skip_existing === "boolean") setDeduplicatePosts(settings.skip_existing);
+        if (cfg.selectedPages !== undefined) {
+          // Lựa chọn lưu cũ chưa có avatar / link ảnh có thể hết hạn → ưu tiên avatar trong kho
+          setSelectedPages(
+            cfg.selectedPages.map((p) => ({
+              ...p,
+              avatar_url: byKey.get(p.page_key)?.avatar_url || p.avatar_url || "",
+            })),
+          );
+        }
+        if (cfg.delayMin !== undefined) setDelayMin(cfg.delayMin);
+        if (cfg.delayMax !== undefined) setDelayMax(cfg.delayMax);
+        if (cfg.autoRotateOnCheckpoint !== undefined) setAutoRotateOnCheckpoint(cfg.autoRotateOnCheckpoint);
+        if (cfg.postsPerAccountSwitch !== undefined) setPostsPerAccountSwitch(cfg.postsPerAccountSwitch);
+        if (cfg.maxPostsPerPage !== undefined) setMaxPostsPerPage(cfg.maxPostsPerPage);
+        if (cfg.onlyRecentDays !== undefined) setOnlyRecentDays(cfg.onlyRecentDays);
+        if (cfg.recentDaysLimit !== undefined) setRecentDaysLimit(cfg.recentDaysLimit);
+        if (cfg.skipPinnedPosts !== undefined) setSkipPinnedPosts(cfg.skipPinnedPosts);
+        if (cfg.deduplicatePosts !== undefined) setDeduplicatePosts(cfg.deduplicatePosts);
+        if (cfg.activePageKey !== undefined) setActivePageKey(cfg.activePageKey);
         setSessionId(top.id);
         setResultCount(top.total_unique || 0);
-        setRunPhase(top.status === "PAUSED" ? "paused" : "running");
+        setRunPhase(isDone ? "done" : top.status === "PAUSED" ? "paused" : "running");
         syncSessionLogs(top);
+        saveScanState("posts", { sessionIds: [top.id] });
         pushLog(`Khôi phục phiên POST_SCAN #${top.id} · ${top.status}`, "warn");
         refreshPosts(top.id);
-        startPoll(top.id);
+        if (!isDone) startPoll(top.id);
       } catch {
         /* không có phiên đang chạy */
       }
     })();
     return () => {
-      cancelled = true;
+      restoreSeqRef.current += 1;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -399,18 +442,30 @@ export default function PageScannerPosts() {
 
   const handleStart = async () => {
     try {
-      if (!selectedPages.length) throw new Error("Chọn ít nhất 1 Page muốn quét.");
-      const live = accounts.filter(
-        (a) => selectedUids.includes(a.uid) && LIVE_STATUSES.has(String(a.status)),
-      );
-      // Thứ tự xoay vòng = thứ tự acc Live đã chọn (không có acc Live → gửi acc đã chọn, BE kiểm tra)
-      const accountUids = live.length ? live.map((a) => a.uid) : [...selectedUids];
-      const accountUid = accountUids[0] || null;
-      if (!accountUid) throw new Error("Chọn ít nhất 1 tài khoản Live.");
-
+      if (!selectedUids || !selectedUids.length) {
+        toast.warning("Chưa chọn tài khoản");
+        return;
+      }
+      const usable = accounts.filter((a) => selectedUids.includes(a.uid) && isAccountUsable(a));
+      if (!usable.length) {
+        toast.warning("Không có tài khoản khả dụng (Live & Đã đăng nhập) trong danh sách đã chọn.");
+        return;
+      }
+      if (!selectedPages.length) {
+        toast.warning("Chọn ít nhất 1 Page muốn quét.");
+        return;
+      }
       const pageKeys = selectedPages.map((p) => p.page_key).filter(Boolean);
-      if (!pageKeys.length) throw new Error("Danh sách page thiếu page_key.");
+      if (!pageKeys.length) {
+        toast.warning("Danh sách page thiếu page_key.");
+        return;
+      }
 
+      // Thứ tự xoay vòng = thứ tự acc Live đã chọn
+      const accountUids = usable.map((a) => a.uid);
+      const accountUid = accountUids[0];
+
+      restoreSeqRef.current += 1;
       stopPolling();
       setRunPhase("running");
       setLogs([]);
@@ -444,6 +499,7 @@ export default function PageScannerPosts() {
         page_delay_max_s: delayMax,
       });
 
+      saveScanState("posts", { sessionIds: [res.session_id] });
       setSessionId(res.session_id);
       pushLog(`Session #${res.session_id} · ${res.status || "RUNNING"} · ${res.message || "OK"}`, "success");
       if (accountUids.length > 1) {
@@ -470,6 +526,40 @@ export default function PageScannerPosts() {
     } else {
       handleStart();
     }
+  };
+
+  /* Lưu cấu hình kèm phiên đang xem để vào lại trang vẫn còn */
+  const configJson = JSON.stringify({
+    selectedPages,
+    delayMin,
+    delayMax,
+    autoRotateOnCheckpoint,
+    postsPerAccountSwitch,
+    maxPostsPerPage,
+    onlyRecentDays,
+    recentDaysLimit,
+    skipPinnedPosts,
+    deduplicatePosts,
+    activePageKey,
+  });
+  useEffect(() => {
+    if (runPhase !== "idle") saveScanState("posts", { config: JSON.parse(configJson) });
+  }, [runPhase, configJson]);
+
+  /** "Quét mới": bỏ phiên đang xem (dữ liệu trong kho không bị xóa). */
+  const handleNewScan = () => {
+    restoreSeqRef.current += 1;
+    stopPolling();
+    clearScanState("posts");
+    setRunPhase("idle");
+    setSessionId(null);
+    setLogs([]);
+    setResultCount(0);
+    setPagePostCounts({});
+    setTableRows([]);
+    setTableTotal(0);
+    setPostTablePage(1);
+    setSelectedPostIds(new Set());
   };
 
   const handlePauseResume = async () => {
@@ -917,11 +1007,18 @@ export default function PageScannerPosts() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         <div
-                          className={`flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                          className={`relative flex overflow-hidden size-8 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
                             page.avatar_color || "bg-indigo-100 text-indigo-700"
                           }`}
                         >
                           {page.avatar_initials || initialsOf(page.name)}
+                          <AvatarImage
+                            src={page.avatar_url}
+                            className="absolute inset-0"
+                            onError={(e) => {
+                              e.currentTarget.style.display = "none";
+                            }}
+                          />
                         </div>
                         <div className="flex min-w-0 flex-col">
                           <span className="line-clamp-1 text-xs font-semibold text-[#0F172A]">
@@ -959,49 +1056,17 @@ export default function PageScannerPosts() {
       </section>
 
       {/* CTA */}
-      <div className="space-y-2.5">
-        <button
-          type="button"
-          onClick={handleToggleExecution}
-          disabled={!isExecuting && accountsLoading}
-          className={`inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl text-sm font-bold tracking-wide text-white shadow-sm transition-colors ${
-            isExecuting
-              ? "bg-[#DC2626] hover:bg-rose-700"
-              : "bg-[#004AC6] hover:bg-blue-800 disabled:opacity-60"
-          }`}
-        >
-          {isExecuting ? (
-            <>
-              <Square className="size-4 fill-white" />
-              <span>DỪNG THỰC THI QUÉT BÀI VIẾT</span>
-            </>
-          ) : (
-            <>
-              <Play className="size-4 fill-white" />
-              <span>BẮT ĐẦU THỰC THI</span>
-            </>
-          )}
-        </button>
-        {isBusy && (
-          <button
-            type="button"
-            onClick={handlePauseResume}
-            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[#F59E0B] bg-white text-xs font-bold text-[#D97706] hover:bg-amber-50"
-          >
-            {isPaused ? (
-              <>
-                <Play className="size-3.5 fill-current" />
-                TIẾP TỤC QUÉT
-              </>
-            ) : (
-              <>
-                <Pause className="size-3.5" />
-                TẠM DỪNG QUÉT
-              </>
-            )}
-          </button>
-        )}
-      </div>
+      <ScanActionButtons
+        live={isBusy}
+        paused={isPaused}
+        showNewScan={showResults}
+        startDisabled={startLocked || accountsLoading}
+        controlDisabled={startLocked}
+        onStart={() => runStartLocked(handleToggleExecution)}
+        onPauseResume={handlePauseResume}
+        onStop={() => runStartLocked(handleToggleExecution)}
+        onNewScan={handleNewScan}
+      />
 
       {/* Kết quả — ảnh "Quét bài viết page" */}
       {showResults ? (
@@ -1059,11 +1124,18 @@ export default function PageScannerPosts() {
                         }`}
                       >
                         <div
-                          className={`flex size-9 shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white ${
+                          className={`relative flex overflow-hidden size-9 shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white ${
                             page.avatar_color || AVATAR_COLORS[idx % AVATAR_COLORS.length]
                           }`}
                         >
                           {page.avatar_initials || initialsOf(page.name)}
+                          <AvatarImage
+                            src={page.avatar_url}
+                            className="absolute inset-0"
+                            onError={(e) => {
+                              e.currentTarget.style.display = "none";
+                            }}
+                          />
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-xs font-bold text-[#0F172A]">{page.name}</div>
@@ -1391,6 +1463,7 @@ export default function PageScannerPosts() {
         selectedUids={selectedUids}
         onConfirm={(uids) => {
           setSelectedUids(uids);
+          saveSelectedAccountUids("posts", uids);
           setShowAccountModal(false);
         }}
       />

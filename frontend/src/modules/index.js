@@ -10,6 +10,7 @@ import UserProfileModule from "./module_09_user_profile";
 import GroupScanModule from "./module_10_group_scan";
 import PageScannerModule from "./module_11_page_scanner";
 import PostEngagementModule from "./module_12_post_engagement";
+import ProfileScanModule from "./module_13_profile_scan";
 
 export const MODULE_REGISTRY = [
   {
@@ -95,5 +96,12 @@ export const MODULE_REGISTRY = [
     label: "Quét tài khoản từ bài viết",
     author: "Ada",
     component: PostEngagementModule,
+  },
+  {
+    id: "profile_scan",
+    icon: "🪪",
+    label: "Quét profile",
+    author: "Ada",
+    component: ProfileScanModule,
   },
 ];

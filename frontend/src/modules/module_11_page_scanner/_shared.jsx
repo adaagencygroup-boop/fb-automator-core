@@ -4,6 +4,7 @@ import React, { useCallback } from "react";
 import { ChevronLeft, ChevronRight, Copy } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { toast } from "@/lib/toast";
+import { askConfirm } from "./shared/askConfirm";
 import { pageWindow, parseJsonField } from "./utils.mjs";
 
 export { pageWindow, parseJsonField };
@@ -186,7 +187,14 @@ export function Pager({ page, totalPages, onChange, variant = "chevron" }) {
  */
 export async function runDelete({ count, noun, request, confirm = true }) {
   if (!count) return null;
-  if (confirm && !window.confirm(`Xóa vĩnh viễn ${count.toLocaleString("vi-VN")} ${noun}?`)) return null;
+  if (confirm) {
+    const ok = await askConfirm({
+      title: `Xóa ${count.toLocaleString("vi-VN")} ${noun}`,
+      description: `Xóa vĩnh viễn ${count.toLocaleString("vi-VN")} ${noun}? Thao tác này không thể hoàn tác.`,
+      confirmText: "Xóa",
+    });
+    if (!ok) return null;
+  }
   try {
     const res = await request();
     const deleted = Number(res?.deleted ?? 0);

@@ -18,6 +18,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "@/lib/toast";
+import { askConfirm } from "../shared/askConfirm";
 import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
 import {
@@ -42,6 +43,7 @@ import {
 import { usePageLists } from "../shared/usePageLists";
 import SavePageListModal from "../shared/SavePageListModal";
 import { runDelete } from "../_shared";
+import CreateCategoryModal from "@/modules/module_10_group_scan/member-list/_components/CreateCategoryModal";
 
 const ALL_ID = "__all__";
 const KW_PREFIX = "kw:";
@@ -98,6 +100,9 @@ export default function PageScannerListPages() {
   const [keywords, setKeywords] = useState([]);
   const { lists } = usePageLists();
   const [moveKeys, setMoveKeys] = useState(null); // != null → mở modal "Chuyển vào danh mục"
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newListName, setNewListName] = useState("");
+  const [creating, setCreating] = useState(false);
   const [sideSearch, setSideSearch] = useState("");
   const [activeId, setActiveId] = useState(ALL_ID);
   const [infoFilter, setInfoFilter] = useState("ALL");
@@ -260,18 +265,32 @@ export default function PageScannerListPages() {
     toast.success("Đã xuất CSV.");
   };
 
-  const handleCreateList = async () => {
-    const name = window.prompt("Tên danh mục mới?");
-    if (!name?.trim()) return;
+  const openCreateList = () => {
+    setNewListName("");
+    setCreateOpen(true);
+  };
+
+  const handleCreateList = async (e) => {
+    e.preventDefault();
+    const name = newListName.trim();
+    if (creating) return;
+    if (!name) {
+      toast.error("Vui lòng nhập tên danh mục.");
+      return;
+    }
+    setCreating(true);
     try {
-      const cat = await createPageList(name.trim());
+      const cat = await createPageList(name);
       if (selectedKeys.length) {
         await savePagesToList({ categoryId: cat.id, pageKeys: selectedKeys });
       }
       selectSource(`${LIST_PREFIX}${cat.id}`);
       toast.success(cat.created ? `Đã tạo danh mục “${cat.name}”` : `Danh mục “${cat.name}” đã có — đã mở danh mục này.`);
+      setCreateOpen(false);
     } catch (err) {
       toast.error(`Lỗi tạo danh mục: ${err.message}`);
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -308,7 +327,12 @@ export default function PageScannerListPages() {
       toast.info("Chọn một danh mục đã lưu ở cột trái để xóa.");
       return;
     }
-    if (!window.confirm(`Xóa danh mục "${activeList.name}"? (Các page trong kho vẫn giữ nguyên.)`)) return;
+    const ok = await askConfirm({
+      title: "Xóa danh mục",
+      description: `Xóa danh mục "${activeList.name}"? Các page trong kho vẫn giữ nguyên.`,
+      confirmText: "Xóa danh mục",
+    });
+    if (!ok) return;
     try {
       await deletePageList(activeList.id);
       selectSource(ALL_ID);
@@ -352,7 +376,7 @@ export default function PageScannerListPages() {
             onSearchChange={setSideSearch}
             searchPlaceholder="Tìm từ khóa / danh mục…"
             headerRight={
-              <Button type="button" size="sm" className="h-7 gap-1 text-[10px]" onClick={handleCreateList}>
+              <Button type="button" size="sm" className="h-7 gap-1 text-[10px]" onClick={openCreateList}>
                 <Plus className="size-3" /> Thêm
               </Button>
             }
@@ -422,7 +446,7 @@ export default function PageScannerListPages() {
             <div className="pt-2">
               <button
                 type="button"
-                onClick={handleCreateList}
+                onClick={openCreateList}
                 className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-300 bg-slate-50/70 py-2 text-[11px] font-semibold text-slate-600 transition hover:border-blue-400 hover:bg-blue-50/40 hover:text-blue-600"
               >
                 <Plus className="size-3.5" />
@@ -674,6 +698,21 @@ export default function PageScannerListPages() {
           <ListPagination page={page} pageSize={pageSize} total={total} onPageChange={(p) => reload(p)} />
         </Card>
       </MasterDetail>
+
+      <CreateCategoryModal
+        open={createOpen}
+        onClose={() => {
+          if (!creating) setCreateOpen(false);
+        }}
+        categoryName={newListName}
+        onCategoryNameChange={setNewListName}
+        onSubmit={handleCreateList}
+        title="Thêm mới danh mục Page"
+        label="Tên danh mục Page"
+        placeholder="Ví dụ: Mỹ phẩm Hà Nội..."
+        maxLength={255}
+        busy={creating}
+      />
 
       <SavePageListModal
         isOpen={moveKeys !== null}

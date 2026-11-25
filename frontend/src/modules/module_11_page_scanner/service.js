@@ -108,6 +108,10 @@ export async function getScanSessionDetail(sessionId) {
   return api.get(`/api/page-scanner/sessions/${sessionId}`);
 }
 
+export async function emergencyStopAll() {
+  return api.post("/api/page-scanner/stop");
+}
+
 export async function stopScanSession(sessionId) {
   return api.post(`/api/page-scanner/sessions/${sessionId}/stop`);
 }
