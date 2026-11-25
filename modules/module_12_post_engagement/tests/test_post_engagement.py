@@ -554,7 +554,9 @@ class JobTests(unittest.TestCase):
             res = jobs.start_check("alice", ["a"], posts)
             jobs._body(res["job_id"])
         st = jobs.get_status(res["job_id"], "alice")
-        self.assertEqual(st["status"], "done")
+        # Bài lỗi là chưa xong → phiên "dừng giữa chừng" (Chạy tiếp được), không báo Thành công
+        self.assertEqual(st["status"], "aborted")
+        self.assertIn("1 bài lỗi", st["error"])
         self.assertEqual(sorted(v["status"] for v in st["progress"].values()), ["done", "done", "error"])
 
     def test_control_and_active(self):
@@ -585,3 +587,151 @@ class CommonTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LoopDriver(FakeDriver):
+    """Trang cứ đổi chiều cao / còn nút "xem thêm" mà không ra dữ liệu mới (reel treo 14 phút)."""
+
+    def __init__(self, pages, **kw):
+        super().__init__(pages, **kw)
+        self.h = 0
+
+    def execute_script(self, js, *args):
+        if js in (scraper.SCROLL_REACTORS_JS, scraper.SCROLL_COMMENTS_JS):
+            if self.pages:
+                self._buffer.extend(self.pages.pop(0))
+            self.h += 100
+            return self.h
+        if js == scraper.EXPAND_COMMENTS_JS:
+            return 1
+        return super().execute_script(js, *args)
+
+
+def _comments_page(rows):
+    """rows: [(comment_id, post_id)] → 1 phản hồi GraphQL. Mã bài nằm trong id bình luận "comment:<bài>_<bình luận>"."""
+    def node(cid, pid):
+        n = _comment(cid, "1000" + cid, f"N{cid}", f"t{cid}")
+        n["id"] = b64(f"comment:{pid}_{cid}" if pid else f"comment:{cid}")
+        return n
+    return [json.dumps({"data": {"node": {"comments": {"edges": [{"node": node(cid, pid)} for cid, pid in rows]}}}})]
+
+
+class FixTests(unittest.TestCase):
+    """12 lỗi sửa đợt 2026-11-25."""
+
+    # A — chống treo theo SỐ VÒNG không có dữ liệu mới (không theo giây)
+    def test_comments_stall_after_rounds_without_new_data(self):
+        drv = LoopDriver([_comments_page([("111", "")])])
+        got, pauses = [], []
+        res = scraper.collect_comments(drv, 0, on_batch=got.extend, tick=lambda: False,
+                                       pause=lambda: pauses.append(1) or False, sleep=lambda s: None, stall_rounds=5)
+        self.assertEqual(res["reason"], "stalled")
+        self.assertEqual(len(got), 1)
+        self.assertLessEqual(len(pauses), 6)
+
+    def test_reactions_stall_after_rounds_without_new_data(self):
+        drv = LoopDriver([[_reactor_page(0, 3)]])
+        res = scraper.collect_reactions(drv, "1", 0, on_batch=lambda r: None, tick=lambda: False, pause=lambda: False,
+                                        sleep=lambda s: None, stall_rounds=5)
+        self.assertEqual(res["reason"], "stalled")
+
+    def test_stall_counter_ignores_pause_time(self):
+        # Tạm dừng / nghỉ dài (pause chạy lâu) không làm dừng sớm: vẫn phải đủ số vòng
+        import time as _t
+        drv = LoopDriver([_comments_page([("111", "")])])
+        clock = {"t": 0.0}
+        with mock.patch.object(_t, "monotonic", lambda: clock["t"]):
+            def long_pause():
+                clock["t"] += 3600  # mỗi lần nghỉ 1 giờ
+                return False
+            res = scraper.collect_comments(drv, 0, on_batch=lambda r: None, tick=lambda: False, pause=long_pause,
+                                           sleep=lambda s: None, stall_rounds=5)
+        self.assertEqual(res["reason"], "stalled")
+
+    # 7 — đã biết mã bài thì chỉ giữ bình luận đúng mã; bình luận bài bên cạnh không lọt vào
+    def test_comments_keep_only_known_post(self):
+        drv = FakeDriver([_comments_page([("1", "OTHER"), ("2", "OTHER")]), _comments_page([("3", "TARGET"), ("4", "OTHER")])])
+        got = []
+        scraper.collect_comments(drv, 0, on_batch=got.extend, tick=lambda: False, pause=lambda: False,
+                                 sleep=lambda s: None, post_id="TARGET")
+        self.assertEqual([c["comment_id"] for c in got], ["3"])
+
+    def test_comments_fallback_to_majority_when_known_id_never_seen(self):
+        # Trang ảnh có thể dùng mã khác mã bài → hết trang mà không thấy mã bài thì lấy bài chiếm đa số
+        drv = FakeDriver([_comments_page([("1", "PHOTO"), ("2", "PHOTO"), ("3", "NEXT")])])
+        got = []
+        scraper.collect_comments(drv, 0, on_batch=got.extend, tick=lambda: False, pause=lambda: False,
+                                 sleep=lambda s: None, post_id="STORY")
+        self.assertEqual(sorted(c["comment_id"] for c in got), ["1", "2"])
+
+    # B — fanpage kiểu mới (__typename User + is_additional_profile_plus)
+    def test_new_style_fanpage_is_page(self):
+        story = {"post_id": "123", "actors": [{"__typename": "User", "id": "555", "name": "Shop ABC"}]}
+        profile = {"id": "555", "is_additional_profile_plus": True}
+        meta = fb_parse.post_meta([{"a": story}, {"b": profile}], post_key="123")
+        self.assertEqual(meta["source_type"], "page")
+
+    # 1 — ô để trống = quét toàn bộ (tối đa hạn mức); số Facebook không rõ giữ None
+    def test_blank_quota_means_all(self):
+        t = jobs.normalize_targets([{"post_url": "https://www.facebook.com/groups/1/posts/1111111111/",
+                                     "like_quota": None, "comment_quota": 0}])
+        self.assertEqual((t[0]["like_quota"], t[0]["comment_quota"]), (jobs.QUOTA_LIMITS["like"], 0))
+
+    def test_unknown_counts_stay_none(self):
+        meta = jobs._public_meta({"fb_like_count": None, "fb_comment_count": 3, "fb_share_count": 0})
+        self.assertEqual((meta["fb_like_count"], meta["fb_comment_count"], meta["fb_share_count"]), (None, 3, 0))
+
+    # 3 — không đọc được dữ liệu ≠ bài đã xoá
+    def test_unreadable_page_is_retryable_error(self):
+        post = {"post_key": "1111111111", "post_url": "u"}
+        with self.assertRaises(jobs.PostReadError):
+            jobs._meta_to_post(post, {"state": {"unavailable": False}, "meta": {}})
+        row = jobs._meta_to_post(post, {"state": {"unavailable": True}, "meta": {}})
+        self.assertEqual(row["availability"], "unavailable")
+
+    # 6 — Dừng khẩn cấp không bị Tạm dừng / Tiếp tục huỷ
+    def test_abort_is_not_undone_by_pause_or_resume(self):
+        jid = "PES-test-abort"
+        with jobs._jobs_lock:
+            jobs._jobs[jid] = {"job_id": jid, "kind": "scan", "owner": "zoe", "status": "running", "control": "run",
+                               "logs": [], "progress": {}, "totals": {}}
+        try:
+            self.assertTrue(jobs.set_control(jid, "abort", "zoe"))
+            self.assertTrue(jobs.set_control(jid, "resume", "zoe"))
+            self.assertTrue(jobs.set_control(jid, "pause", "zoe"))
+            self.assertEqual(jobs._control(jid), "abort")
+        finally:
+            with jobs._jobs_lock:
+                jobs._jobs.pop(jid, None)
+
+    # 8 — bấm đúp: phiên thứ 2 bị từ chối
+    def test_second_job_is_rejected_atomically(self):
+        jid = jobs._new_job("bob", "scan", ["1"], [{"post_key": "a"}])
+        try:
+            with self.assertRaises(jobs.JobBusy):
+                jobs._new_job("bob", "scan", ["1"], [{"post_key": "a"}])
+            with self.assertRaises(jobs.JobBusy):
+                jobs._new_job("bob", "check", ["1"], [{"post_key": "a"}])
+            other = jobs._new_job("carol", "scan", ["1"], [{"post_key": "a"}])  # user khác không bị chặn
+            with jobs._jobs_lock:
+                jobs._jobs.pop(other, None)
+        finally:
+            with jobs._jobs_lock:
+                jobs._jobs.pop(jid, None)
+
+    # 9 — ký tự đặc biệt trong ô tìm
+    def test_like_pattern_escapes_wildcards(self):
+        self.assertEqual(models._like("a_b"), "%a\\_b%")
+        self.assertEqual(models._like("%"), "%\\%%")
+        self.assertEqual(models._like("abc"), "%abc%")
+
+    # 5 — xuất toàn bộ kho: lấy đủ mọi bài khớp bộ lọc, không dừng ở 200
+    def test_list_post_keys_pages_through_store(self):
+        store = [{"post_key": str(i)} for i in range(2350)]
+
+        def fake_list(owner, *, search="", source="all", sort="newest", limit=200, offset=0, keys=None):
+            return {"posts": store[offset:offset + limit], "total": len(store)}
+
+        with mock.patch.object(models, "list_posts", fake_list):
+            self.assertEqual(len(models.list_post_keys("alice")), 2350)
+

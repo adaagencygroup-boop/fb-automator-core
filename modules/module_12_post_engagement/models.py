@@ -114,6 +114,8 @@ SCHEMA = [
     "CREATE INDEX IF NOT EXISTS idx_pe_users_post ON pe_users (owner_username, post_key, id);",
     "CREATE INDEX IF NOT EXISTS idx_pe_comments_post ON pe_comments (owner_username, post_key, id);",
     "CREATE INDEX IF NOT EXISTS idx_pe_sessions_owner ON pe_sessions (owner_username, started_at DESC);",
+    # is_known_page: tìm nguồn đã từng được nhận là fanpage
+    "CREATE INDEX IF NOT EXISTS idx_pe_posts_source ON pe_posts (owner_username, source_id);",
 ]
 
 
@@ -177,6 +179,11 @@ def _chunks(rows: list, size: int = BATCH) -> Iterable[list]:
 
 def _owner(owner: Optional[str]) -> str:
     return (owner or "").strip()
+
+
+def _like(word: str) -> str:
+    r"""Mẫu LIKE '%từ%' — thoát \ % _ để gõ '%' / 'a_b' không khớp mọi dòng (ký tự thoát mặc định của Postgres là \)."""
+    return "%" + word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +316,7 @@ def list_posts(owner: Optional[str], *, search: str = "", source: str = "all", s
     if q:
         for word in q.split(" ")[:6]:
             cond.append("search_fold LIKE ?")
-            params.append(f"%{word}%")
+            params.append(_like(word))
     order = {
         "most": "(like_count + comment_count + fb_share_count) DESC, scanned_at DESC",
         "oldest": "scanned_at ASC",
@@ -321,6 +328,27 @@ def list_posts(owner: Optional[str], *, search: str = "", source: str = "all", s
         (*params, max(1, min(1000, int(limit))), max(0, int(offset))),
     )
     return {"posts": [_post_row(r) for r in rows], "total": total}
+
+
+def list_post_keys(owner: Optional[str], *, search: str = "", source: str = "all", sort: str = "newest") -> list[str]:
+    """Mã mọi bài trong kho khớp bộ lọc (Xuất toàn bộ kho — không giới hạn 200 bài của 1 trang danh sách)."""
+    out: list[str] = []
+    offset = 0
+    while True:
+        page = list_posts(owner, search=search, source=source, sort=sort, limit=1000, offset=offset)
+        out.extend(p["post_key"] for p in page["posts"])
+        offset += 1000
+        if offset >= page["total"] or not page["posts"]:
+            return out
+
+
+def is_known_page(owner: Optional[str], source_id: str) -> bool:
+    """Nguồn này đã từng được nhận là fanpage ở bài khác (trang reel không có dấu hiệu fanpage)."""
+    owner = _owner(owner)
+    if not owner or not source_id:
+        return False
+    return bool(db.fetch_one("SELECT 1 AS x FROM pe_posts WHERE owner_username = ? AND source_id = ? AND source_type = 'page' LIMIT 1",
+                             (owner, str(source_id))))
 
 
 def delete_posts(owner: Optional[str], keys: list[str]) -> int:
@@ -490,7 +518,7 @@ def list_engagements(owner: Optional[str], post_key: str, *, tab: str = "like", 
         cond, params = ["c.owner_username = ?", "c.post_key = ?"], [owner, post_key]
         for word in q.split(" ")[:6] if q else []:
             cond.append("(COALESCE(u.name_fold, '') LIKE ? OR c.uid LIKE ? OR COALESCE(c.text_fold, '') LIKE ?)")
-            params.extend([f"%{word}%", f"%{word}%", f"%{word}%"])
+            params.extend([_like(word)] * 3)
         if tier in TIERS:
             cond.append("u.tier = ?")
             params.append(int(tier))
@@ -509,7 +537,7 @@ def list_engagements(owner: Optional[str], post_key: str, *, tab: str = "like", 
         cond, params = ["owner_username = ?", "post_key = ?", "has_like"], [owner, post_key]
         for word in q.split(" ")[:6] if q else []:
             cond.append("(COALESCE(name_fold, '') LIKE ? OR uid LIKE ?)")
-            params.extend([f"%{word}%", f"%{word}%"])
+            params.extend([_like(word)] * 2)
         if tier in TIERS:
             cond.append("tier = ?")
             params.append(int(tier))
