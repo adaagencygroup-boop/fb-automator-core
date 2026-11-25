@@ -247,7 +247,7 @@ def list_fetched_posts(
                 "id": r["id"],
                 "post_url": r.get("post_url"),
                 "target_url": r.get("target_url"),
-                "content": r.get("content") or "",
+                "content": (r.get("content") or "").strip() or "Bài viết không có nội dung",
                 "post_type": r.get("post_type") or "text",
                 "published_at": r.get("published_at"),
                 "published_text": r.get("published_text"),
@@ -266,6 +266,21 @@ def list_fetched_posts(
         "page_size": page_size,
         "available": fetched_posts_store.available(user_id, source_key),
     }
+
+
+@router.delete("/posts")
+def clear_fetched_posts(
+    source_key: str = Query(..., max_length=255),
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
+):
+    """Xóa danh sách bài quét tạm đang hiển thị của đúng nguồn."""
+    user_id = int(_require_user(request, authorization)["id"])
+    if post_fetcher.running_job_id(user_id) is not None:
+        raise HTTPException(status_code=409, detail="Không thể làm mới danh sách khi đang quét bài viết.")
+    if not fetched_posts_store.clear(user_id, source_key):
+        raise HTTPException(status_code=404, detail="Danh sách bài viết không còn tồn tại.")
+    return {"cleared": True}
 
 
 @router.get("/posts/ids")

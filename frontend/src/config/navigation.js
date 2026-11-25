@@ -281,6 +281,29 @@ export const NAV_ITEMS = [
     ],
   },
   {
+    id: "engage",
+    label: "Quét tài khoản từ bài viết",
+    icon: icon("icon_nav_group_spam", 30, 13),
+    children: [
+      {
+        id: "engage.scan",
+        label: "Quét tài khoản tương tác",
+        title: "Quét tài khoản đã tương tác bài viết",
+        description: "Quét danh sách các tài khoản đã tương tác với bài viết",
+        moduleId: "engage",
+        icon: icon("icon_nav_group_post", 16, 16),
+      },
+      {
+        id: "engage.list",
+        label: "Danh sách tài khoản",
+        title: "Danh sách tài khoản đã tương tác bài viết",
+        description: "Danh sách các tài khoản đã tương tác với bài viết",
+        moduleId: "engage",
+        icon: icon("icon_nav_seeding_profile", 16, 13),
+      },
+    ],
+  },
+  {
     id: "scanner",
     label: "Quét page",
     icon: icon("icon_nav_group_spam", 30, 13),

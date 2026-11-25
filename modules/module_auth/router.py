@@ -636,6 +636,7 @@ def assert_request_module_access(authorization: Optional[str], path: str, method
         "/api/creator": "create_fanpage", "/api/pages": "manage_fanpage",
         "/api/groups": "spam_group", "/api/group-scan": "scan_group",
         "/api/page-scanner": "scan_page", "/api/seeding": "seeding",
+        "/api/post-engagement": "scan_post",
         "/api/farm": "post_interact", "/api/post": "post_interact",
         "/api/facebook": "chat_fanpage", "/api/profile-scan": "scan_profile",
     }

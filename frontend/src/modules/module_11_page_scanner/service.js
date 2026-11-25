@@ -38,23 +38,65 @@ export function getPageTemplateUrl() {
   return `${API_BASE}/api/page-scanner/source/template`;
 }
 
+export const PAGE_TEMPLATE_FILE_NAME = "mau_danh_sach_fanpage_fb.txt";
+
+function isAbortError(err) {
+  return err?.name === "AbortError";
+}
+
+/** Tải qua link <a download> — trình duyệt tự xử lý, trang KHÔNG biết người dùng có bấm Lưu hay không. */
+function triggerBrowserDownload(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Tải file mẫu danh sách Fanpage. Trả về { status, fileName }:
+ * - "saved"      : người dùng đã chọn nơi lưu, bấm Lưu và file đã ghi xong (Chrome / Edge — hộp thoại lưu file).
+ * - "cancelled"  : người dùng bấm Huỷ ở hộp thoại lưu file.
+ * - "downloaded" : trình duyệt không có hộp thoại lưu file (Firefox, Safari…) → đã giao file cho trình duyệt tải,
+ *                  không biết người dùng có bấm Lưu hay không.
+ * - "opened"     : không lấy được nội dung file → đã mở file mẫu ở tab mới.
+ * Ném lỗi khi không làm được cách nào (vd trình duyệt chặn tab mới).
+ */
 export async function downloadPageTemplate() {
+  const fileName = PAGE_TEMPLATE_FILE_NAME;
+  let blob;
   try {
-    const res = await api.get("/api/page-scanner/source/template", {
-      responseType: "blob",
-    });
-    const blob = new Blob([res], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "mau_danh_sach_fanpage_fb.txt";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    // Lấy nội dung trước (backend trên máy, rất nhanh) để không tạo file rỗng khi tải lỗi
+    const res = await api.get("/api/page-scanner/source/template", { responseType: "blob" });
+    blob = new Blob([res], { type: "text/plain;charset=utf-8" });
   } catch {
-    window.open(`${API_BASE}/api/page-scanner/source/template`, "_blank");
+    const opened = window.open(`${API_BASE}/api/page-scanner/source/template`, "_blank");
+    if (!opened) throw new Error("Không tải được file mẫu.");
+    return { status: "opened", fileName };
   }
+
+  if (typeof window !== "undefined" && typeof window.showSaveFilePicker === "function") {
+    try {
+      // Chờ người dùng chọn nơi lưu và bấm Lưu; bấm Huỷ → AbortError
+      const handle = await window.showSaveFilePicker({
+        suggestedName: fileName,
+        types: [{ description: "Tệp văn bản", accept: { "text/plain": [".txt"] } }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return { status: "saved", fileName: handle.name || fileName };
+    } catch (err) {
+      if (isAbortError(err)) return { status: "cancelled", fileName };
+      // Trình duyệt không cho mở hộp thoại (vd mất quyền thao tác người dùng) → tải theo cách thường
+    }
+  }
+
+  triggerBrowserDownload(blob, fileName);
+  return { status: "downloaded", fileName };
 }
 
 // ── SESSIONS ──

@@ -9,6 +9,7 @@ export const NAV_FEATURE_KEYS = Object.freeze({
   seeding: "seeding",
   scan: "scan_group",
   scanner: "scan_page",
+  engage: "scan_post",
   profile_scan: "scan_profile",
 });
 

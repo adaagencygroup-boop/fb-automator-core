@@ -3,7 +3,7 @@ post_fetcher.py
 Module 8 — "Lấy bài viết từ page / trang cá nhân": job chạy nền cuộn feed của 1 page / trang cá nhân và lấy
 TOÀN BỘ bài viết (không giới hạn số bài) cho tới khi hết bài hoặc người dùng bấm Dừng.
 
-- Đọc bài bằng hàm của Module 11 (extract_posts_batch) nhưng chỉ đọc nhóm bài MỚI mỗi vòng
+- Đọc bài bằng bộ trích xuất riêng của Module 8 và chỉ đọc nhóm bài MỚI mỗi vòng
   (đánh dấu data-m8-batch / data-m8-done) → không kẹt ở 40 bài đầu và không chậm dần khi trang dài.
 - Bài lấy về chỉ lưu TẠM (RAM + file tạm trên máy, xem fetched_posts_store.py) — không ghi lên DB chung;
   chỉ khi người dùng bấm "Thêm bài viết đã chọn" thì các bài đã chọn mới được lưu vào seeding_targets.
@@ -36,13 +36,12 @@ logger = logging.getLogger(__name__)
 
 # ── Tham số vòng cuộn ──
 BATCH_SIZE = 12                 # số bài đọc mỗi vòng
-SCROLL_PAUSE_S = (1.2, 2.5)     # nghỉ sau mỗi lần cuộn
+SCROLL_PAUSE_S = (3.0, 4.5)     # chờ feed tải xong sau mỗi lần cuộn chậm, tránh lướt qua bài chưa render
 LONG_REST_EVERY = 200           # cứ N bài mới thì nghỉ dài
 LONG_REST_S = (5.0, 10.0)
-IDLE_ROUNDS = 6                 # số vòng liền không có gì mới trước khi thử kéo hẳn xuống đáy
-DEEP_CHECKS = 3                 # số lần kéo xuống đáy mà vẫn không có gì → hết bài
-DEEP_WAIT_S = 4.0
-NO_NEW_TIMEOUT_S = 180.0        # quá lâu không có bài mới → coi như hết bài
+IDLE_ROUNDS = 10                # số vòng không có bài trước khi kéo xuống đáy kiểm tra lần cuối
+DEEP_WAIT_S = 10.0
+NO_NEW_TIMEOUT_S = 300.0        # feed chậm tải bài cũ vẫn có thêm thời gian để hiện bài
 HEARTBEAT_EVERY_S = 15.0
 MAX_ROUND_ERRORS = 5
 TRIM_MEDIA = True               # giải phóng ảnh / video của bài đã đọc ở xa phía trên để Chrome không phình
@@ -114,6 +113,12 @@ def seeding_post_key(url: str) -> str:
     m = re.search(r"/(?:posts|permalink)/(pfbid[0-9A-Za-z]+)", parsed.path)
     if m:
         return f"post:{m.group(1)}"
+    m_share = re.search(r"/share/(?:p|r|v)/([0-9A-Za-z_-]+)", parsed.path)
+    if m_share:
+        return f"post:{m_share.group(1)}"
+    m_fbid = query.get("fbid") or query.get("story_fbid")
+    if m_fbid:
+        return f"post:{m_fbid}"
     from modules.module_11_page_scanner.page_source import normalize_post_key
 
     return normalize_post_key(raw)
@@ -138,6 +143,31 @@ def post_target_fields(post_url: str) -> tuple[str, str]:
     return target_url, extract_fb_id(target_url, "POST")
 
 
+def _read_post_batch(driver, selector: str) -> List[Dict[str, Any]]:
+    """Đọc bài riêng cho Module 8, không trích số like/comment/share từ DOM."""
+    rows = driver.execute_script(_READ_POST_BATCH_JS, selector) or []
+    posts: List[Dict[str, Any]] = []
+    for row in rows:
+        post_url = str(row.get("post_url") or "").strip()
+        if not post_url:
+            continue
+        raw = str(row.get("content") or "").replace("\xa0", " ")
+        content = "\n".join(line.strip() for line in raw.splitlines() if line.strip())
+        posts.append({
+            "post_url": post_url,
+            "content": content or "Bài viết không có nội dung",
+            "post_type": row.get("post_type") or "text",
+            "published_at": row.get("published_at"),
+            "published_text": row.get("published_text"),
+            "reaction_count": 0,
+            "comment_count": 0,
+            "share_count": 0,
+            "is_pinned": bool(row.get("is_pinned")),
+            "content_cleaned": True,
+        })
+    return posts
+
+
 # ─────────────────────────────────────────────────────────────
 # JavaScript chạy trên trang Facebook
 # ─────────────────────────────────────────────────────────────
@@ -145,20 +175,245 @@ def post_target_fields(post_url: str) -> tuple[str, str]:
 _MARK_BATCH_JS = r"""
 const token = arguments[0];
 const maxN = arguments[1] || 12;
-const SEL = '[role="article"], div[data-pagelet*="FeedUnit"]';
-const LINK_RE = /\/(posts|permalink|videos?|reels?|watch)\b|story_fbid=|\/photo\/?\?/i;
+const MESSAGE_SEL = '[data-ad-rendering-role="story_message"], [data-ad-comet-preview="message"], [data-ad-preview="message"]';
+const LINK_RE = /\/(posts|permalink|reels?)\b|[?&]story_fbid=/i;
+const POST_LINK_RE = LINK_RE;
+const candidates = [];
+const hasPostLink = (el) => Array.from(el.querySelectorAll('a[href]')).some((a) => LINK_RE.test(a.href || a.getAttribute('href') || ''));
+const hasPrimaryPostLink = (el) => Array.from(el.querySelectorAll('a[href]')).some((a) => POST_LINK_RE.test(a.href || a.getAttribute('href') || ''));
+const postKey = (el) => {
+  const links = Array.from(el.querySelectorAll('a[href]')).filter((a) => LINK_RE.test(a.href || a.getAttribute('href') || ''));
+  const isInComment = (anchor) => {
+    for (let current = anchor; current && current !== el; current = current.parentElement) {
+      const label = [current.getAttribute('aria-label'), current.getAttribute('data-testid'), current.getAttribute('data-pagelet')]
+        .filter(Boolean).join(' ').toLowerCase();
+      if (/comment|bình luận|phản hồi|reply/.test(label)) return true;
+    }
+    return false;
+  };
+  const anchor = links.find((link) => !isInComment(link)) || links[0];
+  if (!anchor) return '';
+  try {
+    const url = new URL(anchor.href || anchor.getAttribute('href'), location.href);
+    const identity = ['story_fbid', 'fbid', 'id', 'v'].map((key) => url.searchParams.get(key) || '').filter(Boolean).join(':');
+    return `${url.pathname}${identity ? `?${identity}` : ''}`;
+  } catch {
+    return anchor.getAttribute('href') || '';
+  }
+};
+const refreshMarker = (el) => {
+  const key = postKey(el);
+  const previous = el.getAttribute('data-m8-post-key');
+  if (key && previous && key !== previous) {
+    el.removeAttribute('data-m8-done');
+    el.removeAttribute('data-m8-batch');
+  }
+  if (key) el.setAttribute('data-m8-post-key', key);
+};
+const hasPostActions = (el) => Array.from(el.querySelectorAll('[role="button"]')).some((button) => {
+  const label = (button.getAttribute('aria-label') || button.innerText || button.textContent || '').toLowerCase();
+  return /react|like|comment|share|thích|bình luận|chia sẻ/.test(label);
+});
+const addCandidate = (el) => {
+  if (el) refreshMarker(el);
+  if (!el || el.hasAttribute('data-m8-done') || el.hasAttribute('data-m8-batch')) return;
+  if (candidates.some((existing) => existing.contains(el) || el.contains(existing))) return;
+  candidates.push(el);
+};
+
+// Dùng message của bài làm mốc; không chọn wrapper Timeline/Feed hoặc article của bình luận.
+const messages = Array.from(document.querySelectorAll(MESSAGE_SEL)).filter((message) => {
+  for (let parent = message.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+    if (parent.matches(MESSAGE_SEL)) return false;
+  }
+  return true;
+});
+const topMessageCount = (root) => Array.from(root.querySelectorAll(MESSAGE_SEL)).filter((message) => {
+  for (let parent = message.parentElement; parent && parent !== root; parent = parent.parentElement) {
+    if (parent.matches(MESSAGE_SEL)) return false;
+  }
+  return true;
+}).length;
+for (const message of messages) {
+  if (candidates.length >= maxN) break;
+  let best = null;
+  let current = message.parentElement;
+  for (let depth = 0; current && current !== document.body && depth < 18; depth++, current = current.parentElement) {
+    refreshMarker(current);
+    if (current.hasAttribute('data-m8-done') || current.hasAttribute('data-m8-batch')) break;
+    if (candidates.some((candidate) => candidate.contains(current))) break;
+    const isPostContainer = current.matches('[role="article"], div[data-pagelet*="FeedUnit"]');
+    if (hasPostLink(current) && (hasPostActions(current) || isPostContainer)) {
+      best = current;
+      if (hasPrimaryPostLink(current)) break;
+    }
+  }
+  if (best) addCandidate(best);
+}
+
+// Giữ cả bài chỉ có ảnh/video, không có story_message để trích nội dung.
+const SEMANTIC_POST_SEL = '[role="article"], div[data-pagelet*="FeedUnit"]';
+for (const el of document.querySelectorAll(SEMANTIC_POST_SEL)) {
+  if (candidates.length >= maxN) break;
+  if (el.parentElement && el.parentElement.closest(SEMANTIC_POST_SEL)) continue;
+  if (topMessageCount(el) > 0 || !hasPostLink(el) || !hasPostActions(el)) continue;
+  addCandidate(el);
+}
+
 let marked = 0;
-for (const el of document.querySelectorAll(SEL)) {
+let expanded = 0;
+for (const el of candidates) {
   if (marked >= maxN) break;
-  if (el.hasAttribute('data-m8-done') || el.hasAttribute('data-m8-batch')) continue;
-  if (el.parentElement && el.parentElement.closest(SEL)) continue;
-  const hasLink = Array.from(el.querySelectorAll('a[href]')).some((a) => LINK_RE.test(a.href || a.getAttribute('href') || ''));
-  if (!hasLink) continue;
+  for (const button of el.querySelectorAll('[role="button"]')) {
+    const label = (button.innerText || button.textContent || '').replace(/\s+/g, ' ').trim();
+    if (/^(see more|xem thêm)$/i.test(label)) {
+      button.click();
+      expanded++;
+    }
+  }
+  const key = postKey(el);
+  if (key) el.setAttribute('data-m8-post-key', key);
   el.setAttribute('data-m8-batch', token);
   marked++;
 }
 const doc = document.documentElement;
-return { marked: marked, height: Math.max(doc.scrollHeight, document.body ? document.body.scrollHeight : 0) };
+return { marked: marked, expanded: expanded, height: Math.max(doc.scrollHeight, document.body ? document.body.scrollHeight : 0) };
+"""
+
+# Bài riêng cho Module 8: không đọc số lượng tương tác và không lấy text tổng hợp cả article.
+_READ_POST_BATCH_JS = r"""
+const selector = arguments[0];
+const MESSAGE_SEL = '[data-ad-rendering-role="story_message"], [data-ad-comet-preview="message"], [data-ad-preview="message"]';
+const result = [];
+const normalize = (value) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+const cleanTimeText = (value) => normalize(value).replace(/[\u034f\u200b-\u200f\u2060\ufeff]/g, '');
+const isTimeLabel = (value) => /just\s*now|yesterday|ago|hôm\s*qua|trước|\d+\s*(?:minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|months?|years?|y|phút|giờ|ngày|tuần|tháng|năm)(?=\s|$|[^a-z])|tháng\s*\d|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|january|february|march|april|may|june|july|august|september|october|november|december/i.test(value || '');
+
+for (const node of document.querySelectorAll(selector)) {
+  // Chọn anchor hợp lệ đầu tiên theo thứ tự DOM như luồng trước.
+  const postLink = Array.from(node.querySelectorAll('a[href]')).find((a) => {
+    const href = a.href || a.getAttribute('href') || '';
+    return /\/(posts|permalink|reels?)\b/i.test(href) || /[?&]story_fbid=/i.test(href);
+  });
+  if (!postLink) continue;
+  const postUrl = postLink.href || postLink.getAttribute('href') || '';
+
+  // Trích xuất CHÍNH XÁC nội dung bài viết qua element [data-ad-comet-preview="message"] / [data-ad-preview="message"] / [data-ad-rendering-role="story_message"]
+  // Tuyệt đối KHÔNG đọc nhầm bình luận (bình luận không có các data-ad-* marker này).
+  let content = '';
+  const readCaptionLine = (el) => {
+    const copy = el.cloneNode(true);
+    // Bỏ nút "Xem thêm" / "See more"
+    copy.querySelectorAll('[role="button"], button').forEach((button) => button.remove());
+    // Giữ xuống dòng từ <br>
+    copy.querySelectorAll('br').forEach((br) => br.replaceWith(document.createTextNode('\n')));
+    // Thay emoji <img> bằng ký tự alt thật
+    copy.querySelectorAll('img[alt]').forEach((img) => img.replaceWith(document.createTextNode(img.getAttribute('alt') || '')));
+    return (copy.textContent || '').replace(/\u00a0/g, ' ').replace(/[ \t]+/g, ' ').trim();
+  };
+
+  // 1. Chỉ tìm trong các phần tử ĐƯỢC FACEBOOK ĐÁNH DẤU CHÍNH XÁC là message bài viết
+  const messageRoot = node.querySelector(
+    '[data-ad-comet-preview="message"], [data-ad-preview="message"], [data-ad-rendering-role="story_message"]'
+  );
+
+  if (messageRoot) {
+    // Ưu tiên 1: Lấy các div[dir="auto"] bên trong x126k92a (cấu trúc chuẩn của bài viết Facebook Comet)
+    const bodyWrappers = Array.from(messageRoot.querySelectorAll('[class~="x126k92a"]'))
+      .filter((body) => !body.parentElement?.closest('[class~="x126k92a"]'));
+    const lines = [];
+    for (const bodyWrapper of (bodyWrappers.length ? bodyWrappers : [messageRoot])) {
+      const leafDivs = Array.from(bodyWrapper.querySelectorAll('div[dir="auto"]'))
+        .filter((div) => !div.querySelector('div[dir="auto"]'));
+      lines.push(...leafDivs.map(readCaptionLine).filter(Boolean));
+    }
+
+    if (lines.length > 0) {
+      content = lines.join('\n').trim();
+    }
+
+    // Ưu tiên 2: Tìm các thẻ span[dir="auto"] bên trong messageRoot (không chứa span[dir="auto"] con)
+    if (!content) {
+      const spans = Array.from(messageRoot.querySelectorAll('span[dir="auto"]'))
+        .filter((span) => !span.querySelector('span[dir="auto"]'));
+      if (spans.length > 0) {
+        const lines = spans.map(readCaptionLine).filter(Boolean);
+        content = lines.join('\n').trim();
+      }
+    }
+
+    // Ưu tiên 3: Đọc trực tiếp từ messageRoot
+    if (!content) {
+      content = readCaptionLine(messageRoot);
+    }
+
+  }
+
+  // NẾU KHÔNG CÓ messageRoot -> Bài viết không có text (chỉ có ảnh/video/share bài khác không kèm caption).
+  // Tuyệt đối KHÔNG fallback sang các div[dir="auto"] ngoài messageRoot vì sẽ bắt nhầm bình luận!
+
+  const timeNodes = Array.from(node.querySelectorAll(
+    'abbr[data-utime], time[datetime], [data-utime], [title], [aria-label], [aria-labelledby]'
+  ));
+  // Một số layout đặt nhãn thời gian trong chính permalink và các span con
+  // (chữ có thể bị chèn ký tự zero-width), không có abbr/data-utime.
+  let linkAncestor = postLink;
+  for (let depth = 0; linkAncestor && linkAncestor !== node && depth < 5; depth++, linkAncestor = linkAncestor.parentElement) {
+    if (!timeNodes.includes(linkAncestor)) timeNodes.push(linkAncestor);
+  }
+  const timeLabelText = (el) => {
+    const referenced = (el.getAttribute('aria-labelledby') || '').split(/\s+/)
+      .map((id) => document.getElementById(id)?.textContent || '')
+      .filter(Boolean).join(' ');
+    return cleanTimeText(el.getAttribute('title') || el.getAttribute('datetime') || el.getAttribute('aria-label') || referenced || el.innerText || el.textContent);
+  };
+  const timeNode = timeNodes.find((el) => el.hasAttribute('data-utime') || el.hasAttribute('datetime')) ||
+    timeNodes.find((el) => isTimeLabel(timeLabelText(el)));
+  const utimeRaw = timeNode?.getAttribute('data-utime') || timeNode?.querySelector('[data-utime]')?.getAttribute('data-utime');
+  const utime = Number(utimeRaw);
+  const rawTimeText = timeNode ? timeLabelText(timeNode) : '';
+  let publishedDate = timeNode?.getAttribute('datetime') ? new Date(timeNode.getAttribute('datetime')) : null;
+  if (!(publishedDate instanceof Date) || Number.isNaN(publishedDate.getTime())) publishedDate = null;
+  if (!publishedDate && Number.isFinite(utime) && utime > 0) publishedDate = new Date(utime * 1000);
+  if (!publishedDate) {
+    const relative = rawTimeText.match(/(just\s*now|yesterday|hôm\s*qua|an?\s+(?:minute|hour|day|week|month|year)s?\s+ago|\d+\s*(?:minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|months?|years?|y|phút|giờ|ngày|tuần|tháng|năm)(?=\s|$|[^a-z]))/i);
+    if (relative) {
+      const label = relative[0].toLowerCase();
+      const amount = Number(label.match(/\d+/)?.[0] || (/^an?\s/.test(label) ? 1 : 0));
+      const published = new Date();
+      if (/yesterday|hôm\s*qua/.test(label)) published.setDate(published.getDate() - 1);
+      else if (/min|phút|\bm\b/.test(label)) published.setMinutes(published.getMinutes() - amount);
+      else if (/\bhr?\b|hour|giờ/.test(label)) published.setHours(published.getHours() - amount);
+      else if (/week|tuần|\bw\b/.test(label)) published.setDate(published.getDate() - amount * 7);
+      else if (/month|tháng/.test(label)) published.setMonth(published.getMonth() - amount);
+      else if (/year|năm|\by\b/.test(label)) published.setFullYear(published.getFullYear() - amount);
+      else if (/day|ngày|\bd\b/.test(label)) published.setDate(published.getDate() - amount);
+      publishedDate = published;
+    }
+  }
+  if (!publishedDate) {
+    const numericDate = rawTimeText.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b/);
+    if (numericDate) {
+      const year = Number(numericDate[3].length === 2 ? `20${numericDate[3]}` : numericDate[3]);
+      publishedDate = new Date(year, Number(numericDate[2]) - 1, Number(numericDate[1]));
+    } else if (rawTimeText) {
+      const parsed = new Date(rawTimeText);
+      if (!Number.isNaN(parsed.getTime())) publishedDate = parsed;
+    }
+  }
+  const publishedAt = publishedDate ? publishedDate.toISOString() : null;
+  const publishedText = publishedDate
+    ? `${String(publishedDate.getDate()).padStart(2, '0')}-${String(publishedDate.getMonth() + 1).padStart(2, '0')}-${publishedDate.getFullYear()}`
+    : null;
+  const lowerUrl = postUrl.toLowerCase();
+  const postType = /\/(reel|reels|videos?|watch)\b/.test(lowerUrl) || node.querySelector('video')
+    ? 'video'
+    : /\/photo\/?\?/.test(lowerUrl) || node.querySelector('img[src*="scontent"]')
+      ? 'photo'
+      : 'text';
+  result.push({ post_url: postUrl, content, post_type: postType, published_at: publishedAt, published_text: publishedText });
+}
+return result;
 """
 
 # Chốt nhóm vừa đọc; bài đã đọc nằm xa phía trên → bỏ ảnh / video để Chrome nhẹ (giữ nguyên DOM cho React của Facebook).
@@ -190,8 +445,65 @@ if (trim) {
 return trimmed;
 """
 
-_SCROLL_JS = "window.scrollBy(0, Math.round(window.innerHeight * 0.85));"
-_SCROLL_BOTTOM_JS = "window.scrollTo(0, Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0));"
+_SCROLL_JS = r"""(() => {
+  const step = Math.max(320, Math.round(window.innerHeight * 0.45));
+  const root = document.scrollingElement || document.documentElement;
+  const rootBefore = root.scrollTop || 0;
+  window.scrollBy(0, step);
+  if ((root.scrollTop || 0) > rootBefore + 2) {
+    return { before: rootBefore, after: root.scrollTop, moved: true, at_bottom: false };
+  }
+
+  // Một số layout Facebook cuộn trong vùng feed thay vì document.
+  const anchors = document.querySelectorAll(
+    'a[href*="/posts/"], a[href*="/permalink"], a[href*="/reel/"], a[href*="story_fbid="]'
+  );
+  const candidates = new Set();
+  for (const anchor of anchors) {
+    let parent = anchor.parentElement;
+    for (let depth = 0; parent && depth < 12; depth++, parent = parent.parentElement) {
+      if (parent.scrollHeight > parent.clientHeight + 12) {
+        const overflow = getComputedStyle(parent).overflowY;
+        if (overflow === 'auto' || overflow === 'scroll' || parent.hasAttribute('role')) candidates.add(parent);
+      }
+    }
+  }
+  const ordered = Array.from(candidates).sort(
+    (a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight)
+  );
+  for (const element of ordered) {
+    const before = element.scrollTop;
+    element.scrollTop = before + step;
+    if (element.scrollTop > before + 2) {
+      return { before, after: element.scrollTop, moved: true, at_bottom: false };
+    }
+  }
+  const maxTop = Math.max(0, root.scrollHeight - root.clientHeight);
+  return {
+    before: rootBefore,
+    after: root.scrollTop || 0,
+    moved: false,
+    at_bottom: maxTop - (root.scrollTop || 0) <= 8,
+  };
+})()"""
+_SCROLL_BOTTOM_JS = r"""(() => {
+  const root = document.scrollingElement || document.documentElement;
+  window.scrollTo(0, root.scrollHeight);
+  const anchors = document.querySelectorAll(
+    'a[href*="/posts/"], a[href*="/permalink"], a[href*="/reel/"], a[href*="story_fbid="]'
+  );
+  const candidates = new Set();
+  for (const anchor of anchors) {
+    let parent = anchor.parentElement;
+    for (let depth = 0; parent && depth < 12; depth++, parent = parent.parentElement) {
+      if (parent.scrollHeight > parent.clientHeight + 12) {
+        const overflow = getComputedStyle(parent).overflowY;
+        if (overflow === 'auto' || overflow === 'scroll' || parent.hasAttribute('role')) candidates.add(parent);
+      }
+    }
+  }
+  for (const element of candidates) element.scrollTop = element.scrollHeight;
+})()"""
 
 
 # ─────────────────────────────────────────────────────────────
@@ -252,7 +564,7 @@ def prepare_rows(posts: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
             continue
         target_url, target_fb_id = post_target_fields(url)
         if not target_fb_id:
-            continue
+            target_fb_id = key.split(":")[-1] if ":" in key else key
         out[key] = dict(p, post_key=key, post_url=canonical_post_url(url), target_url=target_url, target_fb_id=target_fb_id)
     return list(out.values())
 
@@ -336,7 +648,6 @@ def _run_fetch_job(
     from modules.module_08_interaction_seeding.automation import FacebookSeedingBot
     from modules.module_08_interaction_seeding.routes.seeding_routes import _safe_close_seeding_driver, broadcast
     from modules.module_11_page_scanner.page_detail_scan import _open_and_wait, has_session_cookie
-    from modules.module_11_page_scanner.posts_scan import extract_posts_batch
 
     owner = str(owner_id)
     ctx_token = owner_context.set(owner)
@@ -398,11 +709,11 @@ def _run_fetch_job(
         name = _source_name(driver)
         if name:
             _update_job(job_id, source_name=name)
-        exclude = (name,) if name else ()
         log("info", f"Bắt đầu cuộn feed{(' của ' + name) if name else ''} — lấy tới khi hết bài hoặc bấm Dừng.")
 
-        rounds = idle = deep = errors = 0
+        rounds = idle = errors = 0
         last_height = 0
+        bottom_blocked_last_round = False
         last_new_at = time.time()
         last_beat = 0.0
         next_rest_at = LONG_REST_EVERY
@@ -417,9 +728,11 @@ def _run_fetch_job(
                 height = int(info.get("height") or 0)
                 fresh = 0
                 if marked:
-                    posts = extract_posts_batch(
-                        driver, exclude_names=exclude, selector=f'[data-m8-batch="{batch}"]', limit=BATCH_SIZE * 2
-                    )
+                    # Facebook updates a caption asynchronously after "See more".
+                    if int(info.get("expanded") or 0):
+                        time.sleep(0.9)
+                    batch_selector = f'[data-m8-batch="{batch}"]'
+                    posts = _read_post_batch(driver, batch_selector)
                     rows = prepare_rows(posts)
                     fresh = sum(1 for r in rows if r["post_key"] not in found_keys)
                     found_keys.update(r["post_key"] for r in rows)
@@ -450,22 +763,30 @@ def _run_fetch_job(
                 log("info", f"Đã lấy {len(found_keys):,} bài ({new_total:,} bài mới).".replace(",", "."))
                 next_log_at += 50
 
+            # Nếu lần cuộn trước đã chạm đáy, cho thêm một vòng đọc DOM sau thời gian chờ.
+            # Chỉ kết thúc khi vòng đó cũng không thấy bài mới hay chiều cao feed tăng.
+            height_increased = height > last_height
+            # DOM có thể dựng lại node cũ khiến marked > 0 dù không có bài mới.
+            # Khi đã chạm đáy, chỉ cần một vòng xác nhận không có bài mới/chiều cao mới.
+            if bottom_blocked_last_round and not fresh and not height_increased:
+                status, reason = "COMPLETED", "END_OF_FEED"
+                break
+            bottom_blocked_last_round = False
+
             # Có bài mới trên trang hoặc trang dài thêm (Facebook vừa tải thêm) = còn tiến triển
-            if marked or height > last_height:
-                idle = deep = 0
+            if marked or height_increased:
+                idle = 0
             else:
                 idle += 1
             last_height = max(last_height, height)
 
             if idle >= IDLE_ROUNDS:
-                # Có thể Facebook chưa kịp tải thêm: kéo hẳn xuống đáy và chờ
+                # Hết tiến triển qua nhiều vòng: kéo xuống đáy, chờ một lượt tải cuối,
+                # rồi xác nhận thêm một vòng DOM trước khi kết thúc.
                 driver.execute_script(_SCROLL_BOTTOM_JS)
                 stop.wait(DEEP_WAIT_S)
                 idle = 0
-                deep += 1
-                if deep >= DEEP_CHECKS:
-                    status, reason = "COMPLETED", "END_OF_FEED"
-                    break
+                bottom_blocked_last_round = True
                 continue
             if now - last_new_at >= NO_NEW_TIMEOUT_S:
                 status, reason = "COMPLETED", "END_OF_FEED"
@@ -477,8 +798,9 @@ def _run_fetch_job(
             if len(found_keys) >= next_rest_at:
                 next_rest_at += LONG_REST_EVERY
                 stop.wait(random.uniform(*LONG_REST_S))
-            driver.execute_script(_SCROLL_JS)
+            scroll_info = driver.execute_script(_SCROLL_JS) or {}
             stop.wait(random.uniform(*SCROLL_PAUSE_S))
+            bottom_blocked_last_round = bool(scroll_info.get("at_bottom") and not scroll_info.get("moved"))
         else:
             status, reason = "STOPPED", "USER_STOPPED"
     except Exception as exc:

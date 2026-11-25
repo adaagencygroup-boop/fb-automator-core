@@ -181,6 +181,8 @@ export const postFetchApi = {
   stopJob: (jobId) => api.post(`/api/seeding/post-fetch/jobs/${jobId}/stop`),
   // { source_key, q, type: all|photo|video|text, page, page_size } → { items, total, counts }
   listPosts: (params) => api.get("/api/seeding/post-fetch/posts", { params }),
+  clearPosts: (sourceKey) =>
+    api.delete("/api/seeding/post-fetch/posts", { params: { source_key: sourceKey } }),
   // Id N bài đầu (chưa có trong danh sách seeding) khớp bộ lọc → { ids }
   firstPostIds: (params) => api.get("/api/seeding/post-fetch/posts/ids", { params }),
   // { source_key, mode: ids|all|first, ids, exclude_ids, first_n, q, type } → { added, skipped, message }
