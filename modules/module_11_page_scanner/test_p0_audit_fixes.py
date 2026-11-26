@@ -22,11 +22,13 @@ from modules.module_11_page_scanner.browser_session import (
     try_acquire_account_job,
 )
 from modules.module_11_page_scanner.page_detail_scan import (
+    _clean_address_line,
     _clean_labeled_website,
     _valid_address,
     clean_category,
     extract_category,
     extract_contact_info,
+    find_phone,
     intro_text,
     merge_contacts,
     resolve_detail_final_status,
@@ -100,14 +102,79 @@ class TestGroupAParsing(unittest.TestCase):
                 "I was scared to trade, because I have been scammed many times, but I had to take one last chance because I heard Tiffany… See more"
             )
         )
-        self.assertEqual(
-            _valid_address("Ho Chi Minh City, Vietnam, 70000"),
+        # Các mẫu rác thật từ DB phải bị chặn
+        for garbage, pname in (
+            ("Sinh tồn lương 5tr", "Sinh tồn lương 5tr"),
+            ("heybesties1201", "HiBesties"),
+            ("HiBesties", "HiBesties"),
+            ("trường utt rất quy mô và hoành tráng, rất là tuyệt vời ạ", "Đại học Công nghệ Giao thông vận tải"),
+            ("0 comments", None),
+            ("1 comment", None),
+            ("Mở cửa 7 ngày trong tuần", None),
+        ):
+            with self.subTest(garbage=garbage):
+                self.assertIsNone(_clean_address_line(garbage, page_name=pname, require_hint=True))
+
+        # Mô phỏng Contact info có dòng Messenger = tên Page chứa số ("Sinh tồn lương 5tr")
+        contact_text = "Contact info\n0868 236 823\nsale@mevinetwork.com\nSinh tồn lương 5tr"
+        res = extract_contact_info(contact_text, page_name="Sinh tồn lương 5tr")
+        self.assertEqual(res["phone"], "0868 236 823")
+        self.assertIsNone(res["address"])
+
+        # Toàn bộ mẫu địa chỉ thật lấy từ DB phải vượt qua 100%
+        real_addresses = [
             "Ho Chi Minh City, Vietnam, 70000",
-        )
-        self.assertEqual(
-            _valid_address("Tầng 3 toà nhà Ellipse . Số 112 Trần Phú , Mộ Lao , Hà Đông , Hanoi, Vietnam, 10000"),
+            "Đường Nguyễn Văn Trác, phường Yên Nghĩa, quận Hà Đông, Hanoi, Vietnam",
+            "Cầu Giấy, Hanoi, Vietnam",
+            "Số 29A, ngõ 124 phố Vĩnh Tuy, phường Vĩnh Hưng, Hanoi, Vietnam, 100000",
+            "số 41A Đường Phú Diễn, Phường Phú Diễn, Hanoi, Vietnam",
+            "Hanoi, Vietnam",
+            "298 Cầu Diễn Minh Khai Bắc Từ Liêm Hà Nội, Hanoi, Vietnam, 84",
+            "Toà nhà A2, số 298, đường Cầu Diễn, phường Minh Khai, thành phố Hà Nội, Hanoi, Vietnam",
+            "Trụ sở chính: Số 22A/25 ngõ 629 Kim Mã, 100000",
+            "Quận Ba Đình, Hanoi",
             "Tầng 3 toà nhà Ellipse . Số 112 Trần Phú , Mộ Lao , Hà Đông , Hanoi, Vietnam, 10000",
-        )
+            "56 CMT8, Phường Long Khánh, Đồng Nai, Long Khanh, Vietnam",
+            "194 Phạm Cự Lượng, Phường An Hải, TP Đà Nẵng, Da Nang, Vietnam",
+            "141 Chiến Thắng - Phường Thanh Liệt - TP. Hà Nội, Thanh Tri, Vietnam, 7000",
+            "22 Cao Xuân Huy, Mỹ Đình 2, Nam Từ Liêm, Hanoi, Vietnam, 11309",
+            "Hà Nội, 100000",
+            "146 đường B2, phường An Khánh, Ho Chi Minh City, Vietnam",
+            "Lives in Ho Chi Minh City, Vietnam",
+        ]
+        for addr in real_addresses:
+            with self.subTest(real_address=addr):
+                self.assertEqual(_clean_address_line(addr, require_hint=True), addr)
+
+    def test_find_phone_strict_vn_and_international_plus(self):
+        # SĐT thật VN + quốc tế có '+'
+        valid_cases = [
+            ("Hotline: 091 508 58 93", "091 508 58 93"),
+            ("Liên hệ 0868 236 823", "0868 236 823"),
+            ("Tel: 024 3552 6713", "024 3552 6713"),
+            ("SĐT: 028 7307 7807", "028 7307 7807"),
+            ("CSKH 1800 6601", "1800 6601"),
+            ("Tổng đài 1900 633695", "1900 633695"),
+            ("Call +84 912 345 678", "+84 912 345 678"),
+            ("US Office: +1 415 555 2671", "+1 415 555 2671"),
+        ]
+        for text, expected in valid_cases:
+            with self.subTest(valid_phone=text):
+                self.assertEqual(find_phone(text), expected)
+
+        # Mã số thuế, STK, đầu 01 cũ, URL ID phải bị loại
+        invalid_cases = [
+            "MST: 0101234567",
+            "Mã số thuế: 0312345678",
+            "STK: 0912345678",
+            "Số tài khoản: 001100123456",
+            "0123456789",
+            "https://facebook.com/0912345678",
+            "id=0912345678",
+        ]
+        for text in invalid_cases:
+            with self.subTest(invalid_phone=text):
+                self.assertIsNone(find_phone(text))
 
     def test_contact_extraction_ignores_reviews_and_ig_handle(self):
         about_with_review = (
