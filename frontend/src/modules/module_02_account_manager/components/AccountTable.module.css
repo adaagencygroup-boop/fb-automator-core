@@ -106,7 +106,7 @@
 }
 
 /* Switch the whole action group, never an individual filter, to another row. */
-@container (min-width: 1040px) {
+@container (min-width: 1160px) {
   .toolbar {
     grid-template-columns: minmax(0, 1fr) auto;
   }

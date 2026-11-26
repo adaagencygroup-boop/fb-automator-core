@@ -178,30 +178,19 @@ def _check_in_browser(uid: str, chrome: str, profile_dir: str) -> str | None:
                 logger.debug("Could not close status browser for UID %s", uid, exc_info=True)
 
 
-def check_profile_status(uid: str) -> str | None:
-    """Graph picture, public HTTP profile, then isolated browser; None is inconclusive."""
-    if not uid.isascii() or not uid.isdigit():
-        return None
-    with httpx.Client(follow_redirects=True, headers={
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
-    }) as client:
-        try:
-            picture = client.get(f"https://graph.facebook.com/{uid}/picture?type=normal", timeout=10)
-            host = picture.url.host or ""
-            if (picture.status_code == 200 and (host == "fbcdn.net" or host.endswith(".fbcdn.net"))
-                    and not host.startswith("static.") and "rsrc.php" not in picture.url.path.lower()
-                    and picture.headers.get("content-type", "").lower().startswith("image/")
-                    and picture.content):
-                return "live"
-        except httpx.HTTPError:
-            logger.debug("Graph picture check failed for UID %s", uid)
-        try:
-            response = client.get(f"https://m.facebook.com/profile.php?id={uid}", timeout=15)
-            status = _classify_profile(uid, response)
-            if status is not None:
-                return status
-        except httpx.HTTPError:
-            logger.debug("Public HTTP check failed for UID %s", uid)
+def _is_live_picture_response(picture: httpx.Response) -> bool:
+    host = picture.url.host or ""
+    return bool(
+        picture.status_code == 200
+        and (host == "fbcdn.net" or host.endswith(".fbcdn.net"))
+        and not host.startswith("static.")
+        and "rsrc.php" not in picture.url.path.lower()
+        and picture.headers.get("content-type", "").lower().startswith("image/")
+        and picture.content
+    )
+
+
+def _check_in_isolated_browser(uid: str) -> str | None:
     chrome = _find_chrome()
     if not chrome:
         return None
@@ -214,3 +203,49 @@ def check_profile_status(uid: str) -> str | None:
     except Exception:
         logger.debug("Status profile setup failed for UID %s", uid, exc_info=True)
         return None
+
+
+_DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+}
+
+
+async def check_profile_status_http_async(uid: str, client: httpx.AsyncClient) -> str | None:
+    """Async Graph picture + public HTTP profile check; None means inconclusive."""
+    if not uid.isascii() or not uid.isdigit():
+        return None
+    try:
+        picture = await client.get(f"https://graph.facebook.com/{uid}/picture?type=normal", timeout=10)
+        if _is_live_picture_response(picture):
+            return "live"
+    except httpx.HTTPError:
+        logger.debug("Graph picture check failed for UID %s", uid)
+    try:
+        response = await client.get(f"https://m.facebook.com/profile.php?id={uid}", timeout=15)
+        status = _classify_profile(uid, response)
+        if status is not None:
+            return status
+    except httpx.HTTPError:
+        logger.debug("Public HTTP check failed for UID %s", uid)
+    return None
+
+
+def check_profile_status(uid: str) -> str | None:
+    """Graph picture, public HTTP profile, then isolated browser; None is inconclusive."""
+    if not uid.isascii() or not uid.isdigit():
+        return None
+    with httpx.Client(follow_redirects=True, headers=_DEFAULT_HEADERS) as client:
+        try:
+            picture = client.get(f"https://graph.facebook.com/{uid}/picture?type=normal", timeout=10)
+            if _is_live_picture_response(picture):
+                return "live"
+        except httpx.HTTPError:
+            logger.debug("Graph picture check failed for UID %s", uid)
+        try:
+            response = client.get(f"https://m.facebook.com/profile.php?id={uid}", timeout=15)
+            status = _classify_profile(uid, response)
+            if status is not None:
+                return status
+        except httpx.HTTPError:
+            logger.debug("Public HTTP check failed for UID %s", uid)
+    return _check_in_isolated_browser(uid)
