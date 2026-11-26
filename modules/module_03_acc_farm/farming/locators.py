@@ -61,16 +61,19 @@ REACTION_NAMES_VI = {"Like": "Thích", "Love": "Yêu thích", "Care": "Thương 
                      "Sad": "Buồn", "Angry": "Phẫn nộ"}
 
 FARM_STORY = {
-    # Khay story trên Trang chủ: bỏ thẻ "Create story" (/stories/create/), lấy thẻ "<Tên>'s story"
+    # Khay story trên Trang chủ: bỏ thẻ "Create story" / "Tạo tin" (/stories/create/), lấy thẻ "<Tên>'s story" /
+    # "Tin của <Tên>". Tiếng Việt (kiểm 2026-11-26): region "Tin" > grid "khay tin". Dự phòng không phụ thuộc ngôn ngữ:
+    # link /stories/<người>/... có nhãn trên Trang chủ
     "tray_cards": [
-        '//div[@aria-label="stories tray" or @aria-label="Stories"]//a[contains(@href, "/stories/") '
-        'and not(contains(@href, "/stories/create"))]',
+        '//div[@aria-label="stories tray" or @aria-label="Stories" or @aria-label="khay tin" or @aria-label="Tin"]'
+        '//a[contains(@href, "/stories/") and not(contains(@href, "/stories/create"))]',
+        '//a[@aria-label and contains(@href, "/stories/") and not(contains(@href, "/stories/create"))]',
     ],
     # Nút sang khung kế khi phím mũi tên phải không sang được (focus ở ô trả lời / ngoài trình xem sau khi thả cảm
     # xúc). Khung kế của cùng người ("Next card") trước, hết khung thì sang người kế ("Next Bucket")
     "next": [
         '//div[@role="button" and (@aria-label="Next card" or @aria-label="Next Card" or @aria-label="Thẻ tiếp theo")]',
-        '//div[@role="button" and (@aria-label="Next Bucket" or @aria-label="Next bucket")]',
+        '//div[@role="button" and (@aria-label="Next Bucket" or @aria-label="Next bucket" or @aria-label="Tin tiếp theo")]',
     ],
 }
 
@@ -128,14 +131,16 @@ FARM_GROUP = {
     "dialog_submit": './/span[normalize-space()="Gửi" or normalize-space()="Submit"]/ancestor::div[@role="button"][1]',
 }
 
-# Rời nhóm trên trang groups/joins (đã kiểm 2026-10-22, giao diện tiếng Anh; chữ tiếng Việt chưa kiểm chứng)
+# Rời nhóm trên trang groups/joins (kiểm tiếng Anh 2026-10-22, tiếng Việt 2026-11-26: nút … "Xem thêm", cột trái
+# "Xem tất cả", hộp xác nhận "Rời nhóm?" với nút "Hủy" / "Rời khỏi nhóm")
 FARM_LEAVE = {
-    # Nút ... (More) trên thẻ nhóm giữa trang
-    "more_buttons": ['//div[@role="main"]//div[@role="button" and @aria-label="More"]'],
-    # "See all" ở cột trái: hiện đủ nhóm đã tham gia kèm "Last active"
+    # Nút ... (More / Xem thêm) trên thẻ nhóm giữa trang
+    "more_buttons": ['//div[@role="main"]//div[@role="button" and (@aria-label="More" or @aria-label="Xem thêm")]'],
+    # "See all" / "Xem tất cả" ở cột trái: hiện đủ nhóm đã tham gia kèm "Last active" / "Lần hoạt động gần nhất"
     "see_all": [
-        '//*[@role="navigation"]//*[(@role="button" or @role="link") and (normalize-space()="See all" or normalize-space()="See All")]',
-        '//*[@role="navigation"]//span[normalize-space()="See all" or normalize-space()="See All"]',
+        '//*[@role="navigation"]//*[(@role="button" or @role="link") and (normalize-space()="See all" or normalize-space()="See All" '
+        'or normalize-space()="Xem tất cả")]',
+        '//*[@role="navigation"]//span[normalize-space()="See all" or normalize-space()="See All" or normalize-space()="Xem tất cả"]',
     ],
     # Mục "Leave group" trong menu More
     "menu_leave": [
@@ -147,10 +152,12 @@ FARM_LEAVE = {
         '//div[@role="dialog"][.//*[normalize-space()="Leave group?" or normalize-space()="Delete group by leaving?" '
         'or normalize-space()="Rời nhóm?"]]',
     ],
-    "dialog_confirm": './/div[@role="button"][.//span[normalize-space()="Leave group" or normalize-space()="Rời nhóm"]]'
-                      ' | .//div[@role="button" and (@aria-label="Leave group" or @aria-label="Rời nhóm")]',
-    "dialog_cancel": './/div[@role="button"][.//span[normalize-space()="Cancel" or normalize-space()="Hủy"]]'
-                     ' | .//div[@role="button" and (@aria-label="Cancel" or @aria-label="Hủy")]',
+    # Nút xác nhận: tiếng Việt là "Rời khỏi nhóm" (không phải "Rời nhóm" như mục menu)
+    "dialog_confirm": './/div[@role="button"][.//span[normalize-space()="Leave group" or normalize-space()="Rời nhóm" '
+                      'or normalize-space()="Rời khỏi nhóm"]]'
+                      ' | .//div[@role="button" and (@aria-label="Leave group" or @aria-label="Rời nhóm" or @aria-label="Rời khỏi nhóm")]',
+    "dialog_cancel": './/div[@role="button"][.//span[normalize-space()="Cancel" or normalize-space()="Hủy" or normalize-space()="Huỷ"]]'
+                     ' | .//div[@role="button" and (@aria-label="Cancel" or @aria-label="Hủy" or @aria-label="Huỷ")]',
 }
 
 FARM_NOTIF = {
