@@ -25,7 +25,7 @@ from .browser_session import (
 )
 from .entity_classify import build_about_url
 from .followers_scan import page_key_to_url
-from .page_source import parse_follower_count
+from .page_source import clean_page_url, extract_page_identifier, parse_follower_count
 from .scanner import (
     _ACTIVE_PAUSE_EVENTS,
     _ACTIVE_SESSIONS_LOCK,
@@ -613,12 +613,53 @@ def _is_social_host(url: str) -> bool:
     return any(host == h or host.endswith("." + h) for h in _SOCIAL_HOSTS)
 
 
+_FB_INTERNAL_SEGMENTS = {
+    "about", "photos", "reels", "reels_tab", "followers", "following", "reviews",
+    "posts", "videos", "events", "mentions", "l.php", "sharer", "sharer.php",
+    "share", "login", "privacy", "terms", "help", "policies", "messages",
+    "watch", "marketplace", "groups", "photo",
+}
+
+
 def _clean_website(url: str) -> Optional[str]:
     url = (url or "").strip().rstrip("/")
     if not url or _is_social_host(url):
         return None
     if not _DOMAIN_RE.match(url):
         return None
+    return url
+
+
+def _clean_labeled_website(url: str, page_url: Optional[str] = None) -> Optional[str]:
+    """
+    Website có nhãn rõ ràng ('Website' / 'Trang web') trong mục Links:
+    - Chấp nhận domain thường như _clean_website.
+    - Cho phép link mạng xã hội / facebook.com/<path> (vd: facebook.com/ats305)
+      nhưng loại domain trần không có path (vd: 'facebook.com'), path hệ thống FB,
+      và link tự trỏ chính Page đang quét.
+    """
+    url = (url or "").strip().rstrip("/")
+    if not url or not _DOMAIN_RE.match(url):
+        return None
+    if not _is_social_host(url):
+        return url
+    try:
+        parsed = urlparse(url if "://" in url else f"https://{url}")
+    except ValueError:
+        return None
+    host = (parsed.netloc or "").lower().split(":")[0]
+    path = (parsed.path or "").strip("/")
+    if not path:
+        return None
+    seg0 = path.split("/", 1)[0].lower()
+    if host.endswith("facebook.com") or host == "fb.com" or host.endswith(".fb.com"):
+        if seg0 in _FB_INTERNAL_SEGMENTS or seg0.startswith("directory_"):
+            return None
+        if page_url:
+            cand_key, _ = extract_page_identifier(clean_page_url(url))
+            self_key, _ = extract_page_identifier(clean_page_url(page_url))
+            if cand_key and self_key and cand_key == self_key:
+                return None
     return url
 
 
@@ -694,15 +735,27 @@ def intro_text(header_text: str) -> str:
     return "\n".join(out)
 
 
+_ABOUT_BODY_MARKERS = {
+    "intro", "overview", "tổng quan", "bio", "tiểu sử",
+    "details", "chi tiết", "links", "liên kết", "contact info", "thông tin liên hệ",
+    "contact and basic info", "thông tin liên hệ và cơ bản",
+    "privacy and legal info", "quyền riêng tư và thông tin pháp lý",
+    "personal details", "thông tin cá nhân", "category", "hạng mục",
+}
+
+
 def trim_about_noise(about_text: str) -> str:
-    """Cắt phần Reviews / Reels / Posts phía dưới trang About để tránh kéo rác vào thông tin liên hệ."""
+    """
+    Cắt phần Reviews / Reels / Posts phía dưới trang About để tránh kéo rác vào thông tin liên hệ.
+    Chỉ bắt đầu cắt sau khi đã đi qua khung nội dung About (tránh cắt nhầm thanh tab đầu trang All/About/Reels/Photos).
+    """
     out = []
     seen_about_body = False
     for line in (about_text or "").splitlines():
         norm = _norm_label(line)
-        if norm in ("about", "giới thiệu"):
+        if not seen_about_body and norm in _ABOUT_BODY_MARKERS:
             seen_about_body = True
-        if seen_about_body and norm in _ABOUT_NOISE_HEADS:
+        elif seen_about_body and norm in _ABOUT_NOISE_HEADS:
             break
         out.append(line)
     return "\n".join(out)
@@ -953,6 +1006,7 @@ def extract_contact_info(
     about_text: str,
     links: Optional[List[Dict[str, Any]]] = None,
     panel_items: Optional[List[Dict[str, Any]]] = None,
+    page_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Tách SĐT / Email / Website / Địa chỉ + Rating / Giờ mở cửa / YouTube / Messenger / Tọa độ
@@ -989,6 +1043,19 @@ def extract_contact_info(
                 ]
                 if addr_lines and not result["address"]:
                     result["address"] = "\n".join(addr_lines)
+
+            # Section: Liên kết (links) — bắt link có nhãn Website / Trang web (kể cả span facebook.com/<path>)
+            elif sec == "links" and not result["website"]:
+                row_lines = row["lines"]
+                has_website_label = any(_norm_label(ln) in _LABELS["website"] for ln in row_lines)
+                if has_website_label:
+                    for ln in row_lines:
+                        if _norm_label(ln) in _LABELS["website"]:
+                            continue
+                        site = _clean_labeled_website(ln, page_url=page_url)
+                        if site:
+                            result["website"] = site
+                            break
 
             # Section: Thông tin liên hệ (contact)
             elif sec == "contact":
@@ -1044,7 +1111,7 @@ def extract_contact_info(
     validators = {
         "phone": find_phone,
         "email": find_email,
-        "website": _clean_website,
+        "website": lambda cand: _clean_labeled_website(cand, page_url=page_url),
         "address": _valid_address,
     }
     for idx, line in enumerate(lines):
@@ -1233,6 +1300,7 @@ def scan_page_contacts(
             trim_about_noise(page.get("about_text") or ""),
             page.get("links") or [],
             page.get("panel_items") or [],
+            page_url=page_url,
         )
 
     raws: List[Dict[str, Any]] = []
@@ -1249,7 +1317,12 @@ def scan_page_contacts(
     contacts = merge_contacts(
         parse(contact_page),
         parse(about),
-        extract_contact_info(intro_text(header_text), header_links or about_links, header_panel_items),
+        extract_contact_info(
+            intro_text(header_text),
+            header_links or about_links,
+            header_panel_items,
+            page_url=page_url,
+        ),
     )
 
     if not contact_href and not any(contacts.get(k) for k in ("phone", "email", "website")) \

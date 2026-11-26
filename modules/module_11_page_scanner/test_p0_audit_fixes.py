@@ -22,6 +22,7 @@ from modules.module_11_page_scanner.browser_session import (
     try_acquire_account_job,
 )
 from modules.module_11_page_scanner.page_detail_scan import (
+    _clean_labeled_website,
     _valid_address,
     clean_category,
     extract_category,
@@ -130,6 +131,45 @@ class TestGroupAParsing(unittest.TestCase):
         self.assertEqual(merged["address"], "Ho Chi Minh City, Vietnam, 70000")
         self.assertEqual(merged["phone"], "091 508 58 93")
         self.assertIsNone(merged["website"])
+
+    def test_labeled_website_accepts_social_with_path_and_rejects_bare_or_self(self):
+        # Giống 100% DOM thật: có cả thanh tab đầu trang (All/About/Reels/Photos) lẫn khung About → Links
+        links_tab_text = (
+            "Anh Tú\n2M followers • 59 following\nAll\nAbout\nReels\nPhotos\nFollowers\nMore\n"
+            "About\nIntro\nCategory\nDetails\nLinks\nContact info\nLinks\nfacebook.com/ats305\nWebsite\nReels\nAnh Tú's reels"
+        )
+        # Không truyền panel_items → kiểm chứng cả trim_about_noise lẫn nhãn Website thuần text
+        res_text_only = extract_contact_info(
+            trim_about_noise(links_tab_text),
+            [],
+            [],
+            page_url="https://www.facebook.com/anhtusinger",
+        )
+        self.assertEqual(res_text_only["website"], "facebook.com/ats305")
+
+        links_panel = [
+            {"section": "links", "row": 1, "text": "facebook.com/ats305", "href": ""},
+            {"section": "links", "row": 1, "text": "Website", "href": ""},
+        ]
+        res = extract_contact_info(
+            trim_about_noise(links_tab_text),
+            [],
+            links_panel,
+            page_url="https://www.facebook.com/anhtusinger",
+        )
+        self.assertEqual(res["website"], "facebook.com/ats305")
+
+        # Chặn domain trần không có path (vd header "Links\nfacebook.com")
+        self.assertIsNone(_clean_labeled_website("facebook.com", page_url="https://www.facebook.com/anhtusinger"))
+        # Chặn tự trỏ chính Page đang quét
+        self.assertIsNone(_clean_labeled_website("facebook.com/anhtusinger", page_url="https://www.facebook.com/anhtusinger"))
+        # Chặn path nội bộ FB
+        self.assertIsNone(_clean_labeled_website("facebook.com/about", page_url="https://www.facebook.com/anhtusinger"))
+        # Chấp nhận social khác có path khi có nhãn Website
+        self.assertEqual(_clean_labeled_website("instagram.com/anhtu305"), "instagram.com/anhtu305")
+        # Link KHÔNG có nhãn Website (header chỉ có "Links\nfacebook.com/ats305") vẫn bị chặn để tránh rác
+        unlabeled = extract_contact_info("Links\nfacebook.com/ats305\nContact info")
+        self.assertIsNone(unlabeled["website"])
 
     def test_parse_page_file_content_uppercase_headers_and_url_keyword(self):
         csv_upper = "Name,URL\nLan Ngoc,https://www.facebook.com/fromninhduonglanngoc\nBlueGym,https://www.facebook.com/bluegymhd\n"
