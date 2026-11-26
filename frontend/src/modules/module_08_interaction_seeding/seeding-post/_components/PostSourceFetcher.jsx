@@ -95,6 +95,8 @@ export default function PostSourceFetcher({
   targetsVersion = 0,
   onTargetsAdded,
   onFetchRunningChange,
+  onFetchBusyChange,
+  onStopHandlerChange,
   onAdded,
 }) {
   const [sourceUrl, setSourceUrl] = useState("");
@@ -172,6 +174,10 @@ export default function PostSourceFetcher({
   useEffect(() => {
     onFetchRunningChange?.(running);
   }, [running, onFetchRunningChange]);
+
+  useEffect(() => {
+    onFetchBusyChange?.(fetchBusy);
+  }, [fetchBusy, onFetchBusyChange]);
 
   // Tìm kiếm: chờ người dùng gõ xong
   useEffect(() => {
@@ -421,17 +427,24 @@ export default function PostSourceFetcher({
   };
 
   const handleStop = async () => {
-    if (!job?.id) return;
+    if (!job?.id) return false;
     setStopping(true);
     try {
       const res = await postFetchApi.stopJob(job.id);
       if (res?.job) setJob(res.job);
+      return !!res?.job;
     } catch (err) {
       toast.error(err?.message || "Không dừng được.", "LỖI");
+      return false;
     } finally {
       setStopping(false);
     }
   };
+
+  useEffect(() => {
+    onStopHandlerChange?.(handleStop);
+    return () => onStopHandlerChange?.(null);
+  }, [handleStop, onStopHandlerChange]);
 
   const handleClearResults = async () => {
     if (!sourceKey || fetchBusy || loadingList) return;

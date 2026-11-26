@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { FileSpreadsheet, RotateCcw, CheckCircle2, Trash2, ExternalLink, Copy, AlertCircle, Link2 } from "lucide-react";
 import ConfirmDialog from "@/components/ui/confirm-dialog";
 import { toast } from "@/components/ui/toast";
@@ -32,6 +32,23 @@ export default function PostTargetSection({
   onFetchRunningChange,
 }) {
   const [isFetchOpen, setIsFetchOpen] = useState(false);
+  const [fetchRunning, setFetchRunning] = useState(false);
+  const [fetchBusy, setFetchBusy] = useState(false);
+  const stopFetchRef = useRef(null);
+  const registerFetchStop = useCallback((handler) => {
+    stopFetchRef.current = handler;
+  }, []);
+  const handleFetchRunningChange = useCallback((running) => {
+    setFetchRunning(!!running);
+  }, []);
+  const handleFetchBusyChange = useCallback((busy) => {
+    setFetchBusy(!!busy);
+    onFetchRunningChange?.(busy);
+  }, [onFetchRunningChange]);
+  const handleConfirmStopFetch = useCallback(async () => {
+    if (!stopFetchRef.current) return false;
+    return stopFetchRef.current();
+  }, []);
   const [textInput, setTextInput] = useState("");
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
   const [dbHistoryTargets, setDbHistoryTargets] = useState([]);
@@ -336,14 +353,22 @@ export default function PostTargetSection({
       }
     >
       {/* Popup lấy bài: luôn mount để lượt lấy bài chạy nền vẫn được theo dõi khi đóng popup */}
-      <PostFetchModal open={isFetchOpen} onClose={() => setIsFetchOpen(false)}>
+      <PostFetchModal
+        open={isFetchOpen}
+        running={fetchBusy}
+        canStop={fetchRunning}
+        onStop={handleConfirmStopFetch}
+        onClose={() => setIsFetchOpen(false)}
+      >
         <PostSourceFetcher
           accounts={accounts}
           selectedUids={selectedUids}
           disabled={isRunning}
           targetsVersion={targetsVersion}
           onTargetsAdded={onTargetsReload}
-          onFetchRunningChange={onFetchRunningChange}
+          onFetchRunningChange={handleFetchRunningChange}
+          onFetchBusyChange={handleFetchBusyChange}
+          onStopHandlerChange={registerFetchStop}
           onAdded={() => setIsFetchOpen(false)}
         />
       </PostFetchModal>

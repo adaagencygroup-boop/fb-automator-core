@@ -50,7 +50,6 @@ TRIM_MEDIA = True               # giải phóng ảnh / video của bài đã đ
 _jobs_lock = threading.Lock()
 _running_jobs: Dict[int, Dict[str, Any]] = {}   # job_id -> {"stop": Event, "owner": int}
 
-
 def running_job_id(user_id: Optional[int]) -> Optional[int]:
     """Job lấy bài đang chạy của user (None nếu không có)."""
     if user_id is None:
@@ -61,11 +60,9 @@ def running_job_id(user_id: Optional[int]) -> Optional[int]:
                 return job_id
     return None
 
-
 def is_job_running(job_id: int) -> bool:
     with _jobs_lock:
         return job_id in _running_jobs
-
 
 def request_stop(job_id: int) -> bool:
     """Yêu cầu dừng job. False nếu job không chạy trong engine này."""
@@ -76,7 +73,6 @@ def request_stop(job_id: int) -> bool:
     info["stop"].set()
     return True
 
-
 def try_register_job(job_id: int, owner_id: int) -> Optional[int]:
     """Đăng ký job đang chạy. Trả về id job khác của user nếu đã có (khi đó không đăng ký)."""
     with _jobs_lock:
@@ -86,18 +82,15 @@ def try_register_job(job_id: int, owner_id: int) -> Optional[int]:
         _running_jobs[job_id] = {"stop": threading.Event(), "owner": owner_id}
     return None
 
-
 def _unregister_job(job_id: int) -> None:
     with _jobs_lock:
         _running_jobs.pop(job_id, None)
-
 
 # ─────────────────────────────────────────────────────────────
 # Khoá bài viết & link chuẩn hoá
 # ─────────────────────────────────────────────────────────────
 _PFBID_RE = re.compile(r"pfbid[0-9A-Za-z]+")
 _KEEP_QUERY = {"story_fbid", "id", "fbid", "v", "multi_permalinks"}
-
 
 def seeding_post_key(url: str) -> str:
     """Khoá duy nhất của 1 bài. Xử lý link pfbid (trang cá nhân hay dùng) mà normalize_post_key của Module 11 gộp chung."""
@@ -123,7 +116,6 @@ def seeding_post_key(url: str) -> str:
 
     return normalize_post_key(raw)
 
-
 def canonical_post_url(url: str) -> str:
     """Bỏ tham số tracking của feed (__cft__[0], __tn__, …), chỉ giữ tham số dùng để nhận diện bài."""
     raw = (url or "").strip().split("#")[0]
@@ -134,7 +126,6 @@ def canonical_post_url(url: str) -> str:
     path = parsed.path.rstrip("/") or parsed.path
     return urlunparse((parsed.scheme or "https", parsed.netloc or "www.facebook.com", path, "", urlencode(keep), ""))
 
-
 def post_target_fields(post_url: str) -> tuple[str, str]:
     """(target_url, target_fb_id) giống hệt khi người dùng tự dán link bài vào danh sách seeding."""
     from modules.module_08_interaction_seeding.routes.seeding_routes import extract_fb_id, normalize_target_url
@@ -142,6 +133,16 @@ def post_target_fields(post_url: str) -> tuple[str, str]:
     target_url = normalize_target_url(canonical_post_url(post_url), "POST")
     return target_url, extract_fb_id(target_url, "POST")
 
+def _is_fetchable_post_url(post_url: str) -> bool:
+    """Module 8 accepts regular post permalinks and Reels, but not /.../videos/... links."""
+    value = str(post_url or "").strip()
+    if re.search(r"/(?:[^/?#]+/)?videos?/[^/?#]+(?:[/?#]|$)", value, re.I):
+        return False
+    return bool(re.search(
+        r"/posts/[^/?#]+|/permalink(?:\.php)?(?:/[^/?#]+)?(?:[?#]|$)|/reels?/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)|[?&]story_fbid=",
+        value,
+        re.I,
+    ))
 
 def _resolve_post_url_from_embed_menu(driver, selector: str, candidate_index: int) -> str:
     """Use Facebook's Embed dialog when the feed omits a post permalink href."""
@@ -186,7 +187,7 @@ if (close) close.click();
 else document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
 """)
         post_url = str(post_url).strip()
-        if not re.search(r"/posts/[^/?#]+|/permalink(?:\.php)?(?:/[^/?#]+)?(?:[?#]|$)|/(?:reels?|videos?)/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)|[?&]story_fbid=", post_url, re.I):
+        if not _is_fetchable_post_url(post_url):
             return ""
         return post_url
     except Exception as exc:
@@ -196,7 +197,6 @@ else document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles
         except Exception:
             pass
         return ""
-
 
 def _read_post_batch(driver, selector: str) -> List[Dict[str, Any]]:
     """Đọc bài riêng cho Module 8, không trích số like/comment/share từ DOM."""
@@ -236,7 +236,6 @@ return true;
             "content_cleaned": True,
         })
     return posts
-
 
 # ─────────────────────────────────────────────────────────────
 # JavaScript chạy trên trang Facebook
@@ -308,19 +307,44 @@ if (postsHeading && !scoped && !isProfile) return { found: false, selected: Bool
 return { found: true, selected: Boolean(selected), is_profile: isProfile, posts_heading: Boolean(postsHeading), scoped };
 """
 
+_OPEN_REELS_TAB_JS = r"""
+const visible = (el) => {
+  const rect = el.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+};
+const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+const controls = Array.from(document.querySelectorAll('[role="tab"], a, button, [role="link"], [role="button"]'))
+  .filter(visible)
+  .map((el) => ({ el, label: normalize(el.getAttribute('aria-label') || el.innerText || el.textContent), href: el.href || '' }))
+  .filter(({ el, label, href }) => /^(reels?|thước phim)$/.test(label)
+    || ((el.getAttribute('role') === 'tab' || el.closest('[role="navigation"]')) && /\/reels?(?:[/?#]|$)/i.test(href)));
+if (!controls.length) return { found: false };
+const selected = controls.find(({ el }) => el.getAttribute('aria-selected') === 'true' || el.getAttribute('aria-current') === 'page');
+if (!selected) {
+  controls[0].el.click();
+  return { found: true, selected: false, clicked: true };
+}
+document.querySelectorAll('[data-m8-posts-scope="1"]').forEach((el) => el.removeAttribute('data-m8-posts-scope'));
+return { found: true, selected: true };
+"""
+
 _MARK_BATCH_JS = r"""
 const token = arguments[0];
 const maxN = arguments[1] || 12;
 const MESSAGE_SEL = '[data-ad-rendering-role="story_message"], [data-ad-comet-preview="message"], [data-ad-preview="message"]';
-const LINK_RE = /\/posts\/[^/?#]+|\/permalink(?:\.php)?(?:\/[^/?#]+)?(?:[?#]|$)|\/(?:reels?|videos?)\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)|[?&]story_fbid=/i;
+const LINK_RE = /\/posts\/[^/?#]+|\/permalink(?:\.php)?(?:\/[^/?#]+)?(?:[?#]|$)|\/reels?\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)|[?&]story_fbid=/i;
+const isExcludedVideoUrl = (href) => /\/(?:[^/?#]+\/)?videos?\/[^/?#]+(?:[/?#]|$)/i.test(href || '');
 const scanScope = document.querySelector('[data-m8-posts-scope="1"]') || document;
 const candidates = [];
-const hasPostLink = (el) => Array.from(el.querySelectorAll('a[href]')).some((a) => LINK_RE.test(a.href || a.getAttribute('href') || ''));
+const hasPostLink = (el) => Array.from(el.querySelectorAll('a[href]')).some((a) => {
+  const href = a.href || a.getAttribute('href') || '';
+  return !isExcludedVideoUrl(href) && LINK_RE.test(href);
+});
 const linkRank = (anchor) => {
   const href = anchor.href || anchor.getAttribute('href') || '';
   if (/\/posts\/[^/?#]+/i.test(href)) return 0;
   if (/\/permalink(?:\.php)?(?:\/[^/?#]+)?(?:[?#]|$)/i.test(href) || /[?&]story_fbid=/i.test(href)) return 1;
-  if (/\/(?:reels?|videos?)\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)/i.test(href)) return 2;
+  if (/\/reels?\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)/i.test(href)) return 2;
   return 3;
 };
 const linksForPost = (el) => {
@@ -333,7 +357,8 @@ const linksForPost = (el) => {
     const anchors = root.querySelectorAll('a[href]');
     if (anchors.length > 64) break;
     for (const anchor of anchors) {
-      if (LINK_RE.test(anchor.href || anchor.getAttribute('href') || '') && !links.includes(anchor)) links.push(anchor);
+      const href = anchor.href || anchor.getAttribute('href') || '';
+      if (!isExcludedVideoUrl(href) && LINK_RE.test(href) && !links.includes(anchor)) links.push(anchor);
     }
   }
   if (sharedContext && links.length && links.every((anchor) => linkRank(anchor) >= 2)) return [];
@@ -396,11 +421,13 @@ const hasPostActions = (el) => Array.from(el.querySelectorAll('[role="button"]')
 const addCandidate = (el) => {
   if (el) refreshMarker(el);
   if (!el || el.hasAttribute('data-m8-done') || el.hasAttribute('data-m8-batch')) return;
+  const links = Array.from(el.querySelectorAll('a[href]')).map((a) => a.href || a.getAttribute('href') || '');
+  if (links.some(isExcludedVideoUrl) && !links.some((href) => !isExcludedVideoUrl(href) && LINK_RE.test(href))) return;
   if (candidates.some((existing) => existing.contains(el) || el.contains(existing))) return;
   candidates.push(el);
 };
 const hasMediaPostLink = (el) => Array.from(el.querySelectorAll('a[href]')).some((anchor) =>
-  /\/(?:reels?|videos?)\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)/i.test(anchor.href || anchor.getAttribute('href') || '')
+  /\/reels?\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)/i.test(anchor.href || anchor.getAttribute('href') || '')
 );
 
 // Dùng message của bài làm mốc; không chọn wrapper Timeline/Feed hoặc article của bình luận.
@@ -476,7 +503,7 @@ const isCommentLink = (anchor) => {
   return false;
 };
 for (const anchor of scanScope.querySelectorAll(
-  'a[href*="/posts/"], a[href*="/permalink"], a[href*="/reel/"], a[href*="/reels/"], a[href*="/videos/"], a[href*="story_fbid="]'
+  'a[href*="/posts/"], a[href*="/permalink"], a[href*="/reel/"], a[href*="/reels/"], a[href*="story_fbid="]'
 )) {
   if (candidates.length >= maxN) break;
   if (!LINK_RE.test(anchor.href || anchor.getAttribute('href') || '') || isCommentLink(anchor)) continue;
@@ -623,11 +650,12 @@ for (const [candidateIndex, node] of postNodes.entries()) {
     if (!rawUrl) return '';
     try {
       const url = new URL(rawUrl, location.href);
+      if (/\/(?:[^/?#]+\/)?videos?\/[^/?#]+(?:\/|$)/i.test(url.pathname)) return '';
       const storyId = url.searchParams.get('story_fbid') || url.searchParams.get('fbid');
       if (storyId) return `post:${storyId}`;
       const postMatch = url.pathname.match(/\/posts\/([^/?#]+)/i);
       if (postMatch) return `post:${postMatch[1]}`;
-      const mediaMatch = url.pathname.match(/\/(?:reels?|videos?)\/([^/?#]+)/i);
+      const mediaMatch = url.pathname.match(/\/reels?\/([^/?#]+)/i);
       if (mediaMatch) return `media:${mediaMatch[1]}`;
       const videoId = url.searchParams.get('v');
       return videoId ? `media:${videoId}` : '';
@@ -732,7 +760,7 @@ for (const [candidateIndex, node] of postNodes.entries()) {
     const href = anchor.href || anchor.getAttribute('href') || '';
     if (/\/posts\/[^/?#]+/i.test(href)) return 0;
     if (/\/permalink(?:\.php)?(?:\/[^/?#]+)?(?:[?#]|$)/i.test(href) || /[?&]story_fbid=/i.test(href)) return 1;
-    if (/\/(?:reels?|videos?)\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)/i.test(href)) return 2;
+    if (/\/reels?\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)/i.test(href)) return 2;
     return 3;
   };
   // A feed card may contain both its own /posts/pfbid... permalink and a
@@ -748,7 +776,8 @@ for (const [candidateIndex, node] of postNodes.entries()) {
     if (anchors.length > 64) break;
     for (const anchor of anchors) {
       const href = anchor.href || anchor.getAttribute('href') || '';
-      if (/\/posts\/[^/?#]+|\/permalink(?:\.php)?(?:\/[^/?#]+)?(?:[?#]|$)|\/(?:reels?|videos?)\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)|[?&]story_fbid=/i.test(href)
+      if (!/\/(?:[^/?#]+\/)?videos?\/[^/?#]+(?:[/?#]|$)/i.test(href)
+        && /\/posts\/[^/?#]+|\/permalink(?:\.php)?(?:\/[^/?#]+)?(?:[?#]|$)|\/reels?\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)|[?&]story_fbid=/i.test(href)
         && !isCommentLink(anchor, linkRoot) && !postLinks.includes(anchor)) postLinks.push(anchor);
     }
   }
@@ -760,7 +789,7 @@ for (const [candidateIndex, node] of postNodes.entries()) {
   try { if (markerKey) markerUrl = new URL(markerKey, location.href).href; } catch {}
   const postUrl = postLink ? (postLink.href || postLink.getAttribute('href') || '') : markerUrl;
   const lowerUrl = postUrl.toLowerCase();
-  const postType = /\/(reel|reels|videos?|watch)\b/.test(lowerUrl) || node.querySelector('video')
+  const postType = /\/(reels?|watch)\b/.test(lowerUrl) || node.querySelector('video')
     ? 'video'
     : /\/photo\/?\?/.test(lowerUrl) || node.querySelector('img[src*="scontent"]')
       ? 'photo'
@@ -835,7 +864,7 @@ _SCROLL_JS = r"""(() => {
   // Một số layout Facebook cuộn trong vùng feed thay vì document.
   const scanScope = document.querySelector('[data-m8-posts-scope="1"]') || document;
   const anchors = scanScope.querySelectorAll(
-    'a[href*="/posts/"], a[href*="/permalink"], a[href*="/reel/"], a[href*="/reels/"], a[href*="/videos/"], a[href*="story_fbid="]'
+    'a[href*="/posts/"], a[href*="/permalink"], a[href*="/reel/"], a[href*="/reels/"], a[href*="story_fbid="]'
   );
   const candidates = new Set();
   for (const anchor of anchors) {
@@ -870,7 +899,7 @@ _SCROLL_BOTTOM_JS = r"""(() => {
   window.scrollTo(0, root.scrollHeight);
   const scanScope = document.querySelector('[data-m8-posts-scope="1"]') || document;
   const anchors = scanScope.querySelectorAll(
-    'a[href*="/posts/"], a[href*="/permalink"], a[href*="/reel/"], a[href*="/reels/"], a[href*="/videos/"], a[href*="story_fbid="]'
+    'a[href*="/posts/"], a[href*="/permalink"], a[href*="/reel/"], a[href*="/reels/"], a[href*="story_fbid="]'
   );
   const candidates = new Set();
   for (const anchor of anchors) {
@@ -885,13 +914,11 @@ _SCROLL_BOTTOM_JS = r"""(() => {
   for (const element of candidates) element.scrollTop = element.scrollHeight;
 })()"""
 
-
 # ─────────────────────────────────────────────────────────────
 # Bảng & DB
 # ─────────────────────────────────────────────────────────────
 _schema_lock = threading.Lock()
 _schema_ready = False
-
 
 def init_post_fetch_schema() -> None:
     """Tạo các bảng mới của Seeding (lấy bài + mẫu cấu hình) nếu chưa có, và chốt các job lấy bài bị bỏ dở
@@ -918,7 +945,6 @@ def init_post_fetch_schema() -> None:
             )
         _schema_ready = True
 
-
 @contextmanager
 def _session():
     from modules.module_02_account_manager.database.connection import SessionLocal
@@ -933,12 +959,13 @@ def _session():
     finally:
         s.close()
 
-
 def prepare_rows(posts: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Bài đọc từ feed → dòng lưu kho tạm (khoá pfbid-safe, link chuẩn hoá, bỏ trùng trong cùng nhóm)."""
     out: Dict[str, Dict[str, Any]] = {}
     for p in posts:
         url = (p.get("post_url") or "").strip()
+        if not _is_fetchable_post_url(url):
+            continue
         key = seeding_post_key(url)
         if not url or not key or key in out:
             continue
@@ -947,7 +974,6 @@ def prepare_rows(posts: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
             target_fb_id = key.split(":")[-1] if ":" in key else key
         out[key] = dict(p, post_key=key, post_url=canonical_post_url(url), target_url=target_url, target_fb_id=target_fb_id)
     return list(out.values())
-
 
 def _update_job(job_id: int, **fields) -> None:
     if not fields:
@@ -958,7 +984,6 @@ def _update_job(job_id: int, **fields) -> None:
             s.execute(text(f"UPDATE seeding_post_fetch_jobs SET {sets} WHERE id = :job_id"), dict(fields, job_id=job_id))
     except Exception as exc:
         logger.warning(f"[SeedingFetch #{job_id}] cập nhật job lỗi: {exc}")
-
 
 def job_to_dict(job: SeedingPostFetchJob | None) -> Optional[Dict[str, Any]]:
     if job is None:
@@ -980,7 +1005,6 @@ def job_to_dict(job: SeedingPostFetchJob | None) -> Optional[Dict[str, Any]]:
         "finished_at": to_vn_iso(job.finished_at),
         "is_running": is_job_running(job.id),
     }
-
 
 # ─────────────────────────────────────────────────────────────
 # Chạy job
@@ -1004,7 +1028,6 @@ def start_fetch_thread(
         daemon=True,
     ).start()
 
-
 def _source_name(driver) -> str:
     try:
         title = (driver.title or "").strip()
@@ -1012,7 +1035,6 @@ def _source_name(driver) -> str:
         return ""
     title = re.sub(r"^\(\d+\+?\)\s*", "", title)
     return re.sub(r"\s*[|\-–]\s*Facebook\s*$", "", title).strip()[:255]
-
 
 def _select_posts_tab(driver, stop: threading.Event) -> bool:
     """Select Posts on Pages; profiles may expose their posts directly in the feed."""
@@ -1035,11 +1057,22 @@ def _select_posts_tab(driver, stop: threading.Event) -> bool:
         logger.debug("Unable to select Facebook Posts tab: %s", exc)
         return False
 
+def _select_reels_tab(driver, stop: threading.Event) -> bool:
+    """Open the dedicated Reels feed when Facebook exposes one on the source."""
+    try:
+        state = driver.execute_script(_OPEN_REELS_TAB_JS) or {}
+        if state.get("clicked"):
+            if stop.wait(1.5):
+                return False
+            state = driver.execute_script(_OPEN_REELS_TAB_JS) or {}
+        return bool(state.get("found") and state.get("selected"))
+    except Exception as exc:
+        logger.debug("Unable to select Facebook Reels tab: %s", exc)
+        return False
 
 def _browser_gone(exc: Exception) -> bool:
     msg = str(exc).lower()
     return any(s in msg for s in ("no such window", "not reachable", "invalid session id", "disconnected", "target window already closed"))
-
 
 def _run_fetch_job(
     job_id: int,
@@ -1130,174 +1163,215 @@ def _run_fetch_job(
             _update_job(job_id, source_name=name)
         log("info", f"Bắt đầu cuộn feed{(' của ' + name) if name else ''} — lấy tới khi hết bài hoặc bấm Dừng.")
 
-        rounds = idle = errors = 0
-        seen_candidate_signatures: set[str] = set()
-        unresolved_cards: Dict[str, Dict[str, Any]] = {}
-        last_height = 0
-        bottom_blocked_last_round = False
-        bottom_no_progress_rounds = 0
-        last_new_at = time.time()
-        last_beat = 0.0
-        next_rest_at = LONG_REST_EVERY
-        next_log_at = 100
+        for feed_tab in ("posts", "reels"):
+            rounds = idle = errors = 0
+            seen_candidate_signatures: set[str] = set()
+            unresolved_cards: Dict[str, Dict[str, Any]] = {}
+            last_height = 0
+            bottom_blocked_last_round = False
+            bottom_no_progress_rounds = 0
+            last_new_at = time.time()
+            last_beat = 0.0
+            next_rest_at = LONG_REST_EVERY
+            next_log_at = 100
 
-        while not stop.is_set():
-            rounds += 1
-            batch = f"b{rounds}"
-            marked = 0
-            try:
-                info = driver.execute_script(_MARK_BATCH_JS, batch, BATCH_SIZE) or {}
-                marked = int(info.get("marked") or 0)
-                height = int(info.get("height") or 0)
-                candidate_signatures = {
-                    str(signature)
-                    for signature in (card.get("signature") for card in (info.get("cards") or []))
-                    if signature
-                }
-                candidate_progress = len(candidate_signatures - seen_candidate_signatures)
-                seen_candidate_signatures.update(candidate_signatures)
-                cards_by_index = {
-                    int(card.get("index")): card
-                    for card in (info.get("cards") or [])
-                    if card.get("index") is not None
-                }
-                fresh = 0
-                if marked:
-                    # Facebook updates a caption asynchronously after "See more".
-                    if int(info.get("expanded") or 0):
-                        time.sleep(0.9)
-                    batch_selector = f'[data-m8-batch="{batch}"]'
-                    posts = _read_post_batch(driver, batch_selector)
-                    if posts and any(not post.get("post_url") or not (post.get("published_at") or post.get("published_text")) for post in posts):
-                        # The feed can render the post card before its permalink timestamp is hydrated.
-                        # Re-read this small batch once so the date is saved with the post on first display.
-                        stop.wait(0.35)
-                        refreshed_posts = _read_post_batch(driver, batch_selector)
-                        posts_by_identity = {
-                            (post.get("post_key") or post.get("card_signature") or f"candidate:{post.get('candidate_index')}"): post
-                            for post in posts
-                        }
-                        for refreshed in refreshed_posts:
-                            key = refreshed.get("post_key") or refreshed.get("card_signature") or f"candidate:{refreshed.get('candidate_index')}"
-                            previous = posts_by_identity.get(key)
-                            if previous is None:
-                                posts_by_identity[key] = refreshed
-                                continue
-                            if not previous.get("published_at") and refreshed.get("published_at"):
-                                previous["published_at"] = refreshed["published_at"]
-                                previous["published_text"] = refreshed.get("published_text")
-                            if len(refreshed.get("content") or "") > len(previous.get("content") or ""):
-                                previous["content"] = refreshed["content"]
-                            if not previous.get("post_type") and refreshed.get("post_type"):
-                                previous["post_type"] = refreshed["post_type"]
-                        posts = list(posts_by_identity.values())
-                    resolved_candidate_indexes = {
-                        int(post["candidate_index"])
-                        for post in posts
-                        if post.get("candidate_index") is not None
-                        and post.get("post_url")
-                        and (post.get("published_at") or post.get("published_text"))
+            while not stop.is_set():
+                rounds += 1
+                batch = f"b{rounds}"
+                marked = 0
+                try:
+                    info = driver.execute_script(_MARK_BATCH_JS, batch, BATCH_SIZE) or {}
+                    marked = int(info.get("marked") or 0)
+                    height = int(info.get("height") or 0)
+                    candidate_signatures = {
+                        str(signature)
+                        for signature in (card.get("signature") for card in (info.get("cards") or []))
+                        if signature
                     }
-                    complete_indexes = set(resolved_candidate_indexes)
-                    for post in posts:
-                        index = post.get("candidate_index")
-                        card = cards_by_index.get(int(index)) if index is not None else {}
-                        signature = str(post.get("card_signature") or (card or {}).get("signature") or "")
-                        key = str(post.get("post_key") or (card or {}).get("post_key") or "")
-                        if signature or key:
-                            identity = key or signature
-                            if post.get("post_url") and (post.get("published_at") or post.get("published_text")):
-                                unresolved_cards.pop(identity, None)
-                                if signature:
-                                    unresolved_cards.pop(signature, None)
-                            else:
-                                unresolved_cards[identity] = {
-                                    "signature": signature,
-                                    "post_key": key,
-                                    "post_url": post.get("post_url"),
-                                    "published_at": post.get("published_at"),
-                                }
-                    for index, card in cards_by_index.items():
-                        identity = str(card.get("post_key") or card.get("signature") or f"candidate:{rounds}:{index}")
-                        if index in complete_indexes:
-                            unresolved_cards.pop(identity, None)
-                            if card.get("signature"):
-                                unresolved_cards.pop(str(card["signature"]), None)
-                        elif not any(int(post.get("candidate_index", -1)) == index for post in posts):
-                            unresolved_cards[identity] = {
-                                "signature": card.get("signature"),
-                                "post_key": card.get("post_key"),
-                                "post_url": "",
-                                "published_at": None,
+                    candidate_progress = len(candidate_signatures - seen_candidate_signatures)
+                    seen_candidate_signatures.update(candidate_signatures)
+                    cards_by_index = {
+                        int(card.get("index")): card
+                        for card in (info.get("cards") or [])
+                        if card.get("index") is not None
+                    }
+                    fresh = 0
+                    if marked:
+                        # Facebook updates a caption asynchronously after "See more".
+                        if int(info.get("expanded") or 0):
+                            time.sleep(0.9)
+                        batch_selector = f'[data-m8-batch="{batch}"]'
+                        posts = _read_post_batch(driver, batch_selector)
+                        if posts and any(not post.get("post_url") or not (post.get("published_at") or post.get("published_text")) for post in posts):
+                            # The feed can render the post card before its permalink timestamp is hydrated.
+                            # Re-read this small batch once so the date is saved with the post on first display.
+                            stop.wait(0.35)
+                            refreshed_posts = _read_post_batch(driver, batch_selector)
+                            posts_by_identity = {
+                                (post.get("post_key") or post.get("card_signature") or f"candidate:{post.get('candidate_index')}"): post
+                                for post in posts
                             }
-                    pending_candidate_indexes = sorted(
-                        set(range(marked)) - resolved_candidate_indexes
-                        | {
+                            for refreshed in refreshed_posts:
+                                key = refreshed.get("post_key") or refreshed.get("card_signature") or f"candidate:{refreshed.get('candidate_index')}"
+                                previous = posts_by_identity.get(key)
+                                if previous is None:
+                                    posts_by_identity[key] = refreshed
+                                    continue
+                                if not previous.get("published_at") and refreshed.get("published_at"):
+                                    previous["published_at"] = refreshed["published_at"]
+                                    previous["published_text"] = refreshed.get("published_text")
+                                if len(refreshed.get("content") or "") > len(previous.get("content") or ""):
+                                    previous["content"] = refreshed["content"]
+                                if not previous.get("post_type") and refreshed.get("post_type"):
+                                    previous["post_type"] = refreshed["post_type"]
+                            posts = list(posts_by_identity.values())
+                        resolved_candidate_indexes = {
                             int(post["candidate_index"])
                             for post in posts
                             if post.get("candidate_index") is not None
-                            and (not post.get("post_url") or not (post.get("published_at") or post.get("published_text")))
+                            and post.get("post_url")
+                            and (post.get("published_at") or post.get("published_text"))
                         }
-                    )
-                    rows = prepare_rows(posts)
-                    fresh = sum(1 for r in rows if r["post_key"] not in found_keys)
-                    found_keys.update(r["post_key"] for r in rows)
-                    if rows:
-                        # Chỉ lưu tạm (RAM + file trên máy) — DB chỉ ghi khi người dùng bấm thêm bài đã chọn
-                        remaining_for_account = (
-                            max(0, rotate_after_posts - new_total)
-                            if rotate_after_posts > 0
-                            else None
+                        complete_indexes = set(resolved_candidate_indexes)
+                        for post in posts:
+                            index = post.get("candidate_index")
+                            card = cards_by_index.get(int(index)) if index is not None else {}
+                            signature = str(post.get("card_signature") or (card or {}).get("signature") or "")
+                            key = str(post.get("post_key") or (card or {}).get("post_key") or "")
+                            if signature or key:
+                                identity = key or signature
+                                if post.get("post_url") and (post.get("published_at") or post.get("published_text")):
+                                    unresolved_cards.pop(identity, None)
+                                    if signature:
+                                        unresolved_cards.pop(signature, None)
+                                else:
+                                    unresolved_cards[identity] = {
+                                        "signature": signature,
+                                        "post_key": key,
+                                        "post_url": post.get("post_url"),
+                                        "published_at": post.get("published_at"),
+                                    }
+                        for index, card in cards_by_index.items():
+                            identity = str(card.get("post_key") or card.get("signature") or f"candidate:{rounds}:{index}")
+                            if index in complete_indexes:
+                                unresolved_cards.pop(identity, None)
+                                if card.get("signature"):
+                                    unresolved_cards.pop(str(card["signature"]), None)
+                            elif not any(int(post.get("candidate_index", -1)) == index for post in posts):
+                                unresolved_cards[identity] = {
+                                    "signature": card.get("signature"),
+                                    "post_key": card.get("post_key"),
+                                    "post_url": "",
+                                    "published_at": None,
+                                }
+                        pending_candidate_indexes = sorted(
+                            set(range(marked)) - resolved_candidate_indexes
+                            | {
+                                int(post["candidate_index"])
+                                for post in posts
+                                if post.get("candidate_index") is not None
+                                and (not post.get("post_url") or not (post.get("published_at") or post.get("published_text")))
+                            }
                         )
-                        new_total += fetched_posts_store.upsert(
-                            owner_id,
-                            source_key,
-                            job_id,
-                            rows,
-                            max_new=remaining_for_account,
+                        rows = prepare_rows(posts)
+                        fresh = sum(1 for r in rows if r["post_key"] not in found_keys)
+                        found_keys.update(r["post_key"] for r in rows)
+                        if rows:
+                            # Chỉ lưu tạm (RAM + file trên máy) — DB chỉ ghi khi người dùng bấm thêm bài đã chọn
+                            remaining_for_account = (
+                                max(0, rotate_after_posts - new_total)
+                                if rotate_after_posts > 0
+                                else None
+                            )
+                            new_total += fetched_posts_store.upsert(
+                                owner_id,
+                                source_key,
+                                job_id,
+                                rows,
+                                max_new=remaining_for_account,
+                            )
+                        driver.execute_script(_FINISH_BATCH_JS, batch, TRIM_MEDIA, pending_candidate_indexes)
+                    errors = 0
+                except Exception as exc:
+                    if _browser_gone(exc):
+                        error = "Chrome đã bị đóng trong lúc lấy bài."
+                        return
+                    errors += 1
+                    if marked:
+                        try:
+                            driver.execute_script(_FINISH_BATCH_JS, batch, False, list(range(marked)))
+                        except Exception:
+                            pass
+                    logger.warning(f"[SeedingFetch #{job_id}] vòng {rounds} lỗi: {exc}")
+                    if errors >= MAX_ROUND_ERRORS:
+                        error = f"Lỗi liên tục khi đọc bài: {exc}"
+                        return
+                    stop.wait(2.0)
+                    continue
+
+                now = time.time()
+                if fresh or candidate_progress:
+                    last_new_at = now
+                if fresh or candidate_progress or now - last_beat >= HEARTBEAT_EVERY_S:
+                    _update_job(job_id, found_count=len(found_keys), new_count=new_total, heartbeat_at=vn_now())
+                    last_beat = now
+                if len(found_keys) >= next_log_at:
+                    log("info", f"Đã lấy {len(found_keys):,} bài ({new_total:,} bài mới).".replace(",", "."))
+                    next_log_at += 100
+
+                if rotate_after_posts > 0 and new_total >= rotate_after_posts:
+                    status, reason = "COMPLETED", "ACCOUNT_ROTATION_LIMIT"
+                    log("info", f"Đã quét đủ {rotate_after_posts} bài mới; chuyển sang tài khoản kế tiếp.")
+                    break
+
+                # Nếu lần cuộn trước đã chạm đáy, cho thêm một vòng đọc DOM sau thời gian chờ.
+                # Chỉ kết thúc khi vòng đó cũng không thấy bài mới hay chiều cao feed tăng.
+                height_increased = height > last_height
+                # DOM có thể dựng lại node cũ khiến marked > 0 dù không có bài mới.
+                # Khi đã chạm đáy, chỉ cần một vòng xác nhận không có bài mới/chiều cao mới.
+                if bottom_blocked_last_round and not fresh and not candidate_progress and not height_increased:
+                    bottom_no_progress_rounds += 1
+                    if bottom_no_progress_rounds >= 8:
+                        missing_links = sum(1 for card in unresolved_cards.values() if not card.get("post_url"))
+                        missing_dates = sum(
+                            1 for card in unresolved_cards.values()
+                            if card.get("post_url") and not (card.get("published_at") or card.get("published_text"))
                         )
-                    driver.execute_script(_FINISH_BATCH_JS, batch, TRIM_MEDIA, pending_candidate_indexes)
-                errors = 0
-            except Exception as exc:
-                if _browser_gone(exc):
-                    error = "Chrome đã bị đóng trong lúc lấy bài."
-                    return
-                errors += 1
-                if marked:
-                    try:
-                        driver.execute_script(_FINISH_BATCH_JS, batch, False, list(range(marked)))
-                    except Exception:
-                        pass
-                logger.warning(f"[SeedingFetch #{job_id}] vòng {rounds} lỗi: {exc}")
-                if errors >= MAX_ROUND_ERRORS:
-                    error = f"Lỗi liên tục khi đọc bài: {exc}"
-                    return
-                stop.wait(2.0)
-                continue
+                        if missing_links:
+                            status, reason = "FAILED", "INCOMPLETE_POST_DATA"
+                            error = f"C\u00f2n {missing_links} b\u00e0i ch\u01b0a x\u00e1c \u0111\u1ecbnh \u0111\u01b0\u1ee3c link b\u00e0i vi\u1ebft; c\u00e1c b\u00e0i n\u00e0y ch\u01b0a th\u1ec3 th\u00eam v\u00e0o danh s\u00e1ch seeding."
+                        elif missing_dates:
+                            status, reason = "COMPLETED", "END_OF_FEED_WITH_MISSING_DATES"
+                            error = f"\u0110\u00e3 qu\u00e9t xong; Facebook ch\u01b0a cung c\u1ea5p ng\u00e0y \u0111\u0103ng cho {missing_dates} b\u00e0i. C\u00e1c b\u00e0i n\u00e0y v\u1eabn c\u00f3 trong danh s\u00e1ch."
+                        else:
+                            status, reason = "COMPLETED", "END_OF_FEED"
+                        break
+                    # Facebook may still be fetching the next batch after scroll
+                    # position reaches the current bottom. Recheck several times.
+                    if stop.wait(4.0):
+                        status, reason = "STOPPED", "USER_STOPPED"
+                        break
+                    driver.execute_script(_SCROLL_BOTTOM_JS)
+                    continue
+                bottom_no_progress_rounds = 0
+                bottom_blocked_last_round = False
 
-            now = time.time()
-            if fresh or candidate_progress:
-                last_new_at = now
-            if fresh or candidate_progress or now - last_beat >= HEARTBEAT_EVERY_S:
-                _update_job(job_id, found_count=len(found_keys), new_count=new_total, heartbeat_at=vn_now())
-                last_beat = now
-            if len(found_keys) >= next_log_at:
-                log("info", f"Đã lấy {len(found_keys):,} bài ({new_total:,} bài mới).".replace(",", "."))
-                next_log_at += 100
+                # Có bài mới trên trang hoặc trang dài thêm (Facebook vừa tải thêm) = còn tiến triển
+                if fresh or candidate_progress or height_increased:
+                    idle = 0
+                else:
+                    idle += 1
+                last_height = max(last_height, height)
 
-            if rotate_after_posts > 0 and new_total >= rotate_after_posts:
-                status, reason = "COMPLETED", "ACCOUNT_ROTATION_LIMIT"
-                log("info", f"Đã quét đủ {rotate_after_posts} bài mới; chuyển sang tài khoản kế tiếp.")
-                break
-
-            # Nếu lần cuộn trước đã chạm đáy, cho thêm một vòng đọc DOM sau thời gian chờ.
-            # Chỉ kết thúc khi vòng đó cũng không thấy bài mới hay chiều cao feed tăng.
-            height_increased = height > last_height
-            # DOM có thể dựng lại node cũ khiến marked > 0 dù không có bài mới.
-            # Khi đã chạm đáy, chỉ cần một vòng xác nhận không có bài mới/chiều cao mới.
-            if bottom_blocked_last_round and not fresh and not candidate_progress and not height_increased:
-                bottom_no_progress_rounds += 1
-                if bottom_no_progress_rounds >= 8:
+                if idle >= IDLE_ROUNDS:
+                    # Hết tiến triển qua nhiều vòng: kéo xuống đáy, chờ một lượt tải cuối,
+                    # rồi xác nhận thêm một vòng DOM trước khi kết thúc.
+                    driver.execute_script(_SCROLL_BOTTOM_JS)
+                    stop.wait(DEEP_WAIT_S)
+                    idle = 0
+                    bottom_blocked_last_round = True
+                    continue
+                if now - last_new_at >= NO_NEW_TIMEOUT_S:
                     missing_links = sum(1 for card in unresolved_cards.values() if not card.get("post_url"))
                     missing_dates = sum(
                         1 for card in unresolved_cards.values()
@@ -1305,65 +1379,35 @@ def _run_fetch_job(
                     )
                     if missing_links:
                         status, reason = "FAILED", "INCOMPLETE_POST_DATA"
-                        error = f"C\u00f2n {missing_links} b\u00e0i ch\u01b0a x\u00e1c \u0111\u1ecbnh \u0111\u01b0\u1ee3c link b\u00e0i vi\u1ebft; c\u00e1c b\u00e0i n\u00e0y ch\u01b0a th\u1ec3 th\u00eam v\u00e0o danh s\u00e1ch seeding."
+                        error = f"H\u1ebft th\u1eddi gian ch\u1edd; c\u00f2n {missing_links} b\u00e0i ch\u01b0a x\u00e1c \u0111\u1ecbnh \u0111\u01b0\u1ee3c link b\u00e0i vi\u1ebft."
                     elif missing_dates:
                         status, reason = "COMPLETED", "END_OF_FEED_WITH_MISSING_DATES"
                         error = f"\u0110\u00e3 qu\u00e9t xong; Facebook ch\u01b0a cung c\u1ea5p ng\u00e0y \u0111\u0103ng cho {missing_dates} b\u00e0i. C\u00e1c b\u00e0i n\u00e0y v\u1eabn c\u00f3 trong danh s\u00e1ch."
                     else:
                         status, reason = "COMPLETED", "END_OF_FEED"
                     break
-                # Facebook may still be fetching the next batch after scroll
-                # position reaches the current bottom. Recheck several times.
-                if stop.wait(4.0):
-                    status, reason = "STOPPED", "USER_STOPPED"
-                    break
-                driver.execute_script(_SCROLL_BOTTOM_JS)
-                continue
-            bottom_no_progress_rounds = 0
-            bottom_blocked_last_round = False
+                if rounds % 10 == 0 and on_checkpoint():
+                    reason, error = "CHECKPOINT", "Nick bị checkpoint / đăng xuất giữa chừng."
+                    return
 
-            # Có bài mới trên trang hoặc trang dài thêm (Facebook vừa tải thêm) = còn tiến triển
-            if fresh or candidate_progress or height_increased:
-                idle = 0
+                if len(found_keys) >= next_rest_at:
+                    next_rest_at += LONG_REST_EVERY
+                    stop.wait(random.uniform(*LONG_REST_S))
+                scroll_info = driver.execute_script(_SCROLL_JS) or {}
+                stop.wait(random.uniform(*SCROLL_PAUSE_S))
+                bottom_blocked_last_round = bool(scroll_info.get("at_bottom") and not scroll_info.get("moved"))
             else:
-                idle += 1
-            last_height = max(last_height, height)
-
-            if idle >= IDLE_ROUNDS:
-                # Hết tiến triển qua nhiều vòng: kéo xuống đáy, chờ một lượt tải cuối,
-                # rồi xác nhận thêm một vòng DOM trước khi kết thúc.
-                driver.execute_script(_SCROLL_BOTTOM_JS)
-                stop.wait(DEEP_WAIT_S)
-                idle = 0
-                bottom_blocked_last_round = True
-                continue
-            if now - last_new_at >= NO_NEW_TIMEOUT_S:
-                missing_links = sum(1 for card in unresolved_cards.values() if not card.get("post_url"))
-                missing_dates = sum(
-                    1 for card in unresolved_cards.values()
-                    if card.get("post_url") and not (card.get("published_at") or card.get("published_text"))
-                )
-                if missing_links:
-                    status, reason = "FAILED", "INCOMPLETE_POST_DATA"
-                    error = f"H\u1ebft th\u1eddi gian ch\u1edd; c\u00f2n {missing_links} b\u00e0i ch\u01b0a x\u00e1c \u0111\u1ecbnh \u0111\u01b0\u1ee3c link b\u00e0i vi\u1ebft."
-                elif missing_dates:
-                    status, reason = "COMPLETED", "END_OF_FEED_WITH_MISSING_DATES"
-                    error = f"\u0110\u00e3 qu\u00e9t xong; Facebook ch\u01b0a cung c\u1ea5p ng\u00e0y \u0111\u0103ng cho {missing_dates} b\u00e0i. C\u00e1c b\u00e0i n\u00e0y v\u1eabn c\u00f3 trong danh s\u00e1ch."
-                else:
-                    status, reason = "COMPLETED", "END_OF_FEED"
-                break
-            if rounds % 10 == 0 and on_checkpoint():
-                reason, error = "CHECKPOINT", "Nick bị checkpoint / đăng xuất giữa chừng."
-                return
-
-            if len(found_keys) >= next_rest_at:
-                next_rest_at += LONG_REST_EVERY
-                stop.wait(random.uniform(*LONG_REST_S))
-            scroll_info = driver.execute_script(_SCROLL_JS) or {}
-            stop.wait(random.uniform(*SCROLL_PAUSE_S))
-            bottom_blocked_last_round = bool(scroll_info.get("at_bottom") and not scroll_info.get("moved"))
-        else:
-            status, reason = "STOPPED", "USER_STOPPED"
+                status, reason = "STOPPED", "USER_STOPPED"
+            can_continue_to_reels = feed_tab == "posts" and not stop.is_set() and (reason == "END_OF_FEED" or reason == "END_OF_FEED_WITH_MISSING_DATES" or reason == "INCOMPLETE_POST_DATA")
+            if can_continue_to_reels:
+                previous_phase = (status, reason, error)
+                if _select_reels_tab(driver, stop):
+                    status, reason, error = "FAILED", "ERROR", None
+                    log("info", "Đã quét xong tab Bài viết; tiếp tục quét tab Reels…")
+                    continue
+                status, reason, error = previous_phase
+                log("info", "Trang nguồn không có tab Reels; kết thúc sau tab Bài viết.")
+            break
     except Exception as exc:
         logger.exception(f"[SeedingFetch #{job_id}] lỗi: {exc}")
         error = "Chrome đã bị đóng trong lúc lấy bài." if _browser_gone(exc) else f"Lỗi: {exc}"

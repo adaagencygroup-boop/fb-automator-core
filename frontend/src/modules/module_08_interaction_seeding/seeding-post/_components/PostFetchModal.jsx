@@ -5,13 +5,41 @@
  * Luôn được mount (chỉ mở / đóng <dialog>) để lượt lấy bài đang chạy nền vẫn được theo dõi khi đóng popup
  * và cờ "đang lấy bài" (chặn nút Bắt đầu seeding) luôn đúng.
  */
-import { useEffect, useId, useRef } from "react";
-import { X } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { AlertTriangle, Loader2, X } from "lucide-react";
 import Toaster from "@/components/Toaster";
 
-export default function PostFetchModal({ open, onClose, title = "Lấy bài viết từ page/ trang cá nhân", children }) {
+export default function PostFetchModal({ open, running = false, canStop = false, onStop, onClose, title = "Lấy bài viết từ page/ trang cá nhân", children }) {
   const dialog = useRef(null);
   const titleId = useId();
+  const [confirmStopOpen, setConfirmStopOpen] = useState(false);
+  const [stoppingOnClose, setStoppingOnClose] = useState(false);
+
+  const requestClose = useCallback(() => {
+    if (running) {
+      setConfirmStopOpen(true);
+      return;
+    }
+    onClose();
+  }, [running, onClose]);
+
+  const confirmStop = useCallback(async () => {
+    if (!canStop) return;
+    setStoppingOnClose(true);
+    try {
+      const stopped = await onStop?.();
+      if (stopped) {
+        setConfirmStopOpen(false);
+        onClose();
+      }
+    } finally {
+      setStoppingOnClose(false);
+    }
+  }, [canStop, onStop, onClose]);
+
+  useEffect(() => {
+    if (!running) setConfirmStopOpen(false);
+  }, [running]);
 
   useEffect(() => {
     const el = dialog.current;
@@ -26,10 +54,10 @@ export default function PostFetchModal({ open, onClose, title = "Lấy bài vi�
       aria-labelledby={titleId}
       onCancel={(event) => {
         event.preventDefault();
-        onClose();
+        requestClose();
       }}
       onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget) requestClose();
       }}
       className="fixed inset-0 m-auto max-h-[90vh] w-[95vw] max-w-4xl overflow-y-auto overscroll-contain rounded-2xl border border-slate-200 bg-white p-0 text-gray-800 shadow-2xl backdrop:bg-slate-900/60"
     >
@@ -39,7 +67,7 @@ export default function PostFetchModal({ open, onClose, title = "Lấy bài vi�
         </h2>
         <button
           type="button"
-          onClick={onClose}
+          onClick={requestClose}
           aria-label="Đóng"
           className="rounded-md p-1.5 text-gray-500 hover:bg-slate-100 hover:text-gray-900"
         >
@@ -48,6 +76,55 @@ export default function PostFetchModal({ open, onClose, title = "Lấy bài vi�
       </header>
       <Toaster />
       {children}
+      {confirmStopOpen && (
+        <div
+          className="fixed inset-0 z-[100002] flex h-full w-full items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !stoppingOnClose) setConfirmStopOpen(false);
+          }}
+        >
+          <section
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby={`${titleId}-stop-title`}
+            aria-describedby={`${titleId}-stop-description`}
+            className="relative w-full max-w-[440px] rounded-2xl border border-amber-200 bg-white p-6 text-slate-900 shadow-2xl"
+          >
+            <div className="flex items-start gap-4">
+              <div className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-amber-200 bg-amber-50 text-amber-600">
+                <AlertTriangle className="size-5" aria-hidden="true" />
+              </div>
+              <div className="min-w-0 pr-5">
+                <h3 id={`${titleId}-stop-title`} className="text-base font-bold">Dừng lấy bài viết?</h3>
+                <p id={`${titleId}-stop-description`} className="mt-1.5 text-xs leading-relaxed text-slate-500">
+                  {canStop
+                    ? "Lượt quét đang chạy. Nếu tiếp tục, hệ thống sẽ dừng quét và đóng popup; các bài đã lấy được vẫn được giữ lại."
+                    : "Yêu cầu lấy bài đang được khởi tạo. Hãy chờ job bắt đầu để có thể dừng và đóng popup an toàn."}
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 flex flex-wrap items-center justify-end gap-2.5">
+              <button
+                type="button"
+                disabled={stoppingOnClose}
+                onClick={() => setConfirmStopOpen(false)}
+                className="inline-flex min-h-8 items-center justify-center rounded-md border border-slate-200 px-4 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Tiếp tục quét
+              </button>
+              <button
+                type="button"
+                disabled={stoppingOnClose || !canStop}
+                onClick={confirmStop}
+                className="inline-flex min-h-8 items-center justify-center gap-1.5 rounded-md bg-amber-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
+              >
+                {(stoppingOnClose || !canStop) && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
+                {canStop ? "Dừng và đóng" : "Đang bắt đầu…"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </dialog>
   );
 }
