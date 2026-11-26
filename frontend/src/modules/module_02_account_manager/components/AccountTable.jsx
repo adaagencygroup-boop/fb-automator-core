@@ -9,6 +9,7 @@ import styles from "./AccountTable.module.css";
 import CustomSelect from "@/components/ui/custom-select";
 import {
   Check,
+  ChevronDown,
   Copy,
   Edit3,
   Eye,
@@ -156,6 +157,8 @@ export default function AccountTable({
   onDeleteAccount,
   onOpenBrowser,
   onBulkDelete,
+  onCopyAllUids,
+  onCopyAllAccounts,
   onRefresh,
   isCheckingStatus = false,
   accountProgress = {},
@@ -168,6 +171,28 @@ export default function AccountTable({
   const [expandedUids, setExpandedUids] = useState(new Set());
   const [closingUids, setClosingUids] = useState(new Set());
   const [copiedUid, setCopiedUid] = useState(null);
+  const [copiedAllUids, setCopiedAllUids] = useState(false);
+  const [isCopyMenuOpen, setIsCopyMenuOpen] = useState(false);
+  const copyAllTimerRef = useRef(null);
+  const copyMenuRef = useRef(null);
+  useEffect(() => () => clearTimeout(copyAllTimerRef.current), []);
+  useEffect(() => {
+    if (!isCopyMenuOpen) return;
+    const onMouseDown = (event) => {
+      if (copyMenuRef.current && !copyMenuRef.current.contains(event.target)) {
+        setIsCopyMenuOpen(false);
+      }
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setIsCopyMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isCopyMenuOpen]);
   const [now, setNow] = useState(null);
   useEffect(() => {
     const update = () => setNow(Date.now());
@@ -257,9 +282,20 @@ export default function AccountTable({
     setLoginFilter(val);
   };
 
+  const selectedVisibleCount = filteredAccounts.filter((account) => selectedUids.includes(account.uid)).length;
   const isAllSelected =
     filteredAccounts.length > 0 &&
-    filteredAccounts.every((account) => selectedUids.includes(account.uid));
+    selectedVisibleCount === filteredAccounts.length;
+  const isIndeterminate =
+    selectedVisibleCount > 0 &&
+    selectedVisibleCount < filteredAccounts.length;
+  const selectAllCheckboxRef = useRef(null);
+  useEffect(() => {
+    if (selectAllCheckboxRef.current) {
+      selectAllCheckboxRef.current.indeterminate = isIndeterminate;
+    }
+  }, [isIndeterminate]);
+  const copyCount = selectedUids.length > 0 ? selectedUids.length : filteredAccounts.length;
 
 
   useEffect(() => {
@@ -316,8 +352,84 @@ export default function AccountTable({
           </div>
         </div>
 
-        {/* Toolbar Action Buttons (Check trạng thái & Xóa) */}
+        {/* Toolbar Action Buttons (Copy, Chuyển mục, Check trạng thái & Xóa) */}
         <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <div ref={copyMenuRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setIsCopyMenuOpen((prev) => !prev)}
+              disabled={isLoading || copyCount === 0}
+              aria-haspopup="menu"
+              aria-expanded={isCopyMenuOpen}
+              title={
+                selectedUids.length > 0
+                  ? `Copy UID hoặc toàn bộ dữ liệu của ${selectedUids.length} tài khoản đã chọn`
+                  : `Copy UID hoặc toàn bộ dữ liệu của ${filteredAccounts.length} tài khoản đang hiển thị`
+              }
+              className="flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+            >
+              {copiedAllUids ? (
+                <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+              ) : (
+                <Copy className="h-3.5 w-3.5 shrink-0" />
+              )}
+              <span>
+                {copiedAllUids ? "Đã copy" : "Copy"}
+                {copyCount > 0 && (
+                  <span className="tabular-nums"> ({copyCount})</span>
+                )}
+              </span>
+              <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform ${isCopyMenuOpen ? "rotate-180" : ""}`} />
+            </button>
+
+            {isCopyMenuOpen && (
+              <div
+                role="menu"
+                className="absolute left-0 top-full z-30 mt-1.5 w-60 rounded-xl border border-slate-200 bg-white p-1 shadow-lg"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={async () => {
+                    setIsCopyMenuOpen(false);
+                    if (!onCopyAllUids) return;
+                    const ok = await onCopyAllUids();
+                    if (ok) {
+                      setCopiedAllUids(true);
+                      clearTimeout(copyAllTimerRef.current);
+                      copyAllTimerRef.current = setTimeout(() => setCopiedAllUids(false), 1500);
+                    }
+                  }}
+                  className="flex w-full flex-col items-start rounded-lg px-3 py-2 text-left hover:bg-slate-50 cursor-pointer"
+                >
+                  <span className="text-xs font-semibold text-slate-800">Copy UID</span>
+                  <span className="text-[11px] text-slate-500">
+                    Mỗi UID 1 dòng ({copyCount} acc)
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={async () => {
+                    setIsCopyMenuOpen(false);
+                    if (!onCopyAllAccounts) return;
+                    const ok = await onCopyAllAccounts();
+                    if (ok) {
+                      setCopiedAllUids(true);
+                      clearTimeout(copyAllTimerRef.current);
+                      copyAllTimerRef.current = setTimeout(() => setCopiedAllUids(false), 1500);
+                    }
+                  }}
+                  className="flex w-full flex-col items-start rounded-lg px-3 py-2 text-left hover:bg-slate-50 cursor-pointer"
+                >
+                  <span className="text-xs font-semibold text-slate-800">Copy toàn bộ dữ liệu</span>
+                  <span className="text-[11px] text-slate-500">
+                    Chuẩn Import (uid|pass|2fa|...)
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
           <button type="button" onClick={onMoveCategory}
             disabled={isLoading || categoryUnavailable || selectedUids.length === 0}
             title={`Chuyển mục cho ${selectedUids.length} tài khoản đã chọn`}
@@ -328,18 +440,27 @@ export default function AccountTable({
             </span>
           </button>
           {/* Check Status Button */}
-          <button
-            type="button"
-            onClick={onRefresh}
-            disabled={isLoading || isCheckingStatus || selectedUids.length === 0}
-            className="flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[#A7F3D0] bg-[#ECFDF5] hover:bg-[#D1FAE5] px-2 text-xs font-semibold text-[#047857] transition disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer shadow-2xs"
-            title="Kiểm tra trạng thái Live/Die của các tài khoản đã chọn"
-          >
-            <CheckStatusIcon className={`w-3 h-3 ${isCheckingStatus ? "animate-spin [animation-direction:reverse]" : ""}`} />
-            <span>{isCheckingStatus ? "Đang kiểm tra..." : "Check trạng thái"}
-              {selectedUids.length > 0 && <span className="tabular-nums"> ({selectedUids.length})</span>}
-            </span>
-          </button>
+          {(() => {
+            const checkCount = selectedUids.length > 0 ? selectedUids.length : filteredAccounts.length;
+            return (
+              <button
+                type="button"
+                onClick={onRefresh}
+                disabled={isLoading || isCheckingStatus || checkCount === 0}
+                className="flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[#A7F3D0] bg-[#ECFDF5] hover:bg-[#D1FAE5] px-2 text-xs font-semibold text-[#047857] transition disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer shadow-2xs"
+                title={
+                  selectedUids.length > 0
+                    ? `Kiểm tra trạng thái Live/Die của ${selectedUids.length} tài khoản đã chọn`
+                    : `Kiểm tra trạng thái Live/Die của toàn bộ ${filteredAccounts.length} tài khoản đang hiển thị`
+                }
+              >
+                <CheckStatusIcon className={`w-3 h-3 ${isCheckingStatus ? "animate-spin [animation-direction:reverse]" : ""}`} />
+                <span>{isCheckingStatus ? "Đang kiểm tra..." : "Check trạng thái"}
+                  {checkCount > 0 && <span className="tabular-nums"> ({checkCount})</span>}
+                </span>
+              </button>
+            );
+          })()}
 
           {/* Bulk Delete Button */}
           <button
@@ -380,8 +501,10 @@ export default function AccountTable({
             <tr className="h-11 border-b border-[#E2E8F0]">
               <th className="px-1 py-2 text-center bg-[#F8FAFC]">
                 <input
+                  ref={selectAllCheckboxRef}
                   type="checkbox"
                   checked={isAllSelected}
+                  aria-checked={isIndeterminate ? "mixed" : isAllSelected}
                   disabled={isLoading || !!loadError}
                   aria-label="Chọn tất cả tài khoản"
                   onChange={() => onSelectAll(filteredAccounts.map((a) => a.uid))}

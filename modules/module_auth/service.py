@@ -24,7 +24,78 @@ from modules.module_auth.security import (
 )
 
 LOCKED_STATUSES = ("banned", "locked", "rejected")
+_ACCOUNT_SECRET_COLUMNS = ("password", "two_fa", "pass_mail")
+logger = logging.getLogger(__name__)
 FEATURE_NAMES = {key: re.sub(r"^\d+\.\s*", "", name) for key, name, _description, _order in SYSTEM_DEFAULT_FEATURES}
+
+
+def _table_exists(cursor, table_name: str) -> bool:
+    if db._is_postgres:
+        cursor.execute(
+            db._normalize_query(
+                "SELECT 1 AS ok FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ? LIMIT 1"
+            ),
+            (table_name,),
+        )
+    else:
+        cursor.execute(
+            "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+            (table_name,),
+        )
+    return cursor.fetchone() is not None
+
+
+def _reencrypt_user_accounts_for_hwid(cursor, user_id: int, old_hwid: Optional[str], new_hwid: Optional[str]) -> dict:
+    """Re-encrypt accounts.(password, two_fa, pass_mail) in-memory from old_hwid to new_hwid within the caller's transaction."""
+    stats = {"migrated_accounts": 0, "migrated_fields": 0, "already_migrated_fields": 0, "failed_fields": 0}
+    if not old_hwid or not new_hwid or old_hwid == new_hwid:
+        return stats
+    if not _table_exists(cursor, "accounts"):
+        return stats
+
+    from modules.module_02_account_manager.security.encryption import _crypt, _decrypt
+
+    cursor.execute(
+        db._normalize_query(
+            "SELECT id, password, two_fa, pass_mail FROM accounts WHERE user_id = ? ORDER BY id"
+        ),
+        (str(user_id),),
+    )
+    rows = [dict(r) for r in cursor.fetchall()]
+    for row in rows:
+        updates = {}
+        for col in _ACCOUNT_SECRET_COLUMNS:
+            cipher = row.get(col)
+            if not cipher:
+                continue
+            try:
+                plaintext = _decrypt(cipher, old_hwid)
+            except Exception:
+                try:
+                    _decrypt(cipher, new_hwid)
+                    stats["already_migrated_fields"] += 1
+                except Exception:
+                    stats["failed_fields"] += 1
+                    logger.warning(
+                        "[HWID Re-encrypt] Skipping undecryptable field '%s' on account id=%s (user_id=%s)",
+                        col,
+                        row.get("id"),
+                        user_id,
+                    )
+                continue
+            updates[col] = _crypt(plaintext, new_hwid)
+            stats["migrated_fields"] += 1
+
+        if updates:
+            set_clause = ", ".join(f"{col} = ?" for col in updates)
+            params = tuple(updates.values()) + (row["id"],)
+            cursor.execute(
+                db._normalize_query(f"UPDATE accounts SET {set_clause} WHERE id = ?"),
+                params,
+            )
+            stats["migrated_accounts"] += 1
+
+    return stats
 
 
 def utcnow():
@@ -547,8 +618,16 @@ def verify_license(username, password, hwid, request: Optional[Request], remembe
     if user.get("hwid") and user["hwid"] != hwid:
         raise HTTPException(403, "ERR_HWID_MISMATCH")
     if not user.get("hwid") and hwid:
-        db.execute("UPDATE users SET hwid = ? WHERE id = ?", (hwid, user["id"]))
+        prev_hwid = user.get("previous_hwid")
+        with db.session() as cursor:
+            if prev_hwid and prev_hwid != hwid:
+                _reencrypt_user_accounts_for_hwid(cursor, user["id"], prev_hwid, hwid)
+            cursor.execute(
+                db._normalize_query("UPDATE users SET hwid = ?, previous_hwid = NULL WHERE id = ?"),
+                (hwid, user["id"]),
+            )
         user["hwid"] = hwid
+        user["previous_hwid"] = None
     now = utcnow()
     is_expired = user.get("status") == "expired"
     access, refresh, _ip, _device, _browser, _os_name = issue_browser_tokens(user, request, remember_me)
@@ -780,21 +859,32 @@ def edit_user_admin(user_id: int, payload: dict, request: Request):
         password_sql = ", password_hash = ?"
         params.append(hash_password(payload["password"]))
     hwid_changed = False
+    reencrypt_pair = None
     if "hwid" in payload:
         new_hwid = (payload.get("hwid") or "").strip() or None
-        if new_hwid != (user.get("hwid") or None):
+        old_hwid = user.get("hwid") or None
+        if new_hwid != old_hwid:
             hwid_changed = True
-            password_sql += ", hwid = ?"
-            params.append(new_hwid)
             if new_hwid is None:
-                password_sql += ", last_hwid_reset_at = ?"
-                params.append(utcnow())
+                password_sql += ", previous_hwid = COALESCE(hwid, previous_hwid), hwid = ?, last_hwid_reset_at = ?"
+                params.extend([new_hwid, utcnow()])
+            else:
+                effective_old = old_hwid or user.get("previous_hwid")
+                if effective_old and effective_old != new_hwid:
+                    reencrypt_pair = (effective_old, new_hwid)
+                password_sql += ", previous_hwid = NULL, hwid = ?"
+                params.append(new_hwid)
     params.append(user_id)
-    db.execute(
-        f"""UPDATE users SET username = ?, contact_info = ?, role = ?, status = ?, expired_at = ?{password_sql}
-            WHERE id = ?""",
-        tuple(params),
-    )
+    with db.session() as cursor:
+        if reencrypt_pair:
+            _reencrypt_user_accounts_for_hwid(cursor, user_id, reencrypt_pair[0], reencrypt_pair[1])
+        cursor.execute(
+            db._normalize_query(
+                f"""UPDATE users SET username = ?, contact_info = ?, role = ?, status = ?, expired_at = ?{password_sql}
+                    WHERE id = ?"""
+            ),
+            tuple(params),
+        )
     log_detail = f"status={status}"
     if role == "user":
         feat_list = payload.get("features") if isinstance(payload.get("features"), list) else []
@@ -1227,7 +1317,10 @@ def reset_hwid(user_id: int, reason: str, request: Request):
         raise HTTPException(404, "Không tìm thấy người dùng")
     old = (user.get("hwid") or "")[:10]
     now = utcnow()
-    db.execute("UPDATE users SET hwid = NULL, last_hwid_reset_at = ? WHERE id = ?", (now, user_id))
+    db.execute(
+        "UPDATE users SET previous_hwid = COALESCE(hwid, previous_hwid), hwid = NULL, last_hwid_reset_at = ? WHERE id = ?",
+        (now, user_id),
+    )
     revoke_active_sessions(user_id, now)
     notify(user_id, "SYSTEM_UPDATE", "user", "Mã máy HWID của bạn đã được đặt lại thành công bởi Admin.")
     notify(user_id, "RESET_HWID", "admin", f"Đã Reset HWID cho người dùng: {user['username']}")

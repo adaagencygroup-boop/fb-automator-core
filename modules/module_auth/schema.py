@@ -4,6 +4,7 @@ from core.database.connection import db
 _USER_COLUMNS = {
     "contact_info": "VARCHAR(100)",
     "hwid": "VARCHAR(64)",
+    "previous_hwid": "VARCHAR(64)",
     "expired_at": "TIMESTAMP",
     "last_login_at": "TIMESTAMP",
     "last_login_ip": "VARCHAR(45)",
