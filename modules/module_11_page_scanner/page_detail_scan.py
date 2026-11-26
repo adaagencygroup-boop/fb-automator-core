@@ -86,12 +86,16 @@ if (!pageName) {
   if (title && !GENERIC.test(title)) pageName = title;
 }
 if (!pageName) pageName = (meta('og:title') || '').trim();
-let isVerified = null;
+let isVerified = nameEl ? false : null;
 if (nameEl) {
   let node = nameEl;
   for (let i = 0; i < 4 && node; i++) {
-    if (node.querySelector && node.querySelector(
-      '[aria-label*="Verified"], [aria-label*="verified"], [aria-label*="xác minh"], [aria-label*="Xác minh"]'
+    if (node.querySelector && (
+      node.querySelector(
+        '[aria-label*="Verified"], [aria-label*="verified"], [aria-label*="xác minh"], [aria-label*="Xác minh"], ' +
+        '[title*="Verified"], [title*="verified"], [title*="xác minh"], [title*="Xác minh"]'
+      ) ||
+      Array.from(node.querySelectorAll('svg title')).some((el) => /verified|xác minh/i.test(el.textContent || ''))
     )) { isVerified = true; break; }
     node = node.parentElement;
   }
@@ -107,10 +111,13 @@ if (!avatarUrl) {
   }
 }
 
-const links = Array.from(main.querySelectorAll('a[href]')).slice(0, 400).map((a) => ({
-  href: a.getAttribute('href') || '',
-  text: ((a.innerText || '').trim()).slice(0, 200),
-}));
+const links = Array.from(main.querySelectorAll('a[href]'))
+  .filter((a) => !a.closest('[role="article"], [role="feed"]'))
+  .slice(0, 400)
+  .map((a) => ({
+    href: a.getAttribute('href') || '',
+    text: ((a.innerText || '').trim()).slice(0, 200),
+  }));
 
 const panelItems = [];
 let rowSeq = 0;
@@ -122,6 +129,7 @@ const headingDefs = [
 
 try {
   const headings = Array.from(main.querySelectorAll('h2, h3, [role="heading"], span, div')).filter(el => {
+    if (el.closest('a, [role="tab"], [role="tablist"], [role="navigation"], nav, [role="article"]')) return false;
     const t = (el.innerText || el.textContent || '').trim();
     return t && t.length <= 40 && headingDefs.some(hd => hd.regex.test(t));
   });
@@ -214,6 +222,7 @@ const headingDefs = [
 
 try {
   const headings = Array.from(main.querySelectorAll('h2, h3, [role="heading"], span, div')).filter(el => {
+    if (el.closest('a, [role="tab"], [role="tablist"], [role="navigation"], nav, [role="article"]')) return false;
     const t = (el.innerText || el.textContent || '').trim();
     return t && t.length <= 40 && headingDefs.some(hd => hd.regex.test(t));
   });
@@ -419,7 +428,7 @@ _RATING_RE = re.compile(
 
 
 def parse_rating_info(text: str) -> Tuple[Optional[int], Optional[int]]:
-    """Parse rating: (\d+)% đề xuất ((\d+) lượt đánh giá) -> (rating_percent, rating_count)."""
+    r"""Parse rating: (\d+)% đề xuất ((\d+) lượt đánh giá) -> (rating_percent, rating_count)."""
     m = _RATING_RE.search(text or "")
     if m:
         pct = int(m.group(1))
@@ -625,11 +634,24 @@ def _value_near_label(lines: List[str], idx: int, validator) -> Optional[str]:
     return None
 
 
+_REVIEW_OR_COMMENT_RE = re.compile(
+    r"(?:…|\.{3}|\bsee\s+more\b|\bxem\s+thêm\b|\brecommends\b|\bnot\s+yet\s+rated\b|"
+    r"\bchưa\s+có\s+xếp\s+hạng\b|\b\d+\s*comments?\b|\b\d+\s*bình\s*luận\b|\bđề\s*xuất\b)",
+    re.IGNORECASE,
+)
+
+
 def _valid_address(line: str) -> Optional[str]:
     line = (line or "").strip()
     if not (5 <= len(line) <= 200):
         return None
     if _EMAIL_RE.search(line) or _NOISE_RE.search(line) or line.lower().startswith("http"):
+        return None
+    # Handle 1 từ không có khoảng trắng/dấu phẩy (vd: anhtu305, fptshop.official) không phải địa chỉ
+    if " " not in line and "," not in line:
+        return None
+    # Chặn bài đánh giá / bình luận bị kéo nhầm vào cột địa chỉ
+    if _REVIEW_OR_COMMENT_RE.search(line):
         return None
     if find_phone(line) and len(re.sub(r"\D", "", line)) >= 8 and not _ADDRESS_HINT_RE.search(line):
         return None
@@ -644,13 +666,22 @@ _SECTION_HEADS = {
     "contact info": "contact", "thông tin liên hệ": "contact", "contact": "contact",
 }
 _STOP_HEADS = {
-    "featured", "đáng chú ý", "photos", "ảnh", "posts", "bài viết", "reels", "intro", "giới thiệu",
-    "bio", "tiểu sử", "category", "hạng mục", "about", "filters", "bộ lọc", "see all", "xem tất cả",
-    "page transparency", "minh bạch trang", "more", "xem thêm",
+    "featured", "đáng chú ý", "photos", "ảnh", "posts", "bài viết", "reels", "thước phim",
+    "intro", "giới thiệu", "bio", "tiểu sử", "category", "hạng mục", "about", "filters", "bộ lọc",
+    "see all", "xem tất cả", "page transparency", "minh bạch trang", "tính minh bạch của trang",
+    "more", "xem thêm", "reviews", "đánh giá", "communities", "cộng đồng", "highlights",
+    "personal details", "thông tin cá nhân", "privacy and legal info", "quyền riêng tư và thông tin pháp lý",
+    "follow", "theo dõi", "message", "nhắn tin", "search", "tìm kiếm", "like", "thích",
+    "shop now", "mua ngay", "book now", "đặt ngay", "call now", "gọi ngay", "contact us", "liên hệ với chúng tôi",
+    "all", "tất cả", "followers", "người theo dõi", "following", "đang theo dõi",
+    "work", "công việc", "education", "học vấn", "places lived", "nơi từng sống",
+    "family and relationships", "gia đình và các mối quan hệ", "privacy", "quyền riêng tư",
 }
 _TAB_LABELS = _STOP_HEADS | set(_SECTION_HEADS)
 # Hết cột Giới thiệu trên trang chính — phần sau là bài đăng (nhiễu SĐT/email lạ)
 _INTRO_END = {"featured", "đáng chú ý", "posts", "bài viết", "filters", "bộ lọc"}
+# Phần nhiễu phía dưới trang About (Reviews / Reels / Posts)
+_ABOUT_NOISE_HEADS = {"reviews", "đánh giá", "reels", "thước phim", "posts", "bài viết", "featured", "đáng chú ý"}
 
 
 def intro_text(header_text: str) -> str:
@@ -658,6 +689,20 @@ def intro_text(header_text: str) -> str:
     out = []
     for line in (header_text or "").splitlines():
         if _norm_label(line) in _INTRO_END:
+            break
+        out.append(line)
+    return "\n".join(out)
+
+
+def trim_about_noise(about_text: str) -> str:
+    """Cắt phần Reviews / Reels / Posts phía dưới trang About để tránh kéo rác vào thông tin liên hệ."""
+    out = []
+    seen_about_body = False
+    for line in (about_text or "").splitlines():
+        norm = _norm_label(line)
+        if norm in ("about", "giới thiệu"):
+            seen_about_body = True
+        if seen_about_body and norm in _ABOUT_NOISE_HEADS:
             break
         out.append(line)
     return "\n".join(out)
@@ -739,9 +784,86 @@ def _section_values(lines: List[str]) -> Dict[str, Optional[str]]:
     return found
 
 
-def extract_category(header_text: str) -> Optional[str]:
-    match = re.search(r"(?:Trang|Page)\s*[·•]\s*([^\n·•|]{2,80})", header_text or "", re.IGNORECASE)
-    return match.group(1).strip() if match else None
+_HEADER_TAB_BAR_LABELS = {"all", "tất cả", "about", "giới thiệu", "reels", "photos", "ảnh", "followers", "người theo dõi", "posts", "bài viết"}
+_HEADER_ACTION_LABELS = {
+    "follow", "theo dõi", "following", "đang theo dõi", "message", "nhắn tin", "send message", "gửi tin nhắn",
+    "search", "tìm kiếm", "like", "thích", "liked", "đã thích", "shop now", "mua ngay", "book now", "đặt ngay",
+    "call now", "gọi ngay", "contact us", "liên hệ với chúng tôi", "sign up", "đăng ký", "learn more", "tìm hiểu thêm",
+    "watch now", "xem ngay", "use app", "dùng ứng dụng", "whatsapp", "email", "more", "xem thêm",
+}
+
+
+def _looks_like_category_line(line: str, page_name: Optional[str] = None) -> bool:
+    cand = (line or "").strip()
+    if not (2 <= len(cand) <= 60):
+        return False
+    if page_name and cand.lower() == page_name.strip().lower():
+        return False
+    norm = _norm_label(cand)
+    if not norm or norm in _TAB_LABELS or norm in _HEADER_ACTION_LABELS:
+        return False
+    if is_status_noise(cand) or _NOISE_RE.search(cand):
+        return False
+    if _EMAIL_RE.search(cand) or "http://" in cand.lower() or "https://" in cand.lower() or "www." in cand.lower():
+        return False
+    if find_phone(cand) or _is_price_line(cand):
+        return False
+    if re.search(r"(?:followers?|following|người\s*theo\s*dõi|đang\s*theo\s*dõi|lượt\s*thích|likes?)", cand, re.IGNORECASE):
+        return False
+    if any(ch in cand for ch in (":", "#", "@", "!", "?", "·", "•")):
+        return False
+    if len(cand.split()) > 6:
+        return False
+    return True
+
+
+def extract_category(header_text: str, page_name: Optional[str] = None) -> Optional[str]:
+    """Đọc hạng mục từ phần đầu trang (layout cũ 'Trang · ...' và layout mới trên dòng trước '·' / 'More')."""
+    head = intro_text(header_text or "")
+    # 1. Layout cũ: "Trang · Dịch vụ ..." / "Page · Artist" (có ranh giới từ để tránh khớp tên người "Quỳnh Trang · Follow")
+    match = re.search(
+        r"(?<![A-Za-zÀ-ỹ0-9])(?:Trang|Page)\s*[·•]\s*([^\n·•|]{2,80})",
+        head,
+        re.IGNORECASE,
+    )
+    if match:
+        cleaned = clean_category(match.group(1))
+        if cleaned:
+            return cleaned
+
+    # 2. Layout mới: phần header trước thanh tab (All / About / Reels / Details / Links / Contact info)
+    raw_lines = [l.strip() for l in head.splitlines() if l.strip()]
+    top_lines: List[str] = []
+    started = False
+    for ln in raw_lines:
+        norm = _norm_label(ln)
+        if not started:
+            if re.search(r"(?:followers?|người\s*theo\s*dõi|lượt\s*thích|likes?)", ln, re.IGNORECASE):
+                started = True
+            continue
+        if norm in _HEADER_TAB_BAR_LABELS or norm in _SECTION_HEADS:
+            break
+        top_lines.append(ln)
+
+    if not top_lines:
+        return None
+
+    # 2a. Dòng ngay trước dấu '·' (vd: "Artist \n · \n anhtu305", "College & university \n · $")
+    for idx, ln in enumerate(top_lines):
+        if ln.startswith("·") or ln.startswith("•"):
+            if idx > 0 and _looks_like_category_line(top_lines[idx - 1], page_name):
+                return clean_category(top_lines[idx - 1])
+
+    # 2b. Dòng ngay trước 'More' / 'Xem thêm' hoặc dòng cuối cùng hợp lệ trước tab bar (vd: "Education website \n More", "Sports \n FIFA World Cup")
+    for idx, ln in enumerate(top_lines):
+        if _norm_label(ln) in ("more", "xem thêm") and idx > 0:
+            if _looks_like_category_line(top_lines[idx - 1], page_name):
+                return clean_category(top_lines[idx - 1])
+
+    for ln in reversed(top_lines):
+        if _looks_like_category_line(ln, page_name):
+            return clean_category(ln)
+    return None
 
 
 def extract_followers(text: str) -> Tuple[Optional[int], Optional[str]]:
@@ -880,9 +1002,21 @@ def extract_contact_info(
                 ph = find_phone(txt)
                 if ph and not result["phone"]:
                     result["phone"] = ph
-                addr = _valid_address(txt)
-                if addr and not result["address"] and ("," in txt or re.search(r"\d", txt)):
-                    result["address"] = addr
+                # Loại trừ handle mạng xã hội (Instagram/TikTok/YouTube...) nằm chung khối Contact info
+                social_texts = {
+                    (ltxt or "").strip().lower()
+                    for href, ltxt in row.get("hrefs") or []
+                    if href and _is_social_host(unwrap_clean_url(href)) and ltxt
+                }
+                if not result["address"]:
+                    for raw_ln in row["lines"]:
+                        clean_ln = raw_ln.strip(" ·•\u00a0")
+                        if not clean_ln or clean_ln.lower() in social_texts:
+                            continue
+                        addr = _clean_address_line(clean_ln)
+                        if addr:
+                            result["address"] = addr
+                            break
 
     # 1. Phân loại links theo domain đã giải mã (unwrap tối đa 3 lần, bỏ fbclid/__cft__/__tn__)
     resolved_links = classify_resolved_links(all_links)
@@ -1054,18 +1188,19 @@ def scan_page_detail(driver, page_url: str, stop_event: threading.Event) -> Dict
         return {"ok": False, "reason": "unavailable"}
 
     header_text = header.get("header_text") or ""
+    page_name = pick_page_name(header.get("page_name"), header_text)
     follower_count, follower_text = extract_followers(header_text)
     detail: Dict[str, Any] = {
         "ok": True,
         "_header_text": header_text,
         "_panel_items": header.get("panel_items") or [],
         "_links": header.get("links") or [],
-        "page_name": pick_page_name(header.get("page_name"), header_text),
+        "page_name": page_name,
         "avatar_url": header.get("avatar_url"),
         "is_verified": header.get("is_verified"),
-        "category": clean_category(extract_category(header_text)),
+        "category": clean_category(extract_category(header_text, page_name=page_name)),
         "follower_count": follower_count,
-        "follower_text": follower_text,
+        "follower_text": (follower_text or "")[:100] or None,
     }
     return detail
 
@@ -1091,11 +1226,11 @@ def scan_page_contacts(
     """
     Page kiểu mới: /about chỉ có Giới thiệu; liên hệ ở /directory_contact_info, web ở /directory_links,
     địa chỉ + liên kết hiện ở cột Giới thiệu trang chính. Layout cũ: /about_contact_and_basic_info.
-    Ưu tiên: tab liên hệ > About > cột Giới thiệu trang chính.
+    Ưu tiên: tab liên hệ > About > cột Giới thiệu trang chính (KHÔNG quét bài đăng).
     """
     def parse(page: Dict[str, Any]) -> Dict[str, Any]:
         return extract_contact_info(
-            page.get("about_text") or "",
+            trim_about_noise(page.get("about_text") or ""),
             page.get("links") or [],
             page.get("panel_items") or [],
         )
@@ -1115,7 +1250,6 @@ def scan_page_contacts(
         parse(contact_page),
         parse(about),
         extract_contact_info(intro_text(header_text), header_links or about_links, header_panel_items),
-        extract_contact_info(header_text, header_links or about_links, header_panel_items),
     )
 
     if not contact_href and not any(contacts.get(k) for k in ("phone", "email", "website")) \
@@ -1131,7 +1265,9 @@ def scan_page_contacts(
         contacts = merge_contacts(contacts, parse(links_page))
 
     cat = re.search(
-        r"(?:Hạng mục|Category)\s*[:\n]\s*([^\n]{2,80})", about.get("about_text") or "", re.IGNORECASE
+        r"(?:Hạng mục|Category)\s*[:\n]\s*([^\n]{2,80})",
+        trim_about_noise(about.get("about_text") or ""),
+        re.IGNORECASE,
     )
     contacts["category"] = clean_category(cat.group(1)) if cat else None
     contacts["_raw"] = raws
@@ -1224,15 +1360,36 @@ def save_page_detail(
         ON CONFLICT (owner_key, page_key) DO UPDATE
         SET page_name = COALESCE(EXCLUDED.page_name, scanned_pages.page_name),
             avatar_url = COALESCE(EXCLUDED.avatar_url, scanned_pages.avatar_url),
-            category = COALESCE(EXCLUDED.category, scanned_pages.category),
+            category = CASE
+                WHEN EXCLUDED.detail_status = 'SCANNED' THEN EXCLUDED.category
+                ELSE COALESCE(EXCLUDED.category, scanned_pages.category)
+            END,
             follower_count = COALESCE(EXCLUDED.follower_count, scanned_pages.follower_count),
             follower_text = COALESCE(EXCLUDED.follower_text, scanned_pages.follower_text),
-            is_verified = COALESCE(EXCLUDED.is_verified, scanned_pages.is_verified),
-            phone = COALESCE(EXCLUDED.phone, scanned_pages.phone),
-            email = COALESCE(EXCLUDED.email, scanned_pages.email),
-            website = COALESCE(EXCLUDED.website, scanned_pages.website),
-            address = COALESCE(EXCLUDED.address, scanned_pages.address),
-            description = COALESCE(EXCLUDED.description, scanned_pages.description),
+            is_verified = CASE
+                WHEN EXCLUDED.detail_status = 'SCANNED' AND EXCLUDED.is_verified IS NOT NULL THEN EXCLUDED.is_verified
+                ELSE COALESCE(EXCLUDED.is_verified, scanned_pages.is_verified)
+            END,
+            phone = CASE
+                WHEN EXCLUDED.detail_status = 'SCANNED' THEN EXCLUDED.phone
+                ELSE COALESCE(EXCLUDED.phone, scanned_pages.phone)
+            END,
+            email = CASE
+                WHEN EXCLUDED.detail_status = 'SCANNED' THEN EXCLUDED.email
+                ELSE COALESCE(EXCLUDED.email, scanned_pages.email)
+            END,
+            website = CASE
+                WHEN EXCLUDED.detail_status = 'SCANNED' THEN EXCLUDED.website
+                ELSE COALESCE(EXCLUDED.website, scanned_pages.website)
+            END,
+            address = CASE
+                WHEN EXCLUDED.detail_status = 'SCANNED' THEN EXCLUDED.address
+                ELSE COALESCE(EXCLUDED.address, scanned_pages.address)
+            END,
+            description = CASE
+                WHEN EXCLUDED.detail_status = 'SCANNED' THEN EXCLUDED.description
+                ELSE COALESCE(EXCLUDED.description, scanned_pages.description)
+            END,
             detail_status = CASE
                 WHEN EXCLUDED.detail_status = 'FAILED' AND scanned_pages.detail_status = 'SCANNED'
                 THEN scanned_pages.detail_status
@@ -1249,11 +1406,11 @@ def save_page_detail(
             detail.get("page_name"),
             page_url,
             detail.get("avatar_url"),
-            detail.get("category"),
+            (detail.get("category") or "")[:255] or None,
             detail.get("follower_count"),
-            detail.get("follower_text"),
+            (detail.get("follower_text") or "")[:100] or None,
             detail.get("is_verified"),
-            detail.get("phone"),
+            (detail.get("phone") or "")[:100] or None,
             (detail.get("email") or "")[:255] or None,
             detail.get("website"),
             detail.get("address"),
@@ -1531,18 +1688,20 @@ def run_page_detail_flow(
             "TIMEOUT": "PARTIAL",
             "ERROR": "FAILED",
         }.get(stop_reason, "COMPLETED")
-        finalize_scan_session(
-            session_id, final_status, stop_reason, processed, saved, skipped, 0,
-            processed, int(time.time() - start), error_message,
-        )
-        log(
-            f"Kết thúc DETAIL · {final_status}/{stop_reason} · lưu {saved}"
-            f" · bỏ qua {skipped} · lỗi {failed}",
-            "success" if final_status == "COMPLETED" else "warn",
-        )
-        with _ACTIVE_SESSIONS_LOCK:
-            _ACTIVE_STOP_EVENTS.pop(session_id, None)
-            _ACTIVE_PAUSE_EVENTS.pop(session_id, None)
+        try:
+            finalize_scan_session(
+                session_id, final_status, stop_reason, processed, saved, skipped, 0,
+                processed, int(time.time() - start), error_message,
+            )
+            log(
+                f"Kết thúc DETAIL · {final_status}/{stop_reason} · lưu {saved}"
+                f" · bỏ qua {skipped} · lỗi {failed}",
+                "success" if final_status == "COMPLETED" else "warn",
+            )
+        finally:
+            with _ACTIVE_SESSIONS_LOCK:
+                _ACTIVE_STOP_EVENTS.pop(session_id, None)
+                _ACTIVE_PAUSE_EVENTS.pop(session_id, None)
 
     return {"session_id": session_id, "count": saved, "stop_reason": stop_reason, "status": final_status}
 
