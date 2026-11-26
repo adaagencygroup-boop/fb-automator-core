@@ -312,10 +312,21 @@ _LABELS = {
 _ALL_LABELS = {lab for labs in _LABELS.values() for lab in labs}
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
-# SĐT VN: 0xxx / +84 / 84 (9–10 số sau mã), tổng đài 1800/1900
+# SĐT VN hợp lệ:
+# - Di động 10 số: (0|+84|84) + đầu [35789] + 8 số
+# - Máy bàn 11 số: (0|+84|84) + đầu 2 + 9 số (vd 024 3552 6713, 028 7307 7807)
+# - Tổng đài 8–10 số: 1800/1900 + 4–6 số
+# - Quốc tế có dấu '+' rõ ràng (khác +84): 9–15 chữ số
 _PHONE_RE = re.compile(
-    r"(?<![\d.,])(?:\+84|84|0)(?:[\s.\-]?\d){8,10}(?!\d|[.,]\d)"
-    r"|(?<![\d.,])1[89]00(?:[\s.\-]?\d){4,6}(?!\d|[.,]\d)"
+    r"(?<![\d.,/=\w])(?:\+84|84|0)(?:[\s.\-]?[35789])(?:[\s.\-]?\d){8}(?!\d|[.,]\d)"
+    r"|(?<![\d.,/=\w])(?:\+84|84|0)(?:[\s.\-]?2)(?:[\s.\-]?\d){9}(?!\d|[.,]\d)"
+    r"|(?<![\d.,/=\w])1[89]00(?:[\s.\-]?\d){4,6}(?!\d|[.,]\d)"
+    r"|(?<![\d.,/=\w])\+(?!84\b)[1-9]\d{0,2}(?:[\s.\-]?\d){7,12}(?!\d|[.,]\d)"
+)
+_NON_PHONE_PREFIX_RE = re.compile(
+    r"(?:\b(?:mst|mã\s*số\s*thuế|stk|số\s*tài\s*khoản|tk\s*ngân\s*hàng|cccd|cmnd|tax\s*code|account\s*no|id)\s*[:=\-#]?\s*$"
+    r"|https?://\S*$)",
+    re.IGNORECASE,
 )
 # Tên miền: nhãn cuối phải là chữ (loại "12.000", "4.9")
 _DOMAIN_RE = re.compile(
@@ -334,10 +345,31 @@ _SOCIAL_HOSTS = (
     "wa.me", "whatsapp.com", "linkedin.com", "zalo.me", "t.me", "pinterest.com",
 )
 _ADDRESS_HINT_RE = re.compile(
-    r"\b(quận|phường|huyện|xã|thị xã|thị trấn|tỉnh|tp\.|thành phố|đường|ngõ|ngách|số nhà|"
-    r"hà nội|hồ chí minh|đà nẵng|hải phòng|cần thơ|việt nam|vietnam|street|district|ward|city)\b",
+    r"(?:(?<![A-Za-zÀ-ỹ])(?:"
+    r"quận|phường|huyện|xã|thị\s*xã|thị\s*trấn|tỉnh|tp\.?|thành\s*phố|"
+    r"đường|phố|ngõ|ngách|hẻm|số\s*nhà|số\s+\d|tầng\s+\d|toà\s*nhà|tòa\s*nhà|"
+    r"chung\s*cư|khu\s*đô\s*thị|kđt|khu\s*công\s*nghiệp|kcn|trụ\s*sở|chi\s*nhánh|cơ\s*sở|"
+    r"thôn|ấp|xóm|sống\s*tại|lives\s+in|"
+    r"việt\s*nam|vietnam|hà\s*nội|hanoi|hồ\s*chí\s*minh|ho\s*chi\s*minh|sài\s*gòn|saigon|"
+    r"đà\s*nẵng|da\s*nang|hải\s*phòng|hai\s*phong|cần\s*thơ|can\s*tho|"
+    r"đồng\s*nai|dong\s*nai|bình\s*dương|binh\s*duong|khánh\s*hòa|nha\s*trang|"
+    r"huế|thừa\s*thiên|vũng\s*tàu|bà\s*rịa|quảng\s*ninh|hạ\s*long|"
+    r"bắc\s*ninh|bắc\s*giang|hưng\s*yên|hải\s*dương|nam\s*định|thái\s*bình|ninh\s*bình|"
+    r"thanh\s*hóa|nghệ\s*an|hà\s*tĩnh|đắk\s*lắk|buôn\s*ma\s*thuột|lâm\s*đồng|đà\s*lạt|"
+    r"long\s*an|tiền\s*giang|bến\s*tre|kiên\s*giang|phú\s*quốc|an\s*giang|gia\s*lai|"
+    r"quảng\s*nam|hội\s*an|quảng\s*ngãi|bình\s*định|quy\s*nhơn|thái\s*nguyên|phú\s*thọ|"
+    r"vĩnh\s*phúc|lào\s*cai|sapa|long\s*khánh|"
+    r"cầu\s*giấy|đống\s*đa|ba\s*đình|hoàn\s*kiếm|hai\s*bà\s*trưng|hà\s*đông|"
+    r"nam\s*từ\s*liêm|bắc\s*từ\s*liêm|thanh\s*xuân|hoàng\s*mai|long\s*biên|tây\s*hồ|mỹ\s*đình|"
+    r"thủ\s*đức|bình\s*thạnh|tân\s*bình|gò\s*vấp|phú\s*nhuận|tân\s*phú|bình\s*tân|"
+    r"ngũ\s*hành\s*sơn|hải\s*châu|sơn\s*trà|"
+    r"street|st\.|road|rd\.|avenue|ave\.|lane|floor|building|tower|plaza|"
+    r"ward|district|commune|province|city|town|village|"
+    r"usa|united\s*states|united\s*kingdom|singapore|japan|korea|australia|thailand|france|germany|canada"
+    r")(?![A-Za-zÀ-ỹ]))",
     re.IGNORECASE,
 )
+_POSTAL_CODE_RE = re.compile(r"\b\d{5,6}\b")
 _NOISE_RE = re.compile(
     r"(người theo dõi|followers?|lượt thích|likes?|đánh giá|reviews?|đang theo dõi|following)",
     re.IGNORECASE,
@@ -355,10 +387,26 @@ def normalize_phone(raw: str) -> str:
 
 
 def find_phone(text: str) -> Optional[str]:
-    for match in _PHONE_RE.finditer(text or ""):
-        digits = re.sub(r"\D", "", match.group(0))
-        if 8 <= len(digits) <= 12:
-            return normalize_phone(match.group(0))
+    src = text or ""
+    for match in _PHONE_RE.finditer(src):
+        raw = match.group(0)
+        prefix = src[max(0, match.start() - 28):match.start()]
+        if _NON_PHONE_PREFIX_RE.search(prefix):
+            continue
+        digits = re.sub(r"\D", "", raw)
+        if raw.startswith("+") and not raw.startswith("+84"):
+            if 9 <= len(digits) <= 15:
+                return normalize_phone(raw)
+        elif digits.startswith(("1800", "1900")):
+            if 8 <= len(digits) <= 10:
+                return normalize_phone(raw)
+        elif digits.startswith("84"):
+            sub = digits[2:]
+            if (sub.startswith("2") and len(sub) == 10) or (len(sub) == 9 and sub[0] in "35789"):
+                return normalize_phone(raw)
+        elif digits.startswith("0"):
+            if (digits.startswith("02") and len(digits) == 11) or (len(digits) == 10 and digits[1] in "35789"):
+                return normalize_phone(raw)
     return None
 
 
@@ -682,9 +730,24 @@ _REVIEW_OR_COMMENT_RE = re.compile(
 )
 
 
-def _valid_address(line: str) -> Optional[str]:
+def _has_address_signal(line: str) -> bool:
+    """Địa chỉ không gắn nhãn phải có từ khóa địa lý / tên tỉnh thành / quốc gia hoặc mã bưu chính kèm dấu phẩy."""
+    if _ADDRESS_HINT_RE.search(line):
+        return True
+    if "," in line and _POSTAL_CODE_RE.search(line):
+        return True
+    return False
+
+
+def _valid_address(
+    line: str,
+    page_name: Optional[str] = None,
+    require_hint: bool = False,
+) -> Optional[str]:
     line = (line or "").strip()
     if not (5 <= len(line) <= 200):
+        return None
+    if page_name and line.lower() == page_name.strip().lower():
         return None
     if _EMAIL_RE.search(line) or _NOISE_RE.search(line) or line.lower().startswith("http"):
         return None
@@ -695,6 +758,8 @@ def _valid_address(line: str) -> Optional[str]:
     if _REVIEW_OR_COMMENT_RE.search(line):
         return None
     if find_phone(line) and len(re.sub(r"\D", "", line)) >= 8 and not _ADDRESS_HINT_RE.search(line):
+        return None
+    if require_hint and not _has_address_signal(line):
         return None
     return line
 
@@ -809,7 +874,7 @@ def pick_page_name(heading_name: Optional[str], header_text: str) -> Optional[st
     return name_before_followers(header_text) or first_text_line(header_text)
 
 
-def _section_values(lines: List[str]) -> Dict[str, Optional[str]]:
+def _section_values(lines: List[str], page_name: Optional[str] = None) -> Dict[str, Optional[str]]:
     """Đọc giá trị theo mục Chi tiết / Liên kết / Thông tin liên hệ (không có nhãn từng dòng)."""
     found: Dict[str, Optional[str]] = {"phone": None, "email": None, "website": None, "address": None}
     section: Optional[str] = None
@@ -829,11 +894,11 @@ def _section_values(lines: List[str]) -> Dict[str, Optional[str]]:
             found["phone"] = find_phone(line)
         if section == "links" and not found["website"] and " " not in line:
             found["website"] = _clean_website(line)
-        # Chi tiết còn có "Rating · 4.8", "Price range · $$", giờ mở cửa 08:00 → bỏ
+        # Chi tiết / Liên hệ không nhãn: bắt buộc có tín hiệu địa lý + khác tên Page (chặn 'Sinh tồn lương 5tr', review có dấu phẩy)
         if section in ("details", "contact") and not found["address"] \
                 and ("," in line or re.search(r"\d", line)) and not find_phone(line) \
                 and "·" not in line and not re.search(r"\d{1,2}:\d{2}", line):
-            found["address"] = _valid_address(line)
+            found["address"] = _valid_address(line, page_name=page_name, require_hint=True)
     return found
 
 
@@ -944,7 +1009,11 @@ def _is_price_line(line: str) -> bool:
     return bool(_PRICE_LINE_RE.match(line or ""))
 
 
-def _clean_address_line(line: str) -> Optional[str]:
+def _clean_address_line(
+    line: str,
+    page_name: Optional[str] = None,
+    require_hint: bool = True,
+) -> Optional[str]:
     """Bỏ giá ($$) / trạng thái mở cửa dính đầu dòng, rồi kiểm tra là địa chỉ."""
     line = (line or "").strip()
     if not line or _is_price_line(line) or parse_opening_info(line):
@@ -966,8 +1035,8 @@ def _clean_address_line(line: str) -> Optional[str]:
         return None
     if parse_opening_info(stripped) and not ("," in stripped and len(stripped) > 40):
         return None
-    addr = _valid_address(stripped)
-    if addr and ("," in addr or re.search(r"\d", addr)):
+    addr = _valid_address(stripped, page_name=page_name, require_hint=require_hint)
+    if addr and ("," in addr or re.search(r"\d", addr) or _ADDRESS_HINT_RE.search(addr)):
         return addr
     return None
 
@@ -1007,6 +1076,7 @@ def extract_contact_info(
     links: Optional[List[Dict[str, Any]]] = None,
     panel_items: Optional[List[Dict[str, Any]]] = None,
     page_url: Optional[str] = None,
+    page_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Tách SĐT / Email / Website / Địa chỉ + Rating / Giờ mở cửa / YouTube / Messenger / Tọa độ
@@ -1039,7 +1109,7 @@ def extract_contact_info(
                     result["opening"] = op
                 # Địa chỉ: theo từng dòng, bỏ giá ($$) / giờ mở cửa; nhiều cơ sở → nhiều dòng
                 addr_lines = [
-                    ln for ln in (_clean_address_line(x) for x in row["lines"]) if ln
+                    ln for ln in (_clean_address_line(x, page_name=page_name, require_hint=True) for x in row["lines"]) if ln
                 ]
                 if addr_lines and not result["address"]:
                     result["address"] = "\n".join(addr_lines)
@@ -1080,7 +1150,9 @@ def extract_contact_info(
                         clean_ln = raw_ln.strip(" ·•\u00a0")
                         if not clean_ln or clean_ln.lower() in social_texts:
                             continue
-                        addr = _clean_address_line(clean_ln)
+                        if result.get("messenger") and clean_ln.lower() == str(result["messenger"]).strip().lower():
+                            continue
+                        addr = _clean_address_line(clean_ln, page_name=page_name, require_hint=True)
                         if addr:
                             result["address"] = addr
                             break
@@ -1112,7 +1184,7 @@ def extract_contact_info(
         "phone": find_phone,
         "email": find_email,
         "website": lambda cand: _clean_labeled_website(cand, page_url=page_url),
-        "address": _valid_address,
+        "address": lambda cand: _valid_address(cand, page_name=page_name, require_hint=False),
     }
     for idx, line in enumerate(lines):
         label = _norm_label(line)
@@ -1122,8 +1194,10 @@ def extract_contact_info(
             result[field] = _value_near_label(lines, idx, validators[field])
 
     # 6. Theo section Chi tiết / Liên kết / Thông tin liên hệ
-    for field, value in _section_values(lines).items():
+    for field, value in _section_values(lines, page_name=page_name).items():
         if value and not result[field]:
+            if field == "address" and result.get("messenger") and value.strip().lower() == str(result["messenger"]).strip().lower():
+                continue
             result[field] = value
 
     # 7. Fallback quét toàn văn
@@ -1145,7 +1219,7 @@ def extract_contact_info(
     if not result["address"]:
         for line in lines:
             if "," in line and _ADDRESS_HINT_RE.search(line):
-                addr = _valid_address(line)
+                addr = _valid_address(line, page_name=page_name, require_hint=True)
                 if addr and len(addr) >= 8:
                     result["address"] = addr
                     break
@@ -1289,6 +1363,7 @@ def scan_page_contacts(
     stop_event: threading.Event,
     header_panel_items: Optional[List[Dict[str, Any]]] = None,
     header_links: Optional[List[Dict[str, Any]]] = None,
+    page_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Page kiểu mới: /about chỉ có Giới thiệu; liên hệ ở /directory_contact_info, web ở /directory_links,
@@ -1301,6 +1376,7 @@ def scan_page_contacts(
             page.get("links") or [],
             page.get("panel_items") or [],
             page_url=page_url,
+            page_name=page_name,
         )
 
     raws: List[Dict[str, Any]] = []
@@ -1322,6 +1398,7 @@ def scan_page_contacts(
             header_links or about_links,
             header_panel_items,
             page_url=page_url,
+            page_name=page_name,
         ),
     )
 
@@ -1748,6 +1825,7 @@ def run_page_detail_flow(
                     stop_event,
                     header_panel_items=detail.get("_panel_items") or [],
                     header_links=detail.get("_links") or [],
+                    page_name=detail.get("page_name"),
                 )
                 if not detail.get("category"):
                     detail["category"] = contacts.get("category")

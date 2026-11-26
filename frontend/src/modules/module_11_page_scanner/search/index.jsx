@@ -371,6 +371,7 @@ export default function PageScannerSearch() {
   const isRunning = runPhase === "running";
   const isPaused = runPhase === "paused";
   const isBusy = isRunning || isPaused;
+  const isInputLocked = isBusy || isStarting;
 
   const handleCheckAndDedupe = () => {
     const uniqueLines = [];
@@ -1429,6 +1430,10 @@ export default function PageScannerSearch() {
 
   /* Chọn file = CHỈ xem trước / kiểm tra (không lưu DB). Lưu khi bấm "Bắt đầu thực thi". */
   const handleFileUpload = async (e) => {
+    if (isInputLocked) {
+      e.target.value = "";
+      return;
+    }
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = "";
@@ -1688,26 +1693,26 @@ export default function PageScannerSearch() {
               <textarea
                 value={pasteContent}
                 onChange={(e) => setPasteContent(e.target.value)}
-                disabled={isBusy}
+                disabled={isInputLocked}
                 rows={5}
                 placeholder={
                   "https://www.facebook.com/groups/109283749218\nhttps://facebook.com/groups/congdongmarketingvn"
                 }
-                className="w-full rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] p-3 font-mono text-xs leading-relaxed text-[#0F172A] outline-none transition focus:border-[#1877F2] focus:bg-white disabled:opacity-60"
+                className="w-full rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] p-3 font-mono text-xs leading-relaxed text-[#0F172A] outline-none transition focus:border-[#1877F2] focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
               />
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <button
                   type="button"
-                  disabled={isBusy || !pasteContent.trim()}
+                  disabled={isInputLocked || !pasteContent.trim()}
                   onClick={() => setPasteContent("")}
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-[#EF4444] hover:underline disabled:opacity-40"
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-[#EF4444] hover:underline disabled:cursor-not-allowed disabled:opacity-40 disabled:no-underline"
                 >
                   <Trash2 className="size-3.5" />
                   Xóa tất cả
                 </button>
                 <button
                   type="button"
-                  disabled={isBusy || isDeduping || !pasteContent.trim()}
+                  disabled={isInputLocked || isDeduping || !pasteContent.trim()}
                   aria-busy={isDeduping}
                   onClick={() => guardDedupe(handleCheckAndDedupe)}
                   className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#1877F2] px-3.5 text-xs font-bold text-white shadow-sm hover:bg-[#166FE5] disabled:cursor-not-allowed disabled:opacity-50"
@@ -1760,7 +1765,15 @@ export default function PageScannerSearch() {
                             <td className="px-2 py-2 text-right">
                               <button
                                 type="button"
+                                disabled={isInputLocked}
+                                aria-label="Xóa link"
+                                title={
+                                  isInputLocked
+                                    ? "Không thể xóa link khi phiên đang chạy"
+                                    : "Xóa link khỏi danh sách"
+                                }
                                 onClick={() => {
+                                  if (isInputLocked) return;
                                   const lines = pasteContent
                                     .split(/\r?\n/)
                                     .map((l) => l.trim())
@@ -1768,7 +1781,7 @@ export default function PageScannerSearch() {
                                   lines.splice(idx, 1);
                                   setPasteContent(lines.join("\n"));
                                 }}
-                                className="rounded p-1 text-[#94A3B8] hover:bg-slate-100 hover:text-[#EF4444]"
+                                className="rounded p-1 text-[#94A3B8] hover:bg-slate-100 hover:text-[#EF4444] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[#94A3B8]"
                               >
                                 <X className="size-3.5" />
                               </button>
@@ -1785,7 +1798,15 @@ export default function PageScannerSearch() {
 
           {sourceMode === "upload" && (
             <div className="space-y-3">
-              <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-[#93C5FD] bg-[#F8FAFC] px-4 py-7 text-center hover:border-[#1877F2]">
+              <label
+                aria-disabled={isInputLocked}
+                title={isInputLocked ? "Không thể đổi tệp khi phiên đang chạy" : undefined}
+                className={`flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-[#93C5FD] bg-[#F8FAFC] px-4 py-7 text-center ${
+                  isInputLocked
+                    ? "pointer-events-none cursor-not-allowed opacity-60"
+                    : "cursor-pointer hover:border-[#1877F2]"
+                }`}
+              >
                 <div className="flex size-10 items-center justify-center rounded-full bg-[#EFF6FF] text-[#1877F2]">
                   <FileUp className="size-5" />
                 </div>
@@ -1799,6 +1820,7 @@ export default function PageScannerSearch() {
                   ref={fileInputRef}
                   type="file"
                   accept=".txt,.csv,.xlsx"
+                  disabled={isInputLocked}
                   className="hidden"
                   onChange={handleFileUpload}
                 />
@@ -1825,8 +1847,10 @@ export default function PageScannerSearch() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="text-xs font-semibold text-[#1877F2] hover:underline"
+                    disabled={isInputLocked}
+                    title={isInputLocked ? "Không thể đổi tệp khi phiên đang chạy" : undefined}
+                    onClick={() => !isInputLocked && fileInputRef.current?.click()}
+                    className="text-xs font-semibold text-[#1877F2] hover:underline disabled:cursor-not-allowed disabled:opacity-40 disabled:no-underline"
                   >
                     Thay đổi tệp
                   </button>
