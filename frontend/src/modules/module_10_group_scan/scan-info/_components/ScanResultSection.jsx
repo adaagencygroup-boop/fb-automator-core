@@ -245,7 +245,6 @@ export default function ScanResultSection({
               <th className="w-14 whitespace-nowrap px-2 py-2.5">STT</th>
               <th className="whitespace-nowrap px-3 py-2.5">Từ khóa</th>
               <th className="whitespace-nowrap px-3 py-2.5">Tên nhóm</th>
-              <th className="whitespace-nowrap px-3 py-2.5">Loại nhóm</th>
               <th className="whitespace-nowrap px-3 py-2.5">Thành viên</th>
               <th className="whitespace-nowrap px-3 py-2.5">Liên kết / URL nhóm</th>
             </tr>
@@ -253,7 +252,7 @@ export default function ScanResultSection({
           <tbody>
             {filteredResults.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-14 text-center text-sm text-[#94A3B8]">
+                <td colSpan={6} className="px-4 py-14 text-center text-sm text-[#94A3B8]">
                   Chưa có kết quả. Chọn tài khoản và bấm Bắt đầu khi luồng quét đã nối.
                 </td>
               </tr>
@@ -280,9 +279,6 @@ export default function ScanResultSection({
                     {row.keyword}
                   </td>
                   <td className="px-3 py-2.5 font-semibold text-[#0F172A]">{row.name}</td>
-                  <td className="whitespace-nowrap px-3 py-2.5">
-                    <TypeBadge type={row.type} />
-                  </td>
                   <td className="px-3 py-2.5 tabular-nums text-[#0F172A]">{row.members}</td>
                   <td className="px-3 py-2.5">
                     <a

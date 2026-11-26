@@ -148,10 +148,10 @@ export async function updateScanCategory(id, name) {
   }
 }
 
-/** Xóa danh mục nhóm khỏi Database */
-export async function deleteScanCategory(id) {
+/** Xóa danh mục nhóm khỏi Database. deleteGroups = true → xóa luôn các nhóm trong danh mục. */
+export async function deleteScanCategory(id, { deleteGroups = false } = {}) {
   try {
-    return await api.delete(`/api/group-scan/categories/${id}`);
+    return await api.delete(`/api/group-scan/categories/${id}${deleteGroups ? "?delete_groups=true" : ""}`);
   } catch (err) {
     throw err;
   }

@@ -532,13 +532,13 @@ def put_category(id: str, body: UpdateCategoryRequest):
 
 
 @router.delete("/categories/{id}", dependencies=[Depends(scoped_owner)])
-def delete_category_endpoint(id: str):
-    """Xóa danh mục nhóm khỏi Database."""
+def delete_category_endpoint(id: str, delete_groups: bool = False):
+    """Xóa danh mục nhóm khỏi Database. delete_groups=true → xoá luôn các nhóm trong danh mục."""
     owner = owner_context.get() or get_owner_username()
     if not owner:
         raise HTTPException(401, "Chưa đăng nhập")
-    ok = delete_scan_category(owner, id)
-    return {"ok": ok, "id": id}
+    res = delete_scan_category(owner, id, delete_groups=delete_groups)
+    return {"ok": res["ok"], "id": id, "groups_deleted": res["groups_deleted"]}
 
 
 class MoveGroupsRequest(BaseModel):

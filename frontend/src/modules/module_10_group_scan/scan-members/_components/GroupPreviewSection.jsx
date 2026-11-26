@@ -24,7 +24,7 @@ export default function GroupPreviewSection({
               </span>
             </div>
             <p className="text-xs text-[#94A3B8]">
-              Kiểm tra loại nhóm và quy mô thành viên trước khi tiến hành quét
+              Kiểm tra quy mô thành viên trước khi tiến hành quét
             </p>
           </div>
         </div>
@@ -37,7 +37,6 @@ export default function GroupPreviewSection({
             <tr>
               <th className="w-14 px-4 py-3 text-center">STT</th>
               <th className="px-4 py-3">TÊN NHÓM FACEBOOK</th>
-              <th className="w-36 px-4 py-3">LOẠI NHÓM</th>
               <th className="w-48 px-4 py-3">QUY MÔ / THÀNH VIÊN</th>
               <th className="w-20 px-4 py-3 text-center">THAO TÁC</th>
             </tr>
@@ -65,17 +64,6 @@ export default function GroupPreviewSection({
                     </div>
                   </div>
                 </td>
-                <td className="px-4 py-3">
-                  {group.type === "public" ? (
-                    <span className="inline-flex rounded border border-[#D1FAE5] bg-[#ECFDF5] px-2 py-0.5 text-[10px] font-semibold text-[#047857]">
-                      Công khai
-                    </span>
-                  ) : (
-                    <span className="inline-flex rounded bg-[#F1F5F9] px-2 py-0.5 text-[10px] font-semibold text-[#475569]">
-                      Riêng tư
-                    </span>
-                  )}
-                </td>
                 <td className="px-4 py-3 font-semibold text-[#0F172A]">
                   {group.members}
                 </td>
@@ -93,7 +81,7 @@ export default function GroupPreviewSection({
             ))}
             {selectedGroups.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-xs text-[#94A3B8]">
+                <td colSpan={4}className="px-4 py-8 text-center text-xs text-[#94A3B8]">
                   Chưa có nhóm nào được chọn. Vui lòng bấm &quot;Chọn nhóm muốn quét&quot;.
                 </td>
               </tr>

@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { createPortal } from "react-dom";
 import {
   FolderPlus,
@@ -25,6 +24,10 @@ export default function GroupListModals({
   onEditCatNameChange,
   onEditCategory,
   onDeleteCategory,
+  deleteCatPrompt = null,
+  deletingCat = false,
+  onConfirmDeleteCategory,
+  onCloseDeletePrompt,
   activeCategoryId,
   showMoveModal,
   onCloseMoveModal,
@@ -37,8 +40,6 @@ export default function GroupListModals({
   onCloseMenu,
   onOpenEditFromMenu,
 }) {
-  const [confirmDelete, setConfirmDelete] = useState(false);
-
   if (!mounted) return null;
 
   return createPortal(
@@ -134,43 +135,19 @@ export default function GroupListModals({
                 onKeyDown={(e) => e.key === "Enter" && onEditCategory()}
               />
             </div>
-            {confirmDelete ? (
-              <div className="rounded-lg bg-amber-50 border border-amber-200 p-2.5 text-xs text-amber-800 space-y-1 animate-in fade-in">
-                <p className="font-semibold flex items-center gap-1">
-                  <span>⚠️ Cảnh báo an toàn (BR-GIS-09.1)</span>
-                </p>
-                <p className="text-[11px] leading-relaxed">
-                  Xóa danh mục sẽ chuyển các nhóm con về mục "Tất cả nhóm đã quét". Bấm xác nhận để xóa vĩnh viễn danh mục này.
-                </p>
-              </div>
-            ) : null}
             <div className="flex items-center justify-between pt-2">
               <button
                 type="button"
-                onClick={() => {
-                  if (!confirmDelete) {
-                    setConfirmDelete(true);
-                  } else {
-                    onDeleteCategory(activeCategoryId);
-                    setConfirmDelete(false);
-                  }
-                }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                  confirmDelete
-                    ? "bg-red-600 text-white hover:bg-red-700 shadow-sm"
-                    : "border border-red-200 text-red-600 hover:bg-red-50"
-                }`}
+                onClick={() => onDeleteCategory(activeCategoryId)}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors border border-red-200 text-red-600 hover:bg-red-50"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>{confirmDelete ? "Xác nhận xóa vĩnh viễn" : "Xóa danh mục"}</span>
+                <span>Xóa danh mục</span>
               </button>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setConfirmDelete(false);
-                    onCloseEditCatModal();
-                  }}
+                  onClick={onCloseEditCatModal}
                   className="px-3.5 py-1.5 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-50"
                 >
                   Hủy
@@ -238,6 +215,66 @@ export default function GroupListModals({
                 className="px-4 py-1.5 rounded-lg bg-blue-600 text-xs font-semibold text-white hover:bg-blue-700 shadow-sm"
               >
                 Xác nhận chuyển
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Popup xác nhận xóa danh mục đang chứa nhóm: xóa cả nhóm / chỉ xóa danh mục / Hủy */}
+      {deleteCatPrompt && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) onCloseDeletePrompt();
+          }}
+        >
+          <div className="w-full max-w-md bg-white rounded-xl shadow-xl border border-slate-200 p-6 flex flex-col gap-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                <Trash2 className="w-4 h-4 text-red-600" />
+                <span>Xóa danh mục</span>
+              </h3>
+              <button title="Đóng"
+                type="button"
+                onClick={onCloseDeletePrompt}
+                disabled={deletingCat}
+                className="p-1 rounded hover:bg-slate-100 text-slate-400 disabled:opacity-50"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-sm text-slate-700 leading-relaxed">
+              Danh mục <b>"{deleteCatPrompt.name}"</b> đang chứa <b>{deleteCatPrompt.count || 0} nhóm</b>. Bạn muốn xử lý các nhóm này thế nào?
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                disabled={deletingCat}
+                onClick={() => onConfirmDeleteCategory(true)}
+                className="w-full text-left px-3.5 py-2.5 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 disabled:opacity-60 transition-colors"
+              >
+                <span className="block text-sm font-semibold text-red-700">Xóa danh mục và các nhóm</span>
+                <span className="block text-xs text-red-600/90 mt-0.5">Xóa cả danh mục và toàn bộ {deleteCatPrompt.count || 0} nhóm thuộc danh mục đó.</span>
+              </button>
+              <button
+                type="button"
+                disabled={deletingCat}
+                onClick={() => onConfirmDeleteCategory(false)}
+                className="w-full text-left px-3.5 py-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-60 transition-colors"
+              >
+                <span className="block text-sm font-semibold text-slate-800">Chỉ xóa danh mục</span>
+                <span className="block text-xs text-slate-500 mt-0.5">Xóa danh mục nhưng vẫn giữ lại các nhóm, không làm mất dữ liệu nhóm.</span>
+              </button>
+            </div>
+            <div className="flex items-center justify-end pt-1">
+              <button
+                type="button"
+                disabled={deletingCat}
+                onClick={onCloseDeletePrompt}
+                className="px-3.5 py-1.5 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Hủy
               </button>
             </div>
           </div>

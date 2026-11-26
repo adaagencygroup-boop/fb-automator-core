@@ -59,6 +59,8 @@ export default function GroupScanListPage() {
   const [showMoveModal, setShowMoveModal] = useState(false);
   const [targetCatId, setTargetCatId] = useState("");
   const [menuAnchor, setMenuAnchor] = useState(null); // { id, cat, top, right }
+  const [deleteCatPrompt, setDeleteCatPrompt] = useState(null); // danh mục chứa nhóm đang chờ chọn cách xóa
+  const [deletingCat, setDeletingCat] = useState(false);
 
   // Tự động đóng 3-dots menu khi click ra ngoài hoặc cuộn
   useEffect(() => {
@@ -271,26 +273,46 @@ export default function GroupScanListPage() {
     }
   };
 
-  // Xóa danh mục khỏi Database
-  const handleDeleteCategory = async (catId) => {
-    if (catId === "cat-all") {
-      toast.error("Không thể xóa danh mục tổng!");
-      return;
-    }
+  // Xóa danh mục khỏi Database (deleteGroups = true → xóa luôn các nhóm trong danh mục)
+  const deleteCategory = async (catId, deleteGroups) => {
     const catToDelete = categories.find((c) => c.id === catId);
+    setDeletingCat(true);
     try {
-      await deleteScanCategory(catId);
+      const res = await deleteScanCategory(catId, { deleteGroups });
       await loadGroups();
       if (activeCategoryId === catId) {
         setActiveCategoryId("cat-all");
       }
       setShowEditCatModal(false);
       setMenuAnchor(null);
-      toast.success(`Đã xóa danh mục "${catToDelete?.name || ""}" khỏi Database!`);
+      setDeleteCatPrompt(null);
+      toast.success(
+        deleteGroups
+          ? `Đã xóa danh mục "${catToDelete?.name || ""}" và ${res?.groups_deleted || 0} nhóm thuộc danh mục!`
+          : `Đã xóa danh mục "${catToDelete?.name || ""}", các nhóm vẫn được giữ lại!`
+      );
     } catch (err) {
       console.error(err);
       toast.error("Không thể xóa danh mục trong Database");
+    } finally {
+      setDeletingCat(false);
     }
+  };
+
+  // Bấm Xóa danh mục: danh mục đang chứa nhóm → hỏi xóa cả nhóm hay chỉ xóa danh mục
+  const handleDeleteCategory = (catId) => {
+    if (catId === "cat-all") {
+      toast.error("Không thể xóa danh mục tổng!");
+      return;
+    }
+    const cat = categories.find((c) => c.id === catId);
+    setMenuAnchor(null);
+    if (cat && (cat.count || 0) > 0) {
+      setShowEditCatModal(false);
+      setDeleteCatPrompt(cat);
+      return;
+    }
+    deleteCategory(catId, false);
   };
 
   // Chuyển nhóm sang danh mục khác
@@ -515,6 +537,10 @@ export default function GroupScanListPage() {
         onEditCatNameChange={setEditCatName}
         onEditCategory={handleEditCategory}
         onDeleteCategory={handleDeleteCategory}
+        deleteCatPrompt={deleteCatPrompt}
+        deletingCat={deletingCat}
+        onConfirmDeleteCategory={(deleteGroups) => deleteCatPrompt && deleteCategory(deleteCatPrompt.id, deleteGroups)}
+        onCloseDeletePrompt={() => !deletingCat && setDeleteCatPrompt(null)}
         activeCategoryId={activeCategoryId}
         showMoveModal={showMoveModal}
         onCloseMoveModal={() => setShowMoveModal(false)}

@@ -20,7 +20,7 @@ import {
   FolderKanban,
 } from "lucide-react";
 import { toast } from "@/lib/toast";
-import Pagination from "@/components/ui/pagination";
+import useRowMultiSelect from "./useRowMultiSelect";
 import CustomSelect from "@/components/ui/custom-select";
 import {
   getScannedGroups,
@@ -50,12 +50,6 @@ const MEMBERS_FILTER_OPTIONS = [
   { value: "over200k", label: "Trên 200K" },
 ];
 
-const PAGE_SIZE_OPTIONS = [
-  { value: 8, label: "8" },
-  { value: 15, label: "15" },
-  { value: 30, label: "30" },
-];
-
 export default function GroupPickerModal({
   open,
   onClose,
@@ -80,9 +74,6 @@ export default function GroupPickerModal({
   // Selection state (Set of group IDs)
   const [selectedIds, setSelectedIds] = useState(() => new Set());
 
-  // Pagination states
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(8);
 
   // Sub-modal states
   const [showAddCatModal, setShowAddCatModal] = useState(false);
@@ -304,14 +295,8 @@ export default function GroupPickerModal({
     });
   }, [categoryGroups, tableSearch, membersFilter]);
 
-  // Pagination calculation
+  // Hiển thị toàn bộ nhóm đang lọc trong khung cuộn (không phân trang)
   const totalItems = filteredGroups.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-  const currentPage = Math.min(page, totalPages);
-  const startIndex = (currentPage - 1) * pageSize;
-  const paginatedGroups = useMemo(() => {
-    return filteredGroups.slice(startIndex, startIndex + pageSize);
-  }, [filteredGroups, startIndex, pageSize]);
 
   // Selection handlers
   // "Chọn tất cả" coi là đã tích khi: chọn hết nhóm đang hiển thị, HOẶC đã chạm giới hạn 20 nhóm / phiên
@@ -371,6 +356,34 @@ export default function GroupPickerModal({
     }
     setSelectedIds(next);
   };
+
+  // Kéo chuột / Ctrl + click / Shift + click chọn nhiều nhóm — chỉ thay phần nhóm đang hiện trong bảng, giữ nguyên
+  // nhóm đã chọn ở danh mục khác. Vẫn giữ giới hạn 20 nhóm / phiên: vượt thì giữ nhóm đã chọn trước + thêm nhóm mới
+  // theo thứ tự trên bảng cho đủ 20.
+  const applyMultiSelection = (picked) => {
+    const viewIds = new Set(filteredGroups.map((g) => g.id));
+    const next = new Set([...selectedIds].filter((id) => !viewIds.has(id)));
+    picked.forEach((id) => viewIds.has(id) && next.add(id));
+    if (next.size <= MAX_PICK) {
+      setSelectedIds(next);
+      return;
+    }
+    const capped = new Set([...selectedIds].filter((id) => next.has(id)).slice(0, MAX_PICK));
+    for (const g of filteredGroups) {
+      if (capped.size >= MAX_PICK) break;
+      if (next.has(g.id)) capped.add(g.id);
+    }
+    setSelectedIds(capped);
+    toast.warning(
+      "Số lượng nhóm mục tiêu trong một phiên quét không được vượt quá 20 nhóm để bảo đảm an toàn tài khoản!"
+    );
+  };
+  const { setContainer: setTableContainer, rowProps } = useRowMultiSelect({
+    rows: filteredGroups,
+    allRows: groups,
+    selected: selectedIds,
+    onChange: applyMultiSelection,
+  });
 
   // Category Actions: Add, Edit, Delete
   const handleAddCategory = async () => {
@@ -518,7 +531,7 @@ export default function GroupPickerModal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-6xl max-h-[92vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-150">
+      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-6xl max-h-[92vh] md:h-[92vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-150">
         {/* ======================================================== */}
         {/* MODAL HEADER */}
         {/* ======================================================== */}
@@ -546,13 +559,13 @@ export default function GroupPickerModal({
         {/* ======================================================== */}
         {/* MODAL BODY: 2 COLUMNS (DANH MỤC & NHÓM) */}
         {/* ======================================================== */}
-        <div className="flex-1 overflow-y-auto p-5 bg-[#F8FAFC]">
-          <div className="flex flex-col lg:flex-row gap-5 items-stretch h-full min-h-[560px]">
+        <div className="flex-1 min-h-0 overflow-y-auto md:overflow-hidden p-5 bg-[#F8FAFC]">
+          <div className="flex flex-col md:flex-row gap-5 items-stretch h-full min-h-[560px] md:min-h-0">
             {/* ──────────────────────────────────────────────────────── */}
             {/* LEFT COLUMN: DANH SÁCH DANH MỤC */}
             {/* ──────────────────────────────────────────────────────── */}
-            <div className="w-full lg:w-[310px] shrink-0 bg-white border border-[#E2E8F0] shadow-xs rounded-xl p-4 flex flex-col justify-between">
-              <div className="flex flex-col">
+            <div className="w-full md:w-[280px] lg:w-[310px] shrink-0 bg-white border border-[#E2E8F0] shadow-xs rounded-xl p-4 flex flex-col justify-between min-h-0">
+              <div className="flex flex-col flex-1 min-h-0">
                 {/* Header */}
                 <div className="flex items-center justify-between pb-3 border-b border-[#F1F5F9]">
                   <div className="flex items-center gap-2">
@@ -594,7 +607,7 @@ export default function GroupPickerModal({
                 </div>
 
                 {/* Category Cards List */}
-                <div className="flex flex-col gap-2 max-h-[380px] overflow-y-auto pr-0.5">
+                <div className="flex flex-col gap-2 max-h-[380px] md:max-h-none flex-1 min-h-0 overflow-y-auto pr-0.5">
                   {filteredCategories.map((cat) => {
                     const isActive = cat.id === activeCategoryId;
                     const catStats = categoryStatsMap[cat.id] || { count: 0, membersTotal: 0 };
@@ -604,7 +617,6 @@ export default function GroupPickerModal({
                         key={cat.id}
                         onClick={() => {
                           setActiveCategoryId(cat.id);
-                          setPage(1);
                         }}
                         className={`p-3 rounded-xl flex items-center justify-between cursor-pointer transition-all relative ${
                           isActive
@@ -677,8 +689,8 @@ export default function GroupPickerModal({
             {/* ──────────────────────────────────────────────────────── */}
             {/* RIGHT COLUMN: GROUP TABLE & FILTERS */}
             {/* ──────────────────────────────────────────────────────── */}
-            <div className="flex-1 bg-white border border-[#E2E8F0] shadow-xs rounded-xl p-4 flex flex-col justify-between overflow-hidden">
-              <div className="flex flex-col space-y-3.5">
+            <div className="flex-1 min-h-0 bg-white border border-[#E2E8F0] shadow-xs rounded-xl p-4 flex flex-col justify-between overflow-hidden">
+              <div className="flex flex-col space-y-3.5 flex-1 min-h-0">
                 {/* Header: Selected Category Name & Edit button */}
                 <div className="flex items-center justify-between">
                   <h3 className="text-base font-bold text-[#0F172A] truncate">
@@ -705,7 +717,6 @@ export default function GroupPickerModal({
                       value={tableSearch}
                       onChange={(e) => {
                         setTableSearch(e.target.value);
-                        setPage(1);
                       }}
                       placeholder="Tìm theo tên nhóm hoặc UID..."
                       className="w-full h-8 pl-8 pr-3 text-xs border border-[#E2E8F0] rounded-lg outline-none focus:border-blue-500 placeholder:text-[#94A3B8] text-[#0F172A]"
@@ -718,7 +729,6 @@ export default function GroupPickerModal({
                       value={membersFilter}
                       onChange={(val) => {
                         setMembersFilter(val);
-                        setPage(1);
                       }}
                       options={MEMBERS_FILTER_OPTIONS}
                       size="sm"
@@ -775,21 +785,29 @@ export default function GroupPickerModal({
                   </div>
                 )}
 
-                {/* Groups Data Table */}
-                <div className="border border-[#E2E8F0] rounded-xl overflow-x-auto min-h-[280px]">
+                {/* Groups Data Table — cuộn dọc thay cho phân trang; kéo chuột / Ctrl + click để chọn nhiều nhóm */}
+                {!loading && filteredGroups.length > 0 && (
+                  <p className="text-[11px] text-[#94A3B8]">
+                    Mẹo: giữ chuột trái và kéo để chọn nhiều nhóm liên tiếp · Ctrl + click chọn từng nhóm riêng lẻ · Shift + click chọn cả khoảng.
+                  </p>
+                )}
+                <div
+                  ref={setTableContainer}
+                  className="border border-[#E2E8F0] rounded-xl overflow-auto min-h-[280px] max-h-[52vh] md:max-h-none md:min-h-0 md:flex-1"
+                >
                   {loading ? (
                     <div className="flex flex-col items-center justify-center py-16 text-slate-400 gap-2">
                       <Loader2 className="size-6 animate-spin text-blue-600" />
                       <span className="text-xs">Đang tải danh sách nhóm từ Database...</span>
                     </div>
-                  ) : paginatedGroups.length === 0 ? (
+                  ) : filteredGroups.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-16 text-slate-400 text-xs">
                       Không tìm thấy nhóm nào phù hợp trong danh mục này.
                     </div>
                   ) : (
                     <table className="w-full border-collapse text-left text-xs">
                       <thead>
-                        <tr className="bg-[#F8FAFC] border-b border-[#E2E8F0] text-[11px] font-bold text-[#64748B] uppercase tracking-wider">
+                        <tr className="sticky top-0 z-10 bg-[#F8FAFC] border-b border-[#E2E8F0] text-[11px] font-bold text-[#64748B] uppercase tracking-wider">
                           <th className="w-10 px-3 py-2.5 text-center">
                             <input
                               type="checkbox"
@@ -804,27 +822,32 @@ export default function GroupPickerModal({
                           </th>
                           <th className="w-12 px-3 py-2.5 text-center">STT</th>
                           <th className="w-28 px-3 py-2.5">TỪ KHÓA</th>
-                          <th className="px-3 py-2.5">TÊN NHÓM</th>
-                          <th className="w-24 px-3 py-2.5 text-center">LOẠI NHÓM</th>
+                          <th className="min-w-[220px] px-3 py-2.5">TÊN NHÓM</th>
                           <th className="w-28 px-3 py-2.5 text-right">THÀNH VIÊN</th>
                           <th className="w-56 px-3 py-2.5">LIÊN KẾT / URL NHÓM</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#F1F5F9] bg-white">
-                        {paginatedGroups.map((group, idx) => {
+                        {filteredGroups.map((group, idx) => {
                           const isSelected = selectedIds.has(group.id);
-                          const sttNum = startIndex + idx + 1;
+                          const sttNum = idx + 1;
+                          const multi = rowProps(group, idx);
 
                           return (
                             <tr
                               key={group.id}
-                              onClick={() => toggleSelectRow(group.id)}
-                              className={`hover:bg-slate-50 cursor-pointer transition-colors ${
+                              data-account-uid={multi["data-account-uid"]}
+                              // Click thường: bật / tắt nhóm (như cũ) · Ctrl / Shift + click: chọn nhiều nhóm
+                              onClick={(e) =>
+                                e.ctrlKey || e.metaKey || e.shiftKey ? multi.onClick(e) : toggleSelectRow(group.id)
+                              }
+                              className={`hover:bg-slate-50 cursor-pointer select-none transition-colors ${
                                 isSelected ? "bg-blue-50/40" : ""
                               }`}
                             >
                               <td
                                 className="px-3 py-2.5 text-center"
+                                data-no-row-selection
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 <input
@@ -840,24 +863,14 @@ export default function GroupPickerModal({
                               <td className="px-3 py-2.5 text-[#334155] font-medium truncate max-w-[120px]">
                                 {group.keyword || "—"}
                               </td>
-                              <td className="px-3 py-2.5 max-w-[160px]">
+                              <td className="px-3 py-2.5 min-w-[220px] max-w-[320px]">
+                                {/* Tối đa 2 dòng, phần còn lại "…" — di chuột để xem đủ tên */}
                                 <span
-                                  className="font-bold text-xs text-[#0F172A] line-clamp-1 block cursor-default"
+                                  className="font-bold text-xs text-[#0F172A] line-clamp-2 break-words cursor-default"
                                   title={group.name || ""}
                                 >
                                   {group.name}
                                 </span>
-                              </td>
-                              <td className="px-3 py-2.5 text-center">
-                                {group.type === "public" ? (
-                                  <span className="inline-flex items-center justify-center rounded border border-[#BBF7D0] bg-[#F0FDF4] px-2 py-0.5 text-[11px] font-semibold text-[#16A34A]">
-                                    Công khai
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center justify-center rounded border border-[#E9D5FF] bg-[#FAF5FF] px-2 py-0.5 text-[11px] font-semibold text-[#9333EA]">
-                                    Riêng tư
-                                  </span>
-                                )}
                               </td>
                               <td className="px-3 py-2.5 text-right font-semibold text-[#0F172A]">
                                 {group.members}
@@ -886,38 +899,9 @@ export default function GroupPickerModal({
                 </div>
               </div>
 
-              {/* Pagination Controls */}
-              <div className="pt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-[#64748B]">
-                <div className="flex items-center gap-2">
-                  <span>
-                    Hiển thị{" "}
-                    <strong>
-                      {totalItems === 0 ? 0 : startIndex + 1} -{" "}
-                      {Math.min(startIndex + pageSize, totalItems)}
-                    </strong>{" "}
-                    trong tổng số <strong>{totalItems}</strong> nhóm
-                  </span>
-                  <span>•</span>
-                  <span>Hàng mỗi trang:</span>
-                  <CustomSelect
-                    value={pageSize}
-                    onChange={(val) => {
-                      setPageSize(Number(val));
-                      setPage(1);
-                    }}
-                    options={PAGE_SIZE_OPTIONS}
-                    size="sm"
-                    direction="up"
-                    className="w-16"
-                    buttonClassName="h-[28px] px-2 text-xs"
-                  />
-                </div>
-
-                <Pagination
-                  currentPage={currentPage}
-                  totalPages={totalPages}
-                  onPageChange={(p) => setPage(p)}
-                />
+              {/* Tổng số nhóm (không phân trang) */}
+              <div className="pt-3 text-xs text-[#64748B]">
+                Tổng số <strong>{totalItems}</strong> nhóm
               </div>
             </div>
           </div>

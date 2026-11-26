@@ -73,7 +73,7 @@ export default function DelayRangeInput({ min, max, onChange, floor = MIN_DELAY_
   };
 
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className="flex flex-col items-start gap-1">
       <div className="flex items-center gap-2">
         <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
           <button type="button" aria-label="Giảm Min" onClick={() => commit(min - 1, max)} className={`${stepBtn} rounded-l-lg`}>
@@ -114,12 +114,9 @@ export default function DelayRangeInput({ min, max, onChange, floor = MIN_DELAY_
         </div>
 
         <span className="text-xs text-[#64748B]">giây</span>
+        <span className="text-[11px] text-[#94A3B8]">(tối thiểu {floor} giây)</span>
       </div>
-      {note ? (
-        <p className="max-w-[320px] text-right text-[11px] font-medium text-amber-600">{note}</p>
-      ) : (
-        <p className="text-[10px] text-[#94A3B8]">Tối thiểu {floor} giây</p>
-      )}
+      {note && <p className="max-w-[360px] text-[11px] font-medium text-amber-600">{note}</p>}
     </div>
   );
 }

@@ -1304,10 +1304,12 @@ def update_scan_category(owner: Optional[str], cat_id_or_name: Any, new_name: st
         return {"ok": False, "error": str(exc)}
 
 
-def delete_scan_category(owner: Optional[str], cat_id_or_name: Any) -> bool:
+def delete_scan_category(owner: Optional[str], cat_id_or_name: Any, *, delete_groups: bool = False) -> dict[str, Any]:
+    """Xoá danh mục. delete_groups=True → xoá luôn mọi nhóm đang nằm trong danh mục (theo liên kết / từ khóa);
+    False → chỉ xoá danh mục, nhóm vẫn giữ trong "Tất cả nhóm đã quét". Trả {ok, groups_deleted}."""
     owner = (owner or "").strip()
     if not owner or not cat_id_or_name:
-        return False
+        return {"ok": False, "groups_deleted": 0}
     try:
         val = str(cat_id_or_name).replace("cat-", "").strip()
         old_cat = None
@@ -1322,10 +1324,16 @@ def delete_scan_category(owner: Optional[str], cat_id_or_name: Any) -> bool:
                 (owner, str(cat_id_or_name).strip()),
             )
         if not old_cat:
-            return False
+            return {"ok": False, "groups_deleted": 0}
 
         cat_name = old_cat["name"]
         cat_id = old_cat["id"]
+
+        groups_deleted = 0
+        if delete_groups:
+            key = _category_key(cat_name)
+            gids = [gid for gid, keys in _group_category_keys(owner).items() if key in keys]
+            groups_deleted = delete_scanned_groups_bulk(owner, gids)
 
         db.execute(
             "DELETE FROM scanned_group_category_groups WHERE owner_username = ? AND category_name = ?",
@@ -1336,10 +1344,10 @@ def delete_scan_category(owner: Optional[str], cat_id_or_name: Any) -> bool:
             "DELETE FROM scanned_group_categories WHERE owner_username = ? AND id = ?",
             (owner, cat_id),
         )
-        return True
+        return {"ok": True, "groups_deleted": groups_deleted}
     except Exception as exc:
         print(f"[Module 10 DB] delete_scan_category error: {exc}")
-        return False
+        return {"ok": False, "groups_deleted": 0}
 
 
 def move_groups_to_category(owner: Optional[str], target_category_name: str, group_ids: list[Any]) -> int:
