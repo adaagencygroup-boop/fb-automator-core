@@ -16,6 +16,7 @@ import {
 } from "../service";
 import HistoryDetail from "./HistoryDetail";
 import { HistoryView } from "./HistoryView";
+import TikTokHistory from "./TikTokHistory";
 import { ActionChip, NumberInput, PageTitle, RunStatusBadge, UidCopy, formatDuration } from "./parts";
 
 const PAGE_SIZE = 10;
@@ -443,6 +444,7 @@ export default function FarmHistory() {
           {[
             ["post", "Đăng Facebook"],
             ["interact", "Tương tác tài khoản"],
+            ["tiktok", "Tải video TikTok"],
           ].map(([value, label]) => (
             <button
               key={value}
@@ -459,8 +461,8 @@ export default function FarmHistory() {
           ))}
         </div>
 
-        {/* Nút hành động chuẩn dùng chung cho cả 2 tab */}
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        {/* Nút hành động chuẩn dùng chung cho 2 tab Đăng Facebook và Tương tác */}
+        {tab !== "tiktok" && <div className="flex flex-wrap items-center justify-end gap-2">
           <button
             type="button"
             onClick={() => {
@@ -484,10 +486,12 @@ export default function FarmHistory() {
               }
             }}
           />
-        </div>
+        </div>}
       </div>
 
-      {tab === "interact" ? (
+      {tab === "tiktok" ? (
+        <TikTokHistory accountFilterOptions={accountFilterOptions} />
+      ) : tab === "interact" ? (
         <InteractionHistory />
       ) : (
         <HistoryView />

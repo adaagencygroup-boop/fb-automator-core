@@ -82,6 +82,7 @@ const NEVER_CACHE = [
   /\/api\/pages\/jobs\//,               // getJobStatus (module 05) — job đăng bài
   /\/sync-jobs\//,                      // module 05 job đồng bộ page
   /\/api\/pages\/tiktok\/auth-status/,  // getTikTokAuthStatus (module 05)
+  /\/api\/post\/tiktok\//,             // module 03 — đăng nhập, tiến độ, log tải video TikTok
   /\/api\/group-scan\/check-status/,    // module 10
   /\/api\/group-scan\/members\/active/, // module 10 — phiên quét đang chạy
   /\/api\/group-scan\/keyword-capacity\//, // module 10 — Kiểm tra từ khóa (tiến độ trực tiếp)

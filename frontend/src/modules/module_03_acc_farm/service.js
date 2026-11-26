@@ -24,6 +24,21 @@ export function pickerErrorMessage(err, moduleName) {
   return err?.message || `Không tải được dữ liệu ${moduleName}`;
 }
 
+// ── Tải video từ TikTok (phiên đăng nhập TikTok dùng chung với Module 05) ──
+
+export const getTikTokAuth = () => api.get("/api/post/tiktok/auth-status");
+export const openTikTokLogin = () => api.post("/api/post/tiktok/open-login");
+export const startTikTokDownload = (payload) => api.post("/api/post/tiktok/start", payload);
+export const stopTikTokDownload = () => api.post("/api/post/tiktok/stop");
+export const getTikTokDownloadStatus = (page, size) => api.get("/api/post/tiktok/status", { params: { page, size } });
+
+export const getTikTokHistory = (params) => api.get("/api/post/tiktok/history", { params });
+export const openTikTokHistoryFolder = (id) => api.post(`/api/post/tiktok/history/${id}/open`);
+
+// Hộp chọn thư mục của Windows; t: tránh cache GET trả lại thư mục cũ, chờ lâu vì người dùng còn đang duyệt thư mục
+export const pickVideoFolder = () =>
+  api.get("/api/post/dialog/folder", { params: { t: Date.now() }, timeout: 300000 }).then((res) => res?.path || "");
+
 // ── Chạy tương tác ──
 
 // Kích hoạt phải đọc nick, chia link, tạo lượt chạy trên CSDL (Supabase ở xa có lúc rất chậm): chờ lâu hơn 60s mặc định

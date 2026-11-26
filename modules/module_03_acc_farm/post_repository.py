@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from core.database.connection import db
+from modules.module_02_account_manager.context import owner_context
 
 logger = logging.getLogger(__name__)
 
@@ -335,16 +336,16 @@ def create_post(
         INSERT INTO posts (
             id, session_id, account_id, account_uid, account_name,
             post_type, content, hashtags, image_path, image_paths, media_path,
-            thumbnail_path, media_hash, schedule_time, status,
+            thumbnail_path, media_hash, schedule_time, status, owner_key,
             created_at, updated_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
         RETURNING *;
     """
     params = (
         post_id, session_id, account_id, account_uid, account_name,
         post_type, content, hashtags, primary, paths_json, media_path,
-        thumbnail_path, media_hash, schedule_time, status
+        thumbnail_path, media_hash, schedule_time, status, owner_context.get()
     )
     res = db.fetch_one(sql, params)
     return res or {}
@@ -764,6 +765,7 @@ def finish_post_interaction_log(
 
 
 def get_post_history(
+    owner: str,
     post_type: Optional[str] = None,
     status: Optional[str] = None,
     search: Optional[str] = None,
@@ -773,8 +775,8 @@ def get_post_history(
     limit: int = 50,
     offset: int = 0
 ) -> tuple:
-    conditions = ["status IN ('PUBLISHED', 'FAILED', 'STOPPED', 'BLOCKED', 'DIE')"]
-    params = []
+    conditions = ["owner_key = %s", "status IN ('PUBLISHED', 'FAILED', 'STOPPED', 'BLOCKED', 'DIE')"]
+    params = [owner]
 
     if post_type and post_type != "all":
         conditions.append("post_type = %s")
@@ -823,31 +825,32 @@ def get_post_history(
     return rows or [], total
 
 
-def list_post_history_accounts() -> list:
-    """Nick còn trong lịch sử đăng bài, kể cả khi đã xóa khỏi Module 02."""
+def list_post_history_accounts(owner: str) -> list:
+    """Nick còn trong lịch sử đăng bài của người dùng, kể cả khi đã xóa khỏi Module 02."""
     sql = """
         SELECT DISTINCT ON (account_uid) account_uid, account_name
         FROM posts
-        WHERE status IN ('PUBLISHED', 'FAILED', 'STOPPED', 'BLOCKED', 'DIE')
+        WHERE owner_key = %s
+          AND status IN ('PUBLISHED', 'FAILED', 'STOPPED', 'BLOCKED', 'DIE')
           AND account_uid IS NOT NULL
           AND BTRIM(account_uid) <> ''
         ORDER BY account_uid, created_at DESC;
     """
     try:
-        return db.fetch_all(sql) or []
+        return db.fetch_all(sql, (owner,)) or []
     except Exception as e:
         logger.error(f"Lỗi lấy nick cho bộ lọc lịch sử: {e}")
         return []
 
 
-def cleanup_post_history(days: int = 30) -> int:
+def cleanup_post_history(owner: str, days: int = 30) -> int:
     try:
         if days <= 0:
-            sql = "DELETE FROM posts WHERE status IN ('PUBLISHED', 'FAILED', 'STOPPED', 'BLOCKED', 'DIE');"
-            db.execute(sql)
+            sql = "DELETE FROM posts WHERE owner_key = %s AND status IN ('PUBLISHED', 'FAILED', 'STOPPED', 'BLOCKED', 'DIE');"
+            db.execute(sql, (owner,))
         else:
-            sql = f"DELETE FROM posts WHERE status IN ('PUBLISHED', 'FAILED', 'STOPPED', 'BLOCKED', 'DIE') AND created_at < NOW() - INTERVAL '{int(days)} days';"
-            db.execute(sql)
+            sql = f"DELETE FROM posts WHERE owner_key = %s AND status IN ('PUBLISHED', 'FAILED', 'STOPPED', 'BLOCKED', 'DIE') AND created_at < NOW() - INTERVAL '{int(days)} days';"
+            db.execute(sql, (owner,))
         return 1
     except Exception as e:
         logger.error(f"Lỗi khi dọn dẹp post history: {e}")

@@ -17,10 +17,12 @@ import mimetypes
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from config.constants import UPLOADS_DIR
 from typing import Dict, Any, List, Optional
-from fastapi import APIRouter, HTTPException, Query, Body, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from modules.module_02_account_manager.api.router import scoped_owner
+from modules.module_02_account_manager.context import owner_context
 from modules.module_03_acc_farm import post_repository
 from modules.module_03_acc_farm.content_service import (
     generate_status_content,
@@ -547,7 +549,7 @@ def crawl_image_for_draft(payload: CrawlImagePayload):
 # 4. EXECUTION CONTROL (START / PAUSE / RESUME / STOP)
 # ==============================================================================
 
-@router.post("/start")
+@router.post("/start", dependencies=[Depends(scoped_owner)])
 def start_posting(payload: StartPostPayload):
     """
     Luồng khởi chạy đúng thứ tự:
@@ -749,9 +751,17 @@ def get_posting_status():
 # 5. HISTORY ENDPOINT
 # ==============================================================================
 
-@router.get("/history/accounts")
+def _history_owner() -> str:
+    """Lịch sử chỉ của người đang đăng nhập."""
+    owner = owner_context.get()
+    if not owner:
+        raise HTTPException(401, "Chưa đăng nhập")
+    return owner
+
+
+@router.get("/history/accounts", dependencies=[Depends(scoped_owner)])
 def get_history_accounts():
-    rows = post_repository.list_post_history_accounts()
+    rows = post_repository.list_post_history_accounts(_history_owner())
     accounts = []
     for row in rows:
         uid = str(row.get("account_uid") or "").strip()
@@ -765,7 +775,7 @@ def get_history_accounts():
     return {"success": True, "data": accounts}
 
 
-@router.get("/history")
+@router.get("/history", dependencies=[Depends(scoped_owner)])
 def get_history(
     post_type: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
@@ -777,6 +787,7 @@ def get_history(
     offset: int = Query(0)
 ):
     rows, total = post_repository.get_post_history(
+        _history_owner(),
         post_type=post_type,
         status=status,
         search=search,
@@ -789,10 +800,10 @@ def get_history(
     return {"success": True, "data": rows, "total": total}
 
 
-@router.post("/history/cleanup")
+@router.post("/history/cleanup", dependencies=[Depends(scoped_owner)])
 def cleanup_history(payload: Dict[str, Any] = Body(default={})):
     days = int(payload.get("days", 30))
-    deleted = post_repository.cleanup_post_history(days)
+    deleted = post_repository.cleanup_post_history(_history_owner(), days)
     return {"success": True, "message": f"Đã dọn dẹp bài đăng cũ hơn {days} ngày.", "deleted": deleted}
 
 

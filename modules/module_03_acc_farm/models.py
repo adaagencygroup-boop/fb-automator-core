@@ -162,6 +162,8 @@ ADDED_COLUMNS = [
     ("posts", "logs", "JSONB"),
     # Nhiều ảnh Status (JSON array text), sync image_path = phần tử đầu — migrations/012_posts_image_paths.sql
     ("posts", "image_paths", "TEXT"),
+    # Người dùng đã tạo bài (accounts.user_id) — lịch sử chỉ hiện bài của chính người đăng nhập
+    ("posts", "owner_key", "TEXT"),
 ]
 
 
@@ -280,6 +282,7 @@ TAB2_DDL_STATEMENTS_PG = [
       account_id UUID,
       account_uid TEXT NOT NULL,
       account_name TEXT,
+      owner_key TEXT,
       post_type TEXT NOT NULL CHECK (post_type IN ('status', 'reels', 'story')),
       content TEXT NOT NULL DEFAULT '' CHECK (char_length(content) <= 63206),
       hashtags TEXT,
@@ -309,6 +312,7 @@ TAB2_DDL_STATEMENTS_PG = [
     "CREATE INDEX IF NOT EXISTS idx_posts_published ON posts (published_at DESC) WHERE published_at IS NOT NULL;",
     "CREATE INDEX IF NOT EXISTS idx_posts_session ON posts (session_id);",
     "CREATE INDEX IF NOT EXISTS idx_posts_account ON posts (account_id);",
+    "CREATE INDEX IF NOT EXISTS idx_posts_owner ON posts (owner_key, created_at);",
     # 5. post_interaction_logs
     """
     CREATE TABLE IF NOT EXISTS post_interaction_logs (
@@ -370,6 +374,22 @@ TAB2_DDL_STATEMENTS_PG = [
       BEFORE UPDATE ON account_folder_mappings
       FOR EACH ROW EXECUTE FUNCTION set_updated_at();
     """,
+    # Video TikTok đã tải cho từng nick (Lịch sử)
+    """
+    CREATE TABLE IF NOT EXISTS account_tiktok_videos (
+      id BIGSERIAL PRIMARY KEY,
+      owner_key TEXT NOT NULL,
+      account_uid TEXT NOT NULL,
+      account_name TEXT,
+      video_id TEXT NOT NULL,
+      video_url TEXT,
+      keyword TEXT,
+      caption TEXT,
+      file_path TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_account_tiktok_videos_owner ON account_tiktok_videos (owner_key, created_at);",
 ]
 
 TAB2_DDL_STATEMENTS_SQLITE = [
@@ -425,6 +445,7 @@ TAB2_DDL_STATEMENTS_SQLITE = [
       account_id TEXT,
       account_uid TEXT NOT NULL,
       account_name TEXT,
+      owner_key TEXT,
       post_type TEXT NOT NULL CHECK (post_type IN ('status', 'reels', 'story')),
       content TEXT NOT NULL DEFAULT '' CHECK (length(content) <= 63206),
       hashtags TEXT,
@@ -454,6 +475,7 @@ TAB2_DDL_STATEMENTS_SQLITE = [
     "CREATE INDEX IF NOT EXISTS idx_posts_published ON posts (published_at DESC);",
     "CREATE INDEX IF NOT EXISTS idx_posts_session ON posts (session_id);",
     "CREATE INDEX IF NOT EXISTS idx_posts_account ON posts (account_id);",
+    "CREATE INDEX IF NOT EXISTS idx_posts_owner ON posts (owner_key, created_at);",
     # 5. post_interaction_logs
     """
     CREATE TABLE IF NOT EXISTS post_interaction_logs (
@@ -474,7 +496,34 @@ TAB2_DDL_STATEMENTS_SQLITE = [
     "CREATE INDEX IF NOT EXISTS idx_post_interaction_logs_session ON post_interaction_logs (session_id);",
     "CREATE INDEX IF NOT EXISTS idx_post_interaction_logs_uid ON post_interaction_logs (account_uid);",
     "CREATE INDEX IF NOT EXISTS idx_post_interaction_logs_started ON post_interaction_logs (started_at DESC);",
+    # Video TikTok đã tải cho từng nick (Lịch sử)
+    """
+    CREATE TABLE IF NOT EXISTS account_tiktok_videos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      owner_key TEXT NOT NULL,
+      account_uid TEXT NOT NULL,
+      account_name TEXT,
+      video_id TEXT NOT NULL,
+      video_url TEXT,
+      keyword TEXT,
+      caption TEXT,
+      file_path TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_account_tiktok_videos_owner ON account_tiktok_videos (owner_key, created_at);",
 ]
+
+
+# Bài cũ chưa có chủ: gán theo chủ hiện tại của nick (nick đã xóa khỏi Module 02 thì chưa gán được)
+BACKFILL_POST_OWNER = """
+    UPDATE posts SET owner_key = a.owner
+    FROM (
+        SELECT uid, MIN(user_id) AS owner FROM accounts
+        WHERE COALESCE(user_id, '') <> '' GROUP BY uid HAVING COUNT(DISTINCT user_id) = 1
+    ) a
+    WHERE posts.owner_key IS NULL AND posts.account_uid = a.uid
+"""
 
 
 def init_tab2_models():
@@ -485,6 +534,10 @@ def init_tab2_models():
             db.execute(stmt)
         except Exception as e:
             print(f"[Module 3 Tab 2 DB] Error: {e}")
+    try:
+        db.execute(BACKFILL_POST_OWNER)
+    except Exception as e:
+        print(f"[Module 3 Tab 2 DB] Backfill post owner error: {e}")
 
 
 def init_models():

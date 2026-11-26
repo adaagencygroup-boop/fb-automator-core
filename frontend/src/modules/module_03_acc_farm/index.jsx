@@ -5,6 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import ComingSoon from "@/components/ComingSoon";
 import FarmEngage from "./components/FarmEngage";
 import FarmHistory from "./components/FarmHistory";
+import TikTokDownloadView from "./components/TikTokDownloadView";
 import { PostModeTabs } from "./components/PostModeTabs";
 import { StatusPostView } from "./components/StatusPostView";
 import { ReelsPostView } from "./components/ReelsPostView";
@@ -15,6 +16,7 @@ import { shouldRestoreProgressView } from "@/modules/module_03_acc_farm/postSess
 /**
  * Module 03: Đăng bài và tương tác tài khoản.
  *   interact.engage  -> Tab 1: Tương tác tài khoản (nuôi nick tự động từ main)
+ *   interact.tiktok  -> Tải video từ TikTok theo từ khóa cho từng tài khoản
  *   interact.history -> Lịch sử (chuẩn từ nhánh main: FarmHistory)
  *   interact.post    -> Tab 2: Đăng bài viết Facebook (Status, Reels, Story)
  */
@@ -123,6 +125,11 @@ export default function AccFarmModule({ subPage = "interact.post" }) {
   // 2. Phân hệ Lịch sử (/interact/history) - Chuẩn từ main
   if (subPage === "interact.history") {
     return <FarmHistory />;
+  }
+
+  // Tải video từ TikTok (/interact/tiktok)
+  if (subPage === "interact.tiktok") {
+    return <TikTokDownloadView />;
   }
 
   // 3. Phân hệ Đăng bài Facebook (/interact/post)
