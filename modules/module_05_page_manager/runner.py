@@ -345,6 +345,7 @@ def run_tiktok_download_task(job_id: int, config: dict):
           f_path,
           driver=driver,
           stop_check=is_tiktok_stopped,
+          prefetched_meta=v,
         )
         if download_ok:
           final_vid = str(resolved_meta.get("video_id") or temp_vid)

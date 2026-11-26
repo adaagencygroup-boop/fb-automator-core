@@ -262,9 +262,31 @@ def download_tiktok_video(
   save_path: str,
   driver=None,
   stop_check: Optional[Callable[[], bool]] = None,
+  prefetched_meta: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, Dict[str, Any]]:
   if _should_stop(stop_check):
     return False, {}
+  if isinstance(prefetched_meta, dict) and prefetched_meta.get("play_urls"):
+    pre_cookies = None
+    if driver is not None:
+      try:
+        pre_cookies = driver.get_cookies() or None
+      except Exception:
+        pre_cookies = None
+    if not pre_cookies:
+      pre_cookies = prefetched_meta.get("cookies") or None
+    pre_ua = prefetched_meta.get("user_agent") or DEFAULT_DESKTOP_UA
+    for cdn_url in prefetched_meta.get("play_urls") or []:
+      if _should_stop(stop_check):
+        return False, prefetched_meta
+      if download_stream_to_file(
+        cdn_url,
+        save_path,
+        cookies=pre_cookies,
+        user_agent=pre_ua,
+        stop_check=stop_check,
+      ):
+        return True, prefetched_meta
   meta = resolve_tiktok_video_detail(video_url_or_id, driver=driver, stop_check=stop_check)
   if _should_stop(stop_check):
     return False, meta

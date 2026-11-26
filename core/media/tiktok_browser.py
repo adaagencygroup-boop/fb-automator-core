@@ -2,6 +2,7 @@ import os
 import re
 import json
 import time
+import base64
 import urllib.parse
 import threading
 from typing import Callable, Dict, Any, Iterable, List, Optional, Set
@@ -285,9 +286,14 @@ def _create_headless_tiktok_driver() -> webdriver.Chrome:
   opts.add_argument(f"user-agent={DEFAULT_DESKTOP_UA}")
   opts.add_experimental_option("excludeSwitches", ["enable-automation"])
   opts.add_experimental_option("useAutomationExtension", False)
+  opts.set_capability("goog:loggingPrefs", {"performance": "ALL"})
   driver = webdriver.Chrome(service=Service(), options=opts)
   try:
     driver.set_page_load_timeout(30)
+  except Exception:
+    pass
+  try:
+    driver.execute_cdp_cmd("Network.enable", {})
   except Exception:
     pass
   try:
@@ -401,6 +407,146 @@ def _matches_any_keyword(title: str, keywords: List[str]) -> bool:
     if kw in t or (tokens and all(tok in t for tok in tokens)):
       return True
   return False
+def _collect_urls_from_addr(addr: Any) -> List[str]:
+  urls: List[str] = []
+  if isinstance(addr, str) and addr.startswith("http"):
+    urls.append(addr)
+  elif isinstance(addr, dict):
+    for key in ("UrlList", "url_list"):
+      val = addr.get(key)
+      if isinstance(val, list):
+        for u in val:
+          if isinstance(u, str) and u.startswith("http"):
+            urls.append(u)
+  return urls
+def _extract_play_urls_from_video_obj(video_obj: Any, dom_video_urls: Optional[List[str]] = None) -> List[str]:
+  play_urls: List[str] = []
+  seen_urls: Set[str] = set()
+  def _add_urls(candidates: List[str]):
+    for u in candidates:
+      if u and u.startswith("http") and u not in seen_urls:
+        seen_urls.add(u)
+        play_urls.append(u)
+  v_dict = video_obj if isinstance(video_obj, dict) else {}
+  bitrate_info = v_dict.get("bitrateInfo")
+  if isinstance(bitrate_info, list) and bitrate_info:
+    h264_entries = []
+    other_entries = []
+    for entry in bitrate_info:
+      if not isinstance(entry, dict):
+        continue
+      codec = str(entry.get("CodecType") or "").lower()
+      if "h264" in codec or "avc" in codec:
+        h264_entries.append(entry)
+      else:
+        other_entries.append(entry)
+    h264_entries.sort(key=lambda e: int(e.get("Bitrate") or 0), reverse=True)
+    other_entries.sort(key=lambda e: int(e.get("Bitrate") or 0), reverse=True)
+    for entry in h264_entries + other_entries:
+      _add_urls(_collect_urls_from_addr(entry.get("PlayAddr")))
+  _add_urls(_collect_urls_from_addr(v_dict.get("playAddr")))
+  _add_urls(dom_video_urls or [])
+  _add_urls(_collect_urls_from_addr(v_dict.get("downloadAddr")))
+  return play_urls
+def _clear_cdp_logs(driver: webdriver.Chrome):
+  try:
+    driver.get_log("performance")
+  except Exception:
+    pass
+def _extract_items_from_tiktok_api_payload(payload: Any) -> List[Dict[str, Any]]:
+  if not isinstance(payload, dict):
+    return []
+  raw_items: List[Dict[str, Any]] = []
+  for key in ("itemList", "item_list"):
+    val = payload.get(key)
+    if isinstance(val, list):
+      for it in val:
+        if isinstance(it, dict):
+          raw_items.append(it)
+  data_list = payload.get("data")
+  if isinstance(data_list, list):
+    for entry in data_list:
+      if not isinstance(entry, dict):
+        continue
+      it = entry.get("item")
+      if isinstance(it, dict):
+        raw_items.append(it)
+  item_struct = (payload.get("itemInfo") or {}).get("itemStruct") if isinstance(payload.get("itemInfo"), dict) else None
+  if isinstance(item_struct, dict):
+    raw_items.append(item_struct)
+  return raw_items
+def _drain_cdp_tiktok_items(driver: webdriver.Chrome) -> Dict[str, Dict[str, Any]]:
+  captured: Dict[str, Dict[str, Any]] = {}
+  try:
+    logs = driver.get_log("performance") or []
+  except Exception:
+    return captured
+  target_paths = (
+    "/api/search/general/full",
+    "/api/search/item/full",
+    "/api/post/item_list",
+    "/api/creator/item_list",
+    "/api/item/detail",
+  )
+  req_ids: List[str] = []
+  seen_req: Set[str] = set()
+  for entry in logs:
+    try:
+      msg = json.loads(entry.get("message") or "{}").get("message") or {}
+    except Exception:
+      continue
+    if msg.get("method") != "Network.responseReceived":
+      continue
+    params = msg.get("params") or {}
+    resp = params.get("response") or {}
+    url = str(resp.get("url") or "")
+    status = int(resp.get("status") or 0)
+    req_id = params.get("requestId")
+    if status == 200 and req_id and req_id not in seen_req and any(tp in url for tp in target_paths):
+      seen_req.add(req_id)
+      req_ids.append(req_id)
+  if not req_ids:
+    return captured
+  cookies: List[Dict[str, Any]] = []
+  try:
+    cookies = driver.get_cookies() or []
+  except Exception:
+    cookies = []
+  try:
+    user_agent = driver.execute_script("return navigator.userAgent || '';") or DEFAULT_DESKTOP_UA
+  except Exception:
+    user_agent = DEFAULT_DESKTOP_UA
+  for req_id in req_ids:
+    try:
+      body_res = driver.execute_cdp_cmd("Network.getResponseBody", {"requestId": req_id}) or {}
+      raw_body = body_res.get("body") or ""
+      if body_res.get("base64Encoded") and raw_body:
+        raw_body = base64.b64decode(raw_body).decode("utf-8", errors="replace")
+      if not raw_body:
+        continue
+      payload = json.loads(raw_body)
+    except Exception:
+      continue
+    for item in _extract_items_from_tiktok_api_payload(payload):
+      vid = str(item.get("id") or "").strip()
+      if not vid or not vid.isdigit():
+        continue
+      author_obj = item.get("author") if isinstance(item.get("author"), dict) else {}
+      author = str(author_obj.get("uniqueId") or author_obj.get("unique_id") or "").strip()
+      if not author:
+        continue
+      title = _clean_caption(item.get("desc") or "")
+      play_urls = _extract_play_urls_from_video_obj(item.get("video"))
+      captured[vid] = {
+        "video_id": vid,
+        "title": title,
+        "source_url": f"https://www.tiktok.com/@{author}/video/{vid}",
+        "author": {"unique_id": author},
+        "play_urls": play_urls,
+        "cookies": cookies,
+        "user_agent": user_agent,
+      }
+  return captured
 def _search_tiktok_with_driver(
   driver: webdriver.Chrome,
   keywords: str,
@@ -415,6 +561,7 @@ def _search_tiktok_with_driver(
   excluded = set(exclude_ids or ())
   results: List[Dict[str, Any]] = []
   seen: Set[str] = set()
+  cdp_cache: Dict[str, Dict[str, Any]] = {}
   new_unseen = 0
   encoded = urllib.parse.quote_plus(clean_kw)
   search_urls = [
@@ -424,6 +571,7 @@ def _search_tiktok_with_driver(
   for search_url in search_urls:
     if _should_stop(stop_check):
       break
+    _clear_cdp_logs(driver)
     try:
       driver.get(search_url)
     except Exception:
@@ -433,8 +581,9 @@ def _search_tiktok_with_driver(
       if _should_stop(stop_check):
         return results
       time.sleep(1.0)
+      cdp_cache.update(_drain_cdp_tiktok_items(driver))
       cards = _extract_dom_video_cards(driver, mode="search")
-      if cards:
+      if cards or cdp_cache:
         found_initial = True
         break
     if not found_initial:
@@ -443,6 +592,7 @@ def _search_tiktok_with_driver(
     for _ in range(max_scrolls):
       if _should_stop(stop_check):
         break
+      cdp_cache.update(_drain_cdp_tiktok_items(driver))
       cards = _extract_dom_video_cards(driver, mode="search")
       added_this_round = 0
       for card in cards:
@@ -456,12 +606,35 @@ def _search_tiktok_with_driver(
           continue
         seen.add(vid)
         added_this_round += 1
-        title = _clean_caption(card.get("title") or "")
-        results.append({
+        cdp_item = cdp_cache.get(vid)
+        title = _clean_caption((cdp_item.get("title") if cdp_item else "") or card.get("title") or "")
+        entry: Dict[str, Any] = {
           "video_id": vid,
           "title": title or f"{clean_kw} Video {vid}",
           "source_url": f"https://www.tiktok.com/@{author}/video/{vid}",
           "author": {"unique_id": author},
+        }
+        if cdp_item:
+          entry["play_urls"] = cdp_item.get("play_urls") or []
+          entry["cookies"] = cdp_item.get("cookies") or []
+          entry["user_agent"] = cdp_item.get("user_agent") or DEFAULT_DESKTOP_UA
+        results.append(entry)
+        if vid not in excluded:
+          new_unseen += 1
+      for vid, cdp_item in cdp_cache.items():
+        if vid in seen:
+          continue
+        seen.add(vid)
+        added_this_round += 1
+        title = _clean_caption(cdp_item.get("title") or "")
+        results.append({
+          "video_id": vid,
+          "title": title or f"{clean_kw} Video {vid}",
+          "source_url": cdp_item["source_url"],
+          "author": cdp_item["author"],
+          "play_urls": cdp_item.get("play_urls") or [],
+          "cookies": cdp_item.get("cookies") or [],
+          "user_agent": cdp_item.get("user_agent") or DEFAULT_DESKTOP_UA,
         })
         if vid not in excluded:
           new_unseen += 1
@@ -525,8 +698,10 @@ def _fetch_channel_with_driver(
   kw_list = [k.strip().lower() for k in (match_keywords or []) if k and k.strip()]
   results: List[Dict[str, Any]] = []
   seen: Set[str] = set()
+  cdp_cache: Dict[str, Dict[str, Any]] = {}
   new_unseen = 0
   matched_unseen = 0
+  _clear_cdp_logs(driver)
   try:
     driver.get(f"https://www.tiktok.com/@{username}")
   except Exception:
@@ -536,8 +711,9 @@ def _fetch_channel_with_driver(
     if _should_stop(stop_check):
       return results
     time.sleep(1.0)
+    cdp_cache.update(_drain_cdp_tiktok_items(driver))
     cards = _extract_dom_video_cards(driver, mode="profile")
-    if cards:
+    if cards or any((c.get("author") or {}).get("unique_id", "").lower() == username.lower() for c in cdp_cache.values()):
       found_initial = True
       break
   if not found_initial:
@@ -546,6 +722,7 @@ def _fetch_channel_with_driver(
   for _ in range(max_scrolls):
     if _should_stop(stop_check):
       break
+    cdp_cache.update(_drain_cdp_tiktok_items(driver))
     cards = _extract_dom_video_cards(driver, mode="profile")
     added_this_round = 0
     for card in cards:
@@ -561,12 +738,40 @@ def _fetch_channel_with_driver(
         continue
       seen.add(vid)
       added_this_round += 1
-      title = _clean_caption(card.get("title") or "")
-      results.append({
+      cdp_item = cdp_cache.get(vid)
+      title = _clean_caption((cdp_item.get("title") if cdp_item else "") or card.get("title") or "")
+      entry: Dict[str, Any] = {
         "video_id": vid,
         "title": title or f"{username} Video {vid}",
         "source_url": f"https://www.tiktok.com/@{author}/video/{vid}",
         "author": {"unique_id": author},
+      }
+      if cdp_item:
+        entry["play_urls"] = cdp_item.get("play_urls") or []
+        entry["cookies"] = cdp_item.get("cookies") or []
+        entry["user_agent"] = cdp_item.get("user_agent") or DEFAULT_DESKTOP_UA
+      results.append(entry)
+      if vid not in excluded:
+        new_unseen += 1
+        if kw_list and _matches_any_keyword(title, kw_list):
+          matched_unseen += 1
+    for vid, cdp_item in cdp_cache.items():
+      if vid in seen:
+        continue
+      cdp_author = str((cdp_item.get("author") or {}).get("unique_id") or "")
+      if cdp_author.lower() != username.lower():
+        continue
+      seen.add(vid)
+      added_this_round += 1
+      title = _clean_caption(cdp_item.get("title") or "")
+      results.append({
+        "video_id": vid,
+        "title": title or f"{username} Video {vid}",
+        "source_url": cdp_item["source_url"],
+        "author": cdp_item["author"],
+        "play_urls": cdp_item.get("play_urls") or [],
+        "cookies": cdp_item.get("cookies") or [],
+        "user_agent": cdp_item.get("user_agent") or DEFAULT_DESKTOP_UA,
       })
       if vid not in excluded:
         new_unseen += 1
@@ -623,18 +828,6 @@ def fetch_tiktok_channel_via_browser(
       )
   except Exception:
     return []
-def _collect_urls_from_addr(addr: Any) -> List[str]:
-  urls: List[str] = []
-  if isinstance(addr, str) and addr.startswith("http"):
-    urls.append(addr)
-  elif isinstance(addr, dict):
-    for key in ("UrlList", "url_list"):
-      val = addr.get(key)
-      if isinstance(val, list):
-        for u in val:
-          if isinstance(u, str) and u.startswith("http"):
-            urls.append(u)
-  return urls
 def _extract_item_struct_from_rehydration(rehyd_text: str) -> Dict[str, Any]:
   if not rehyd_text:
     return {}
@@ -727,33 +920,7 @@ def _resolve_video_with_driver(
     or page_data.get("domDesc")
     or ""
   )
-  play_urls: List[str] = []
-  seen_urls: Set[str] = set()
-  def _add_urls(candidates: List[str]):
-    for u in candidates:
-      if u and u.startswith("http") and u not in seen_urls:
-        seen_urls.add(u)
-        play_urls.append(u)
-  video_obj = item_struct.get("video") if isinstance(item_struct.get("video"), dict) else {}
-  bitrate_info = video_obj.get("bitrateInfo")
-  if isinstance(bitrate_info, list) and bitrate_info:
-    h264_entries = []
-    other_entries = []
-    for entry in bitrate_info:
-      if not isinstance(entry, dict):
-        continue
-      codec = str(entry.get("CodecType") or "").lower()
-      if "h264" in codec or "avc" in codec:
-        h264_entries.append(entry)
-      else:
-        other_entries.append(entry)
-    h264_entries.sort(key=lambda e: int(e.get("Bitrate") or 0), reverse=True)
-    other_entries.sort(key=lambda e: int(e.get("Bitrate") or 0), reverse=True)
-    for entry in h264_entries + other_entries:
-      _add_urls(_collect_urls_from_addr(entry.get("PlayAddr")))
-  _add_urls(_collect_urls_from_addr(video_obj.get("playAddr")))
-  _add_urls(page_data.get("domVideoUrls") or [])
-  _add_urls(_collect_urls_from_addr(video_obj.get("downloadAddr")))
+  play_urls = _extract_play_urls_from_video_obj(item_struct.get("video"), page_data.get("domVideoUrls") or [])
   cookies: List[Dict[str, Any]] = []
   try:
     cookies = driver.get_cookies() or []
