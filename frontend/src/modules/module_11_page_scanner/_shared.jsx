@@ -70,7 +70,14 @@ function isNearBottom(el) {
  * Smart auto-scroll: mặc định tự cuộn tới dòng mới nhất; khi người dùng kéo lên đọc log cũ
  * sẽ tạm dừng auto-scroll và hiện nút "Mới nhất" để nhảy về cuối.
  */
-export function LiveLogConsole({ title, task, logs, phase }) {
+// Màu nhãn luồng trên nền tối: Thread-01 giữ màu xanh cũ, mỗi luồng sau một màu; nhãn không có số (vd "Phiên") màu xám
+const THREAD_COLORS = ["#60A5FA", "#F472B6", "#34D399", "#FBBF24", "#A78BFA", "#22D3EE", "#FB923C", "#A3E635"];
+export function threadColor(label) {
+  const n = Number(String(label || "").match(/(\d+)/)?.[1]);
+  return Number.isFinite(n) && n > 0 ? THREAD_COLORS[(n - 1) % THREAD_COLORS.length] : "#94A3B8";
+}
+
+export function LiveLogConsole({ title, task, thread = "Thread-01", logs, phase }) {
   const list = Array.isArray(logs) ? logs : [];
   const lastLogId = list.length ? list[list.length - 1]?.id ?? list[list.length - 1]?.message : null;
   const label =
@@ -170,6 +177,9 @@ export function LiveLogConsole({ title, task, logs, phase }) {
             list.map((log) => (
               <div key={log.id} className="flex items-start gap-2 text-slate-300">
                 <span className="shrink-0 text-slate-500">[{log.timestamp}]</span>
+                <span className="shrink-0" style={{ color: threadColor(log.thread || thread) }}>
+                  [{log.thread || thread}]
+                </span>
                 <span
                   className={
                     log.type === "success"

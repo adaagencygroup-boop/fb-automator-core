@@ -15,6 +15,8 @@ export const getScanResults = (id) => api.get(`${BASE}/sessions/${id}/results`);
 export const controlScan = (id, action, body = {}) => api.post(`${BASE}/sessions/${id}/${action}`, body);
 
 export const getProfileLists = async () => (await api.get(`${BASE}/categories`)).items;
+/** Danh mục đang chứa các profile: [{ id, name, color, uids }] */
+export const getProfileMemberships = async (uids) => (await api.post(`${BASE}/categories/memberships`, { uids })).items || [];
 export const saveProfilesToList = ({ id, name, color, profiles }) =>
   api.post(`${BASE}/categories/save`, { category_id: id, name, color, uids: profiles.map((p) => p.uid) });
 
@@ -72,19 +74,40 @@ export async function loadPageListKeys(listId) {
   return keys;
 }
 
-/** 1 trang profile của nguồn → { items: [{ …, scanned }], total }; người đã quét thông tin ở cuối */
-export async function loadSourceProfiles(type, id, { page = 1, pageSize = 20, search = "" } = {}) {
-  if (type === "post") return { items: [], total: 0 };
-  const res = await api.get(`${BASE}/source-people`, { params: { type, id, page, page_size: pageSize, search: search || undefined } });
+// ── Nguồn: bài viết đã quét người tương tác (kho Module 12) ──
+/** [{ id: post_key, name, url, likes, comments, ... }] */
+export async function loadPostSource(search = "") {
+  const res = await api.get(`${BASE}/source-posts`, { params: { search: search || undefined } });
+  return (res?.items || []).map((p) => {
+    const text = (p.content || "").replace(/\s+/g, " ").trim();
+    return {
+      ...p,
+      name: text ? (text.length > 80 ? `${text.slice(0, 80)}…` : text) : p.fb_post_id ? `Bài viết ${p.fb_post_id}` : p.id,
+      scale: (p.likes || 0) + (p.comments || 0),
+      scaleLabel: `${p.likes || 0} like · ${p.comments || 0} bình luận`,
+    };
+  });
+}
+
+/** type: group | page | post → { [id nguồn]: { total, scanned } } — số profile đã quét thông tin / tổng số người */
+export async function loadSourceStats(type) {
+  const res = await api.get(`${BASE}/source-stats`, { params: { type } });
+  return res?.items || {};
+}
+
+/** 1 trang profile của nguồn → { items: [{ …, scanned }], total }; người đã quét thông tin ở cuối. Bài viết: tab like | comment */
+export async function loadSourceProfiles(type, id, { page = 1, pageSize = 20, search = "", tab } = {}) {
+  const params = { type, id, page, page_size: pageSize, search: search || undefined, tab: type === "post" ? tab || "like" : undefined };
+  const res = await api.get(`${BASE}/source-people`, { params });
   return { items: res.items.map((p) => ({ ...p, uid: String(p.uid), name: p.name || p.uid })), total: res.total };
 }
 
 /** N profile đầu tiên chưa quét thông tin của nguồn (từ trên xuống, theo đúng bộ lọc đang tìm) */
-export async function loadTopProfiles(type, id, count, search = "") {
+export async function loadTopProfiles(type, id, count, search = "", tab) {
   const size = 500;
   const out = [];
   for (let page = 1; out.length < count; page += 1) {
-    const { items } = await loadSourceProfiles(type, id, { page, pageSize: size, search });
+    const { items } = await loadSourceProfiles(type, id, { page, pageSize: size, search, tab });
     const fresh = items.filter((p) => !p.scanned);
     out.push(...fresh);
     if (fresh.length < size) break; // hết người chưa quét

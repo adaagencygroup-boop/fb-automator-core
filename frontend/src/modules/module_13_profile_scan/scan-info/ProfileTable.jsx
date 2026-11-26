@@ -9,7 +9,7 @@ import ProfileAvatar from "../shared/ProfileAvatar";
 import { jobText } from "../shared/exportProfiles";
 import { fmtNum, shortFbUrl } from "../utils.mjs";
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 10; // QA: 10 dòng / trang, bảng có thanh cuộn riêng
 const TINTS = ["bg-[#FEE2E2] text-[#DC2626]", "bg-[#FEF3C7] text-[#B45309]", "bg-[#E0E7FF] text-[#4338CA]", "bg-[#E0F2FE] text-[#0369A1]"];
 
 export const rowId = (r) => `${r.sourceKey || ""}|${r.uid}`;
@@ -44,9 +44,10 @@ export default function ProfileTable({ rows: input, selected, onSelect, emptyTex
 
   return (
     <div className="min-w-0 overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
-      <div className="overflow-x-auto">
+      {/* Cuộn trong khung (dọc + ngang), tiêu đề cột đứng yên */}
+      <div className="max-h-[640px] overflow-auto custom-scrollbar">
         <table className="w-full min-w-[1760px] text-left text-xs">
-          <thead className="border-b border-[#E2E8F0] bg-[#F8FAFC] text-[11px] uppercase tracking-[0.5px] text-[#475569] [&_th]:whitespace-nowrap [&_th]:px-3 [&_th]:py-3 [&_th]:font-bold">
+          <thead className="sticky top-0 z-10 border-b border-[#E2E8F0] bg-[#F8FAFC] text-[11px] uppercase tracking-[0.5px] text-[#475569] [&_th]:whitespace-nowrap [&_th]:px-3 [&_th]:py-3 [&_th]:font-bold">
             <tr>
               {onSelect && <th className="w-10"><Checkbox aria-label="Chọn tất cả" checked={allOn} disabled={!rows.length} onCheckedChange={(c) => toggle(rows, c)} /></th>}
               <th>STT</th>

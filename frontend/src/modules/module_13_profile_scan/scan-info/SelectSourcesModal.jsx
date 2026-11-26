@@ -1,18 +1,17 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronRight, Flag, Loader2, MessageSquareText, Network, Search, Signpost, ThumbsUp, Users, X, Zap } from "lucide-react";
 
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/lib/toast";
-import { Pager } from "@/modules/module_11_page_scanner/_shared";
 import useDragRowSelect from "@/modules/module_11_page_scanner/shared/useDragRowSelect";
 import ProfileAvatar from "../shared/ProfileAvatar";
-import { loadGroupSource, loadPageListKeys, loadPageSource, loadSourceProfiles, loadTopProfiles } from "../service";
+import { loadGroupSource, loadPageListKeys, loadPageSource, loadPostSource, loadSourceProfiles, loadSourceStats, loadTopProfiles } from "../service";
 import { fmtNum, sourceKey, summarizeSources } from "../utils.mjs";
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 50; // mỗi lần cuộn tới cuối danh sách thì tải thêm
 const MAX_QUICK = 5000;
 const ALL = "__ALL__";
 const AVATARS = ["bg-[#2563EB]", "bg-[#4F46E5]", "bg-[#DB2777]", "bg-[#0D9488]", "bg-[#D97706]"];
@@ -26,7 +25,10 @@ const TYPES = {
     tab: "Từ Fanpage", icon: Flag, noun: "Page", Noun: "Page", unit: "theo dõi", person: "follower",
     active: "bg-[#F59E0B] text-white", badge: "bg-[#FEF3C7] text-[#92400E]", load: loadPageSource,
   },
-  post: { tab: "Từ Bài viết tương tác", icon: Signpost, noun: "bài viết" },
+  post: {
+    tab: "Từ Bài viết tương tác", icon: Signpost, noun: "bài viết", Noun: "Bài viết", unit: "tương tác", person: "người tương tác",
+    active: "bg-[#7C3AED] text-white", badge: "bg-[#F3E8FF] text-[#6B21A8]",
+  },
 };
 
 /** Figma 3388:2971 / 3388:4291 / 3388:3610 — chọn profile từ Nhóm, Page, Bài viết */
@@ -55,6 +57,30 @@ function Body({ value, onConfirm, onClose }) {
   const [tab, setTab] = useState("group");
   const [draft, setDraft] = useState(value || {});
   const sum = useMemo(() => summarizeSources(draft), [draft]);
+
+  // Mỗi nguồn tải 1 lần khi mở modal: dùng cho badge tổng trên tab và nội dung tab
+  const loaders = useMemo(() => {
+    const once = (fn) => {
+      let p = null;
+      return () => {
+        if (!p) p = fn().catch((err) => { p = null; throw err; });
+        return p;
+      };
+    };
+    return { group: once(loadGroupSource), page: once(loadPageSource), post: once(() => loadPostSource()) };
+  }, []);
+  const [totals, setTotals] = useState({});
+  useEffect(() => {
+    let ignore = false;
+    Object.entries(loaders).forEach(([id, load]) =>
+      load()
+        .then((r) => !ignore && setTotals((p) => ({ ...p, [id]: (Array.isArray(r) ? r : r.items).length })))
+        .catch(() => {}),
+    );
+    return () => {
+      ignore = true;
+    };
+  }, [loaders]);
 
   useEffect(() => {
     const onKey = (e) => e.key === "Escape" && onClose();
@@ -89,7 +115,7 @@ function Body({ value, onConfirm, onClose }) {
           <button type="button" aria-label="Đóng" onClick={onClose} className="rounded-lg p-1.5 text-[#94A3B8] hover:bg-slate-100"><X className="size-5" /></button>
         </div>
 
-        <div role="tablist" className="flex shrink-0 gap-2 overflow-x-auto bg-[#F8FAFC] px-5 pt-3">
+        <div role="tablist" className="flex shrink-0 gap-4 overflow-x-auto bg-[#F8FAFC] px-5 pt-3">
           {Object.entries(TYPES).map(([id, t]) => {
             const on = id === tab;
             return (
@@ -102,7 +128,10 @@ function Body({ value, onConfirm, onClose }) {
                 className={`flex shrink-0 items-center gap-2 rounded-t-xl border-b-2 px-4 py-2.5 text-xs font-medium ${on ? "border-[#2563EB] bg-white text-[#2563EB]" : "border-transparent text-[#475569] hover:text-[#2563EB]"}`}
               >
                 <t.icon className={`size-4 ${on ? "" : "text-[#94A3B8]"}`} />
-                {t.tab}
+                <span title={totals[id] != null ? `Tổng ${fmtNum(totals[id])} ${t.noun.toLowerCase()} đã quét` : undefined}>
+                  {t.tab}
+                  {totals[id] != null && ` (${fmtNum(totals[id])})`}
+                </span>
                 <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${on ? "bg-[#EFF6FF] text-[#1D4ED8]" : "bg-[#E2E8F0] text-[#334155]"}`}>Đã chọn: {sum[id]} profile</span>
               </button>
             );
@@ -110,7 +139,7 @@ function Body({ value, onConfirm, onClose }) {
         </div>
 
         <div className="min-h-0 flex-1">
-          {tab === "post" ? <PostTab /> : <SourceTab key={tab} type={tab} draft={draft} updateSource={updateSource} />}
+          {tab === "post" ? <PostTab loadAll={loaders.post} draft={draft} updateSource={updateSource} /> : <SourceTab key={tab} type={tab} load={loaders[tab]} draft={draft} updateSource={updateSource} />}
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#F1F5F9] px-6 py-4">
@@ -141,8 +170,42 @@ function Body({ value, onConfirm, onClose }) {
   );
 }
 
-function SourceTab({ type, draft, updateSource }) {
+/** Mỗi nguồn → { total, scanned }: số profile đã quét thông tin ở Module 13 / tổng số người đã thu thập */
+function useSourceStats(type) {
+  const [stats, setStats] = useState({});
+  useEffect(() => {
+    let ignore = false;
+    loadSourceStats(type)
+      .then((s) => !ignore && setStats(s))
+      .catch(() => {});
+    return () => {
+      ignore = true;
+    };
+  }, [type]);
+  return stats;
+}
+
+/** "Đã quét X/Y profile"; chưa có thống kê (API lỗi / backend cũ) thì hiện số người đã thu thập của nguồn */
+const ScannedOf = ({ stat, fallback, on }) => {
+  const cls = `inline-flex items-center gap-1 ${on ? "text-[#059669]" : ""}`;
+  if (stat) {
+    return (
+      <span title="Số profile đã quét thông tin / tổng số profile đã thu thập từ nguồn" className={cls}>
+        <Zap className="size-3 fill-current" /> Đã quét {fmtNum(stat.scanned)}/{fmtNum(stat.total)} profile
+      </span>
+    );
+  }
+  if (fallback == null) return null;
+  return (
+    <span title="Số profile đã thu thập từ nguồn" className={cls}>
+      <Zap className="size-3 fill-current" /> Đã quét {fmtNum(fallback)}
+    </span>
+  );
+};
+
+function SourceTab({ type, load, draft, updateSource }) {
   const t = TYPES[type];
+  const stats = useSourceStats(type);
   const [data, setData] = useState({ items: [], categories: [] });
   const [loading, setLoading] = useState(true);
   const [catSearch, setCatSearch] = useState("");
@@ -150,18 +213,17 @@ function SourceTab({ type, draft, updateSource }) {
   const [cat, setCat] = useState(ALL);
   const [listKeys, setListKeys] = useState({}); // danh mục page → Set(page_key)
   const [activeId, setActiveId] = useState(null);
-  const [counts, setCounts] = useState({}); // nhóm → số thành viên đã quét
 
   useEffect(() => {
     let ignore = false;
-    t.load()
+    load()
       .then((res) => !ignore && setData(res))
       .catch((err) => !ignore && toast.error(`Lỗi tải danh sách ${t.noun}: ${err.message}`))
       .finally(() => !ignore && setLoading(false));
     return () => {
       ignore = true;
     };
-  }, [t]);
+  }, [t, load]);
 
   useEffect(() => {
     if (type !== "page" || cat === ALL || listKeys[cat]) return undefined;
@@ -238,7 +300,7 @@ function SourceTab({ type, draft, updateSource }) {
             items.map((i) => {
               const on = i.id === activeId;
               const n = Object.keys(draft[sourceKey(type, i.id)]?.profiles || {}).length;
-              const scanned = i.scanned ?? counts[i.id];
+              const stat = stats[i.id];
               return (
                 <button
                   key={i.id}
@@ -252,11 +314,11 @@ function SourceTab({ type, draft, updateSource }) {
                       <span className={`block truncate text-xs text-[#0F172A] ${on ? "font-bold" : "font-semibold"}`}>{i.name}</span>
                       <span className="block truncate text-[11px] text-[#94A3B8]">UID: {i.id}</span>
                     </span>
-                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${n ? t.badge : "bg-[#F1F5F9] text-[#64748B]"}`}>{n ? `Đã chọn ${fmtNum(n)}${scanned != null ? `/${fmtNum(scanned)}` : ""}` : "Chưa chọn"}</span>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${n ? t.badge : "bg-[#F1F5F9] text-[#64748B]"}`}>{n ? `Đã chọn ${fmtNum(n)}${stat ? `/${fmtNum(stat.total)}` : ""}` : "Chưa chọn"}</span>
                   </span>
                   <span className="mt-2.5 flex justify-between border-t border-[#F1F5F9] pt-2 text-[11px] text-[#64748B]">
                     <span>Quy mô: <b className="text-[#334155]">{i.scale != null ? `${fmtNum(i.scale)} ${t.unit}` : i.scaleLabel || "—"}</b></span>
-                    {scanned != null && <span className={`inline-flex items-center gap-1 ${n ? "text-[#059669]" : ""}`}><Zap className="size-3 fill-current" /> Đã quét {fmtNum(scanned)}</span>}
+                    <ScannedOf stat={stat} fallback={i.scanned} on={n > 0} />
                   </span>
                 </button>
               );
@@ -273,7 +335,7 @@ function SourceTab({ type, draft, updateSource }) {
             item={active}
             selected={draft[sourceKey(type, active.id)]?.profiles || {}}
             onChange={(fn) => updateSource(type, active, fn)}
-            onTotal={(n) => setCounts((p) => (p[active.id] === n ? p : { ...p, [active.id]: n }))}
+            stat={stats[active.id]}
           />
         ) : (
           <Empty>Chọn một {t.noun} để xem profile đã quét.</Empty>
@@ -283,48 +345,64 @@ function SourceTab({ type, draft, updateSource }) {
   );
 }
 
-function ProfilePicker({ type, item, selected, onChange, onTotal }) {
+function ProfilePicker({ type, item, selected, onChange, stat, tab }) {
   const t = TYPES[type];
-  const [page, setPage] = useState(1);
   const [input, setInput] = useState("");
   const [search, setSearch] = useState("");
-  const [res, setRes] = useState({ items: [], total: 0, full: null, query: null });
+  const [page, setPage] = useState(1);
+  const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [full, setFull] = useState(null); // tổng khi không tìm kiếm
+  const [loading, setLoading] = useState(true);
   const [quick, setQuick] = useState(50);
   const [applying, setApplying] = useState(false);
 
   useEffect(() => {
+    const next = input.trim();
+    if (next === search) return undefined;
     const id = setTimeout(() => {
-      setSearch(input.trim());
+      setSearch(next);
+      setRows([]);
       setPage(1);
     }, 350);
     return () => clearTimeout(id);
-  }, [input]);
+  }, [input, search]);
 
-  const query = `${page}|${search}`;
   useEffect(() => {
     let ignore = false;
-    loadSourceProfiles(type, item.id, { page, pageSize: PAGE_SIZE, search })
+    setLoading(true);
+    loadSourceProfiles(type, item.id, { page, pageSize: PAGE_SIZE, search, tab })
       .then((r) => {
         if (ignore) return;
-        setRes((prev) => ({ ...r, full: search ? prev.full : r.total, query }));
-        if (!search) onTotal(r.total);
+        setRows((prev) => {
+          if (page === 1) return r.items;
+          const have = new Set(prev.map((p) => p.uid));
+          return [...prev, ...r.items.filter((p) => !have.has(p.uid))];
+        });
+        setTotal(r.total);
+        if (!search) setFull(r.total);
       })
-      .catch((err) => {
-        if (ignore) return;
-        toast.error(`Lỗi tải profile: ${err.message}`);
-        setRes((prev) => ({ ...prev, items: [], total: 0, query }));
-      });
+      .catch((err) => !ignore && toast.error(`Lỗi tải profile: ${err.message}`))
+      .finally(() => !ignore && setLoading(false));
     return () => {
       ignore = true;
     };
-    // onTotal đổi mỗi lần render — không đưa vào deps để tránh tải lại
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [type, item.id, query]);
+  }, [type, item.id, tab, search, page]);
 
-  const loading = res.query !== query;
-  const rows = loading ? [] : res.items;
+  const hasMore = rows.length < total;
+  const [list, setList] = useState(null);
+  const listRef = useCallback((el) => setList(el), []);
+  const more = useCallback(() => {
+    if (!list || loading || !hasMore) return;
+    // Gần cuối danh sách (hoặc danh sách chưa đủ dài để cuộn) → tải thêm
+    if (list.scrollTop + list.clientHeight >= list.scrollHeight - 120) setPage((p) => p + 1);
+  }, [list, loading, hasMore]);
+  useEffect(() => {
+    more();
+  }, [more, rows]);
+
   const fresh = rows.filter((p) => !p.scanned); // chọn hàng loạt chỉ lấy người chưa quét
-  const allOnPage = fresh.length > 0 && fresh.every((p) => selected[p.uid]);
+  const allShown = fresh.length > 0 && fresh.every((p) => selected[p.uid]);
   const toggle = (list, on) =>
     onChange((cur) => {
       const next = { ...cur };
@@ -355,8 +433,9 @@ function ProfilePicker({ type, item, selected, onChange, onTotal }) {
   const applyQuick = async () => {
     setApplying(true);
     try {
-      const top = await loadTopProfiles(type, item.id, quick, search);
-      onChange(() => Object.fromEntries(top.map((p) => [p.uid, p])));
+      const top = await loadTopProfiles(type, item.id, quick, search, tab);
+      // Bài viết: tab Like và Bình luận chung 1 nguồn → lấy nhanh ở tab này không bỏ người đã chọn ở tab kia
+      onChange((cur) => ({ ...(tab ? cur : {}), ...Object.fromEntries(top.map((p) => [p.uid, p])) }));
       if (top.length < quick) toast.warning(`Chỉ còn ${fmtNum(top.length)} profile chưa quét thông tin.`);
     } catch (err) {
       toast.error(`Không lấy được profile: ${err.message}`);
@@ -370,15 +449,20 @@ function ProfilePicker({ type, item, selected, onChange, onTotal }) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate text-xs font-bold text-[#0F172A]">{item.name}</p>
-          <p className="mt-1 truncate text-[11px] text-[#94A3B8]">UID: {item.id}{res.full != null && ` • ${fmtNum(res.full)} ${type === "page" ? "followers" : "profile"} đã quét`}</p>
+          <p className="mt-1 truncate text-[11px] text-[#94A3B8]">
+            {type === "post" ? "Post" : "UID"}: {item.fb_post_id || item.id}
+            {full != null &&
+              ` • ${fmtNum(full)}${type !== "post" && item.scale ? `/${fmtNum(item.scale)}` : ""} ${type === "page" ? "followers" : type === "post" ? (tab === "comment" ? "người bình luận" : "người like") : "thành viên"}`}
+            {stat && ` • Đã quét ${fmtNum(stat.scanned)}/${fmtNum(stat.total)} profile`}
+          </p>
         </div>
         <span className={`shrink-0 rounded-md px-2 py-1 text-[11px] font-bold ${type === "page" ? "bg-[#FFFBEB] text-[#B45309]" : "bg-[#EFF6FF] text-[#2563EB]"}`}>Đang tick: {fmtNum(Object.keys(selected).length)} profile</span>
       </div>
       <div className="rounded-lg bg-[#F8FAFC] p-2">
         <div className="flex items-center justify-between gap-2">
           <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-[#334155]">
-            <Checkbox checked={allOnPage} disabled={!fresh.length} onCheckedChange={(c) => toggle(c ? fresh : rows, c)} />
-            Chọn tất cả trang này
+            <Checkbox checked={allShown} disabled={!fresh.length} onCheckedChange={(c) => toggle(c ? fresh : rows, c)} />
+            Chọn tất cả đang hiển thị
           </label>
           <span className="text-[11px] italic text-[#94A3B8]">hoặc nhập số lượng lấy nhanh</span>
         </div>
@@ -393,14 +477,21 @@ function ProfilePicker({ type, item, selected, onChange, onTotal }) {
             />
             <span className="truncate">{t.person} chưa quét, từ trên xuống</span>
           </label>
-          <button type="button" disabled={applying || !quick || !res.total} onClick={applyQuick} className="inline-flex h-6 items-center gap-1 rounded-md bg-[#2563EB] px-3 text-xs font-semibold text-white hover:bg-[#1D4ED8] disabled:opacity-50">
+          <button type="button" disabled={applying || !quick || !total} onClick={applyQuick} className="inline-flex h-6 items-center gap-1 rounded-md bg-[#2563EB] px-3 text-xs font-semibold text-white hover:bg-[#1D4ED8] disabled:opacity-50">
             {applying && <Loader2 className="size-3 animate-spin" />} Áp dụng
           </button>
         </div>
       </div>
       <SearchBox soft value={input} onChange={setInput} placeholder={`Tìm tên, UID ${t.person}...`} />
-      <div ref={drag.setContainer} className="min-h-[160px] flex-1 select-none space-y-1.5 overflow-y-auto border-t border-[#F1F5F9] pt-2">
-        {loading ? (
+      <div
+        ref={(el) => {
+          drag.setContainer(el);
+          listRef(el);
+        }}
+        onScroll={more}
+        className="min-h-[160px] flex-1 select-none space-y-1.5 overflow-y-auto border-t border-[#F1F5F9] pt-2"
+      >
+        {loading && rows.length === 0 ? (
           <Loader2 className="mx-auto mt-10 size-5 animate-spin text-[#2563EB]" />
         ) : rows.length === 0 ? (
           <Empty>{search ? "Không tìm thấy profile phù hợp." : `${t.Noun} này chưa quét ${t.person} nào.`}</Empty>
@@ -408,6 +499,7 @@ function ProfilePicker({ type, item, selected, onChange, onTotal }) {
           rows.map((p, i) => (
             <div key={p.uid} {...drag.rowProps(p.uid)} className={`flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-2 hover:bg-[#EFF6FF] ${selected[p.uid] ? "bg-[#EFF6FF]" : "bg-[#F8FAFF]"}`}>
               <Checkbox checked={Boolean(selected[p.uid])} onCheckedChange={(c) => toggle([p], c)} />
+              <span className="w-7 shrink-0 text-right font-mono text-[11px] text-[#94A3B8]">{String(i + 1).padStart(2, "0")}</span>
               <ProfileAvatar src={p.avatar} name={p.name} tint={`text-white ${AVATARS[i % AVATARS.length]}`} />
               <span className="min-w-0">
                 <span className="block truncate text-xs font-bold text-[#0F172A]">{p.name}</span>
@@ -419,29 +511,122 @@ function ProfilePicker({ type, item, selected, onChange, onTotal }) {
             </div>
           ))
         )}
+        {loading && rows.length > 0 && <Loader2 className="mx-auto my-2 size-4 animate-spin text-[#2563EB]" />}
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#F1F5F9] pt-2 text-[11px] text-[#64748B]">
-        <span>Hiển thị {rows.length ? (page - 1) * PAGE_SIZE + 1 : 0} - {(page - 1) * PAGE_SIZE + rows.length} trong {fmtNum(res.total)} profile</span>
-        {res.total > PAGE_SIZE && <Pager page={page} totalPages={Math.ceil(res.total / PAGE_SIZE)} onChange={setPage} />}
+      <div className="border-t border-[#F1F5F9] pt-2 text-[11px] text-[#64748B]">
+        Đã hiển thị {fmtNum(rows.length)} / {fmtNum(total)} profile{hasMore ? " — cuộn xuống để xem thêm" : ""}
       </div>
     </div>
   );
 }
 
-/** Chưa có kho người tương tác bài viết → giữ khung theo Figma, không có dữ liệu để chọn */
-function PostTab() {
+/** Bài viết đã quét người tương tác ở Module 12: chọn bài → chọn người like / bình luận */
+function PostTab({ loadAll, draft, updateSource }) {
+  const t = TYPES.post;
+  const stats = useSourceStats("post");
+  const [input, setInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [res, setRes] = useState({ items: [], query: null });
+  const [activeId, setActiveId] = useState(null);
+  const [tab, setTab] = useState("like");
+
+  useEffect(() => {
+    const id = setTimeout(() => setSearch(input.trim()), 350);
+    return () => clearTimeout(id);
+  }, [input]);
+
+  useEffect(() => {
+    let ignore = false;
+    (search ? loadPostSource(search) : loadAll())
+      .then((items) => !ignore && setRes({ items, query: search }))
+      .catch((err) => {
+        if (ignore) return;
+        toast.error(`Lỗi tải danh sách bài viết: ${err.message}`);
+        setRes({ items: [], query: search });
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [search, loadAll]);
+
+  const loading = res.query !== search;
+  const posts = loading ? [] : res.items;
+  const active = res.items.find((p) => p.id === activeId) || null;
+  const tabs = [
+    { id: "like", label: "Like", icon: ThumbsUp, iconClass: "fill-current", count: active?.likes },
+    { id: "comment", label: "Bình luận", icon: MessageSquareText, iconClass: "text-[#059669]", count: active?.comments },
+  ];
+
   return (
-    <div className="grid h-full grid-cols-1 overflow-y-auto md:grid-cols-[384px_minmax(0,1fr)]">
-      <div className="border-r border-[#F1F5F9] bg-[#F8FAFC] p-3.5">
-        <SearchBox value="" onChange={() => {}} placeholder="Tìm tên bài viết, Post ID..." />
-        <Empty>Chưa có bài viết nào đã quét tương tác.</Empty>
-      </div>
-      <div className="p-3.5">
-        <div className="flex gap-1 rounded-lg bg-[#F1F5F9] p-1 text-xs font-semibold">
-          <span className="inline-flex w-36 items-center gap-1.5 rounded-md bg-white px-2.5 py-2.5 text-[#2563EB] shadow-sm"><ThumbsUp className="size-3.5 fill-current" /> Like (0)</span>
-          <span className="inline-flex w-36 items-center gap-1.5 px-2.5 py-2.5 text-[#475569]"><MessageSquareText className="size-3.5 text-[#059669]" /> Bình luận (0)</span>
+    <div className="grid h-full grid-cols-1 overflow-y-auto md:grid-cols-[384px_minmax(0,1fr)] md:overflow-hidden">
+      <div className="flex min-h-0 flex-col gap-2.5 border-r border-[#F1F5F9] bg-[#F8FAFC] p-3.5">
+        <SearchBox value={input} onChange={setInput} placeholder="Tìm nội dung bài viết, Post ID, nhóm / page..." />
+        <p className="px-1 text-[11px] font-bold uppercase tracking-wide text-[#94A3B8]">Bài viết đã quét tương tác ({fmtNum(posts.length)})</p>
+        <div className="max-h-72 min-h-0 flex-1 space-y-2 overflow-y-auto md:max-h-none">
+          {loading ? (
+            <Loader2 className="mx-auto mt-10 size-5 animate-spin text-[#2563EB]" />
+          ) : posts.length === 0 ? (
+            <Empty>{search ? "Không có bài viết phù hợp." : "Chưa có bài viết nào đã quét tương tác. Hãy quét người tương tác ở chức năng “Quét tài khoản từ bài viết” trước."}</Empty>
+          ) : (
+            posts.map((p) => {
+              const on = p.id === activeId;
+              const n = Object.keys(draft[sourceKey("post", p.id)]?.profiles || {}).length;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => setActiveId(p.id)}
+                  className={`w-full rounded-xl border bg-white p-3 text-left ${on ? "border-[#BFDBFE] shadow-sm" : "border-transparent hover:border-[#E2E8F0]"}`}
+                >
+                  <span className="flex items-start gap-2">
+                    <span className={`flex size-8 shrink-0 items-center justify-center rounded-lg ${n ? t.active : "bg-[#F1F5F9] text-[#475569]"}`}><Signpost className="size-4" /></span>
+                    <span className="min-w-0 flex-1">
+                      <span className={`line-clamp-2 text-xs text-[#0F172A] ${on ? "font-bold" : "font-semibold"}`}>{p.name}</span>
+                      <span className="block truncate text-[11px] text-[#94A3B8]">{p.source_name || p.author_name || p.fb_post_id || p.id}</span>
+                    </span>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${n ? t.badge : "bg-[#F1F5F9] text-[#64748B]"}`}>{n ? `Đã chọn ${fmtNum(n)}` : "Chưa chọn"}</span>
+                  </span>
+                  <span className="mt-2.5 flex gap-3 border-t border-[#F1F5F9] pt-2 text-[11px] text-[#64748B]">
+                    <span className="inline-flex items-center gap-1"><ThumbsUp className="size-3" /> {fmtNum(p.likes || 0)} like</span>
+                    <span className="inline-flex items-center gap-1"><MessageSquareText className="size-3" /> {fmtNum(p.comments || 0)} bình luận</span>
+                    <span className="ml-auto"><ScannedOf stat={stats[p.id]} on={n > 0} /></span>
+                  </span>
+                </button>
+              );
+            })
+          )}
         </div>
-        <Empty>Nguồn này cần dữ liệu từ chức năng “Quét tài khoản từ bài viết”, hiện chưa có trong hệ thống.</Empty>
+      </div>
+      <div className="flex min-h-0 flex-col p-3.5">
+        <div role="tablist" className="flex gap-1 rounded-lg bg-[#F1F5F9] p-1 text-xs font-semibold">
+          {tabs.map((x) => (
+            <button
+              key={x.id}
+              type="button"
+              role="tab"
+              aria-selected={tab === x.id}
+              onClick={() => setTab(x.id)}
+              className={`inline-flex w-36 items-center gap-1.5 rounded-md px-2.5 py-2.5 ${tab === x.id ? "bg-white text-[#2563EB] shadow-sm" : "text-[#475569] hover:text-[#0F172A]"}`}
+            >
+              <x.icon className={`size-3.5 ${x.iconClass}`} /> {x.label} ({fmtNum(x.count || 0)})
+            </button>
+          ))}
+        </div>
+        <div className="min-h-0 flex-1">
+          {active ? (
+            <ProfilePicker
+              key={`${active.id}|${tab}`}
+              type="post"
+              tab={tab}
+              item={active}
+              selected={draft[sourceKey("post", active.id)]?.profiles || {}}
+              onChange={(fn) => updateSource("post", active, fn)}
+              stat={stats[active.id]}
+            />
+          ) : (
+            <Empty>Chọn một bài viết bên trái để xem người đã like / bình luận.</Empty>
+          )}
+        </div>
       </div>
     </div>
   );

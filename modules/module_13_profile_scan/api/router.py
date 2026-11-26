@@ -47,7 +47,7 @@ class StartIn(BaseModel):
     mode: Literal["source", "link", "file"]
     delay_min: float = Field(5, ge=1, le=180)
     delay_max: float = Field(8, ge=1, le=180)
-    rotate_every: int = Field(50, ge=1, le=500)
+    rotate_every: int = Field(0, ge=0, le=500)  # 0: không tự đổi tài khoản (giao diện đã bỏ thiết lập này)
     workers: int = Field(2, ge=1, le=5)
     skip_scanned: bool = True
     min_friends: int = Field(0, ge=0, le=5000)
@@ -241,6 +241,16 @@ def delete_category(category_id: int):
     return {"ok": True}
 
 
+class UidsIn(BaseModel):
+    uids: List[str] = Field(..., min_length=1, max_length=50000)
+
+
+@router.post("/categories/memberships")
+def category_memberships(body: UidsIn):
+    """Profile nào đã nằm trong danh mục nào — để cảnh báo trước khi lưu thêm vào danh mục khác."""
+    return {"items": models.category_memberships(_owner(), body.uids)}
+
+
 @router.post("/categories/save")
 def save_to_category(body: SaveIn):
     owner = _owner()
@@ -258,18 +268,32 @@ def _require_category(key: str) -> None:
         raise HTTPException(404, "Không tìm thấy danh mục")
 
 
+@router.get("/source-posts")
+def source_posts(search: str = Query("", max_length=200)):
+    """Bài viết đã quét người tương tác (Module 12) để chọn nguồn."""
+    return {"items": models.source_posts(_owner(), search.strip())}
+
+
+@router.get("/source-stats")
+def source_stats(type: Literal["group", "page", "post"]):
+    """Mỗi nguồn: {total, scanned} — số profile đã quét thông tin / tổng số người đã thu thập."""
+    return {"items": models.source_stats(_owner(), type)}
+
+
 @router.get("/source-people")
 def source_people(
-    type: Literal["group", "page"],
+    type: Literal["group", "page", "post"],
     id: str = Query(..., min_length=1, max_length=255),
+    tab: Literal["like", "comment"] = "like",
     search: str = Query("", max_length=200),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=500),
 ):
-    """Người của nhóm / page để chọn quét; người đã quét thông tin ở cuối danh sách."""
+    """Người của nhóm / page / bài viết (tab: like | comment) để chọn quét; người đã quét thông tin ở cuối danh sách."""
     if type == "group":
         id = normalize_group_id(id.strip())
-    return models.source_people(_owner(), type, id.strip(), search.strip(), page_size, (page - 1) * page_size)
+    kind = f"post_{tab}" if type == "post" else type
+    return models.source_people(_owner(), kind, id.strip(), search.strip(), page_size, (page - 1) * page_size)
 
 
 @router.post("/members/move")

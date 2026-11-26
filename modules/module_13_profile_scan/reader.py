@@ -12,6 +12,7 @@ from selenium.common.exceptions import (
 )
 
 from core.browser.human import human_click
+from modules.module_03_acc_farm.browser.errors import is_browser_gone
 
 from .parse import (
     about_region, bio_from_source, clean_lines, find_phones, key_to_url, page_state, parse_about, parse_counts,
@@ -39,7 +40,8 @@ class Stopped(RuntimeError):
 # Tên, phần đầu trang (trước khối bài viết), thẻ Giới thiệu, ảnh đại diện
 _READ_JS = r"""
 const bad = /^(facebook|đăng nhập|chats|đoạn chat|notifications|thông báo)$/i;
-const counts = /người theo dõi|followers/i;
+// "1 follower" (số ít) ở trang mới / trang chuyên nghiệp ít người theo dõi
+const counts = /người theo dõi|\bfollowers?\b/i;
 const friends = /\d[\d.,]*\s*(?:k|n|nghìn|tr)?\s*(?:bạn bè|người bạn|friends?)(?!\p{L})/iu;
 const ok = s => !!s && !bad.test(s);
 const goodH1 = m => [...m.querySelectorAll('h1')].find(h => ok(h.innerText.trim()));
@@ -61,7 +63,7 @@ if (!name) {
   }
 }
 if (!name) {
-  const at = lines.findIndex((l, i) => i < 40 && (/\d.*(người theo dõi|followers)/i.test(l) || friends.test(l)));
+  const at = lines.findIndex((l, i) => i < 40 && (/\d.*(người theo dõi|\bfollowers?\b)/i.test(l) || friends.test(l)));
   for (let i = at - 1; i >= 0; i--) {
     const l = lines[i];
     if (/^[\d.,+]+$/.test(l) || /số thông báo chưa đọc|unread notifications/i.test(l) || /[·•]/.test(l) || counts.test(l) || friends.test(l)) continue;
@@ -187,6 +189,56 @@ def check_account(driver) -> None:
         raise AccountBlocked("Tài khoản đã bị đăng xuất")
 
 
+# Chạy trên mọi trang (gắn lúc mở Chrome): cửa sổ thu nhỏ thì Chrome ngừng vẽ khung hình và báo trang bị ẩn →
+# Facebook ngừng dựng nội dung, luồng đứng chờ tới khi người dùng mở cửa sổ ra. Trang luôn báo đang hiển thị;
+# requestAnimationFrame không có khung hình thật thì chạy bằng timer (timer không bị hãm nhờ cờ Chrome của scope).
+KEEP_RENDERING_JS = r"""
+(() => {
+  try {
+    Object.defineProperty(document, "hidden", { get: () => false, configurable: true });
+    Object.defineProperty(document, "visibilityState", { get: () => "visible", configurable: true });
+    const stop = (e) => e.stopImmediatePropagation();
+    window.addEventListener("visibilitychange", stop, true);
+    document.addEventListener("visibilitychange", stop, true);
+    const raf = window.requestAnimationFrame.bind(window);
+    const caf = window.cancelAnimationFrame.bind(window);
+    const pending = new Map();
+    let seq = 0;
+    window.requestAnimationFrame = function requestAnimationFrame(cb) {
+      const id = ++seq;
+      const run = (t) => {
+        const p = pending.get(id);
+        if (!p) return;
+        pending.delete(id);
+        caf(p[0]);
+        clearTimeout(p[1]);
+        cb(t);
+      };
+      pending.set(id, [raf(run), setTimeout(() => run(performance.now()), 50)]);
+      return id;
+    };
+    window.cancelAnimationFrame = function cancelAnimationFrame(id) {
+      const p = pending.get(id);
+      if (!p) return;
+      pending.delete(id);
+      caf(p[0]);
+      clearTimeout(p[1]);
+    };
+  } catch (e) {}
+})();
+"""
+
+
+def _minimized(driver) -> bool:
+    try:
+        win = driver.execute_cdp_cmd("Browser.getWindowForTarget", {})
+        return (win.get("bounds") or {}).get("windowState") == "minimized"
+    except Exception as exc:
+        if is_browser_gone(exc):
+            raise
+        return False
+
+
 def _open(driver, url: str) -> None:
     driver.set_page_load_timeout(PAGE_TIMEOUT)
     try:
@@ -225,7 +277,14 @@ def _read_main(driver, stop: Callable[[], bool]) -> Dict[str, Any]:
 
 
 def _click(driver, element) -> bool:
-    """Bấm như người dùng; không được thì bấm của WebDriver."""
+    """Bấm như người dùng; không được thì bấm của WebDriver.
+    Cửa sổ đang thu nhỏ: bấm bằng JS (thao tác chuột của WebDriver tự khôi phục cửa sổ lên màn hình)."""
+    if _minimized(driver):
+        try:
+            driver.execute_script("arguments[0].click();", element)
+            return True
+        except StaleElementReferenceException:
+            return False
     if human_click(driver, element):
         return True
     try:

@@ -115,6 +115,8 @@ DDL = [
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_profile_scan_live ON profile_scan_sessions (owner_key) WHERE status IN ('RUNNING', 'PAUSED')",
     "CREATE INDEX IF NOT EXISTS ix_profile_targets_status ON profile_scan_targets (session_id, status, id)",
     "CREATE INDEX IF NOT EXISTS ix_profile_logs_session ON profile_scan_logs (session_id, id)",
+    # Luồng ghi log (NULL: log chung của phiên)
+    "ALTER TABLE profile_scan_logs ADD COLUMN IF NOT EXISTS thread SMALLINT",
     "CREATE INDEX IF NOT EXISTS ix_profile_members_uid ON profile_members (owner_key, uid)",
 ]
 
@@ -220,9 +222,12 @@ def heartbeat(session_id: int) -> None:
     db.execute("UPDATE profile_scan_sessions SET heartbeat_at = NOW() WHERE id = %s", (session_id,))
 
 
-def log(session_id: int, message: str, level: str = "info") -> None:
+def log(session_id: int, message: str, level: str = "info", thread: Optional[int] = None) -> None:
     try:
-        db.execute("INSERT INTO profile_scan_logs (session_id, level, message) VALUES (%s, %s, %s)", (session_id, level, message[:1000]))
+        db.execute(
+            "INSERT INTO profile_scan_logs (session_id, level, message, thread) VALUES (%s, %s, %s, %s)",
+            (session_id, level, message[:1000], thread),
+        )
     except Exception as exc:
         logger.warning(f"[Module 13] ghi log phiên #{session_id}: {exc}")
 
@@ -231,7 +236,7 @@ def get_logs(session_id: int, after: int) -> List[Dict[str, Any]]:
     return db.fetch_all(
         """
         SELECT * FROM (
-            SELECT id, level, message, TO_CHAR((created_at AT TIME ZONE current_setting('TIMEZONE')) AT TIME ZONE 'Asia/Ho_Chi_Minh', 'HH24:MI:SS') AS time
+            SELECT id, level, message, thread, TO_CHAR((created_at AT TIME ZONE current_setting('TIMEZONE')) AT TIME ZONE 'Asia/Ho_Chi_Minh', 'HH24:MI:SS') AS time
             FROM profile_scan_logs WHERE session_id = %s AND id > %s ORDER BY id DESC LIMIT 500
         ) t ORDER BY id
         """,
@@ -297,17 +302,74 @@ def find_profile(owner: str, profile_key: str) -> Optional[Dict[str, Any]]:
     return db.fetch_one("SELECT * FROM scanned_profiles WHERE owner_key = %s AND username = %s LIMIT 1", (owner, value))
 
 
-# Kho người của từng loại nguồn: (bảng, cột chủ, cột nguồn, cột UID, cột tên, thứ tự)
+# Kho người của từng loại nguồn: (bảng, cột chủ, cột nguồn, cột UID, cột tên, thứ tự, điều kiện thêm)
+# Bài viết: kho người tương tác của Module 12 (chỉ lấy người, bỏ fanpage tương tác)
 _SOURCE_TABLES = {
-    "group": ("scanned_group_members", "owner_username", "group_id", "member_uid", "member_name", "t.scanned_at DESC, t.id DESC"),
-    "page": ("scanned_page_followers", "owner_key", "page_key", "follower_key", "follower_name", "t.id DESC"),
+    "group": ("scanned_group_members", "owner_username", "group_id", "member_uid", "member_name", "t.scanned_at DESC, t.id DESC", ""),
+    "page": ("scanned_page_followers", "owner_key", "page_key", "follower_key", "follower_name", "t.id DESC", ""),
+    "post_like": ("pe_users", "owner_username", "post_key", "uid", "name", "t.id", " AND t.has_like AND NOT t.is_page"),
+    "post_comment": ("pe_users", "owner_username", "post_key", "uid", "name", "t.id", " AND t.has_comment AND NOT t.is_page"),
+    # Thống kê cả bài viết: người like hoặc bình luận
+    "post": ("pe_users", "owner_username", "post_key", "uid", "name", "t.id", " AND (t.has_like OR t.has_comment) AND NOT t.is_page"),
 }
 
 
+def _table_exists(name: str) -> bool:
+    """Bảng của module khác chỉ có khi module đó đã chạy lần nào."""
+    row = db.fetch_one("SELECT to_regclass(%s) IS NOT NULL AS ok", (f"public.{name}",))
+    return bool(row and row["ok"])
+
+
+def source_posts(owner: str, search: str, limit: int = 500) -> List[Dict[str, Any]]:
+    """Bài viết đã quét tương tác (Module 12) + số người (không tính fanpage) đã like / bình luận."""
+    if not (_table_exists("pe_posts") and _table_exists("pe_users")):
+        return []
+    where = "p.owner_username = %s AND p.scanned_at IS NOT NULL"
+    params: List[Any] = [owner]
+    if search:
+        where += " AND (p.content ILIKE %s OR p.post_key ILIKE %s OR p.fb_post_id ILIKE %s OR p.source_name ILIKE %s OR p.author_name ILIKE %s)"
+        params += [f"%{search}%"] * 5
+    return db.fetch_all(
+        f"""
+        SELECT p.post_key AS id, p.post_url AS url, p.fb_post_id, p.content, p.source_type, p.source_name, p.author_name,
+            p.scanned_at, COALESCE(u.likes, 0) AS likes, COALESCE(u.comments, 0) AS comments
+        FROM pe_posts p
+        LEFT JOIN (
+            SELECT post_key, COUNT(*) FILTER (WHERE has_like) AS likes, COUNT(*) FILTER (WHERE has_comment) AS comments
+            FROM pe_users WHERE owner_username = %s AND NOT is_page GROUP BY post_key
+        ) u ON u.post_key = p.post_key
+        WHERE {where} ORDER BY p.scanned_at DESC LIMIT %s
+        """,
+        (owner, *params, limit),
+    )
+
+
+def source_stats(owner: str, type_: str) -> Dict[str, Dict[str, int]]:
+    """Mỗi nguồn: tổng số người đã thu thập + số người trong đó đã quét thông tin profile (Module 13)."""
+    table, owner_col, source_col, uid_col, _name, _order, extra = _SOURCE_TABLES[type_]
+    if table == "pe_users" and not _table_exists(table):
+        return {}
+    rows = db.fetch_all(
+        f"""
+        WITH done AS (
+            SELECT uid AS k FROM scanned_profiles WHERE owner_key = %s
+            UNION SELECT LOWER(username) FROM scanned_profiles WHERE owner_key = %s AND username IS NOT NULL
+        )
+        SELECT t.{source_col} AS id, COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE LOWER(REGEXP_REPLACE(t.{uid_col}, '^(id|user):', '')) IN (SELECT k FROM done))::int AS scanned
+        FROM {table} t WHERE t.{owner_col} = %s{extra} GROUP BY t.{source_col}
+        """,
+        (owner, owner, owner),
+    )
+    return {str(r["id"]): {"total": r["total"], "scanned": r["scanned"]} for r in rows}
+
+
 def source_people(owner: str, type_: str, source_id: str, search: str, limit: int, offset: int) -> Dict[str, Any]:
-    """Người của 1 nhóm / page; người đã quét thông tin (như find_profile) xếp xuống cuối."""
-    table, owner_col, source_col, uid_col, name_col, order = _SOURCE_TABLES[type_]
-    where = f"t.{owner_col} = %s AND t.{source_col} = %s"
+    """Người của 1 nhóm / page / bài viết; người đã quét thông tin (như find_profile) xếp xuống cuối."""
+    table, owner_col, source_col, uid_col, name_col, order, extra = _SOURCE_TABLES[type_]
+    if table == "pe_users" and not _table_exists(table):
+        return {"items": [], "total": 0}
+    where = f"t.{owner_col} = %s AND t.{source_col} = %s{extra}"
     params: List[Any] = [owner, source_id]
     if search:
         where += f" AND (t.{name_col} ILIKE %s OR t.{uid_col} ILIKE %s OR t.profile_url ILIKE %s)"
@@ -466,6 +528,20 @@ def categories(owner: str) -> List[Dict[str, Any]]:
         WHERE c.owner_key = %s GROUP BY c.id, c.name, c.color ORDER BY c.id
         """,
         (owner,),
+    )
+
+
+def category_memberships(owner: str, uids: List[str]) -> List[Dict[str, Any]]:
+    """Danh mục đang chứa các profile này: [{id, name, color, uids}] (không tính 'Chưa có danh mục')."""
+    return db.fetch_all(
+        """
+        SELECT c.id, c.name, c.color, ARRAY_AGG(m.uid ORDER BY m.uid) AS uids
+        FROM profile_members m
+        JOIN profile_categories c ON c.owner_key = m.owner_key AND m.collection_key = 'category:' || c.id
+        WHERE m.owner_key = %s AND m.uid = ANY(%s)
+        GROUP BY c.id, c.name, c.color ORDER BY c.id
+        """,
+        (owner, uids),
     )
 
 

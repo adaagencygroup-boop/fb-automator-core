@@ -9,7 +9,7 @@ import { toast } from "@/lib/toast";
 import { askConfirm } from "@/modules/module_11_page_scanner/shared/askConfirm";
 import * as service from "../service";
 import { SCALE_UNITS, SOURCE_TYPES, UNCATEGORIZED, fmtNum, shortFbUrl } from "../utils.mjs";
-import { exportProfiles, jobText } from "../shared/exportProfiles";
+import { exportMessage, exportProfiles, jobText } from "../shared/exportProfiles";
 import ProfileTable, { rowId } from "../scan-info/ProfileTable";
 import { CategoryFormModal, MoveProfilesModal } from "./CategoryModals";
 import { createDemoStore } from "./demoStore";
@@ -281,8 +281,8 @@ export default function ProfileList() {
         return;
       }
       const names = new Map(collections.map((c) => [c.key, c.name]));
-      await exportProfiles(list, fileName, (r) => names.get(r.sourceKey) || "");
-      toast.success(`Đã xuất ${fmtNum(list.length)} profile.`);
+      const msg = exportMessage(await exportProfiles(list, fileName, (r) => names.get(r.sourceKey) || ""), list.length);
+      toast[msg.type](msg.text);
     } catch (err) {
       toast.error(`Không xuất được: ${err.message}`);
     } finally {

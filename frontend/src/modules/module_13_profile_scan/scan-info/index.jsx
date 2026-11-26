@@ -12,12 +12,15 @@ import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
 import { normalizeAccount } from "@/modules/module_07_group_spam/shared/components";
 import { LiveLogConsole, nowStamp } from "@/modules/module_11_page_scanner/_shared";
+
+/** Số luồng backend ghi kèm log → "Thread-02"; log chung của phiên (bắt đầu / hoàn tất / thao tác) → "Phiên" */
+const threadLabel = (n) => (n ? `Thread-${String(n).padStart(2, "0")}` : "Phiên");
 import { SelectAccountsModal } from "@/modules/module_11_page_scanner/shared/SelectPagesModal";
 import { ScanActionButtons } from "@/modules/module_11_page_scanner/shared/ScanActionButtons";
 import { loadScanState, saveScanState } from "@/modules/module_11_page_scanner/shared/scanStateStorage";
 import { askConfirm } from "@/modules/module_11_page_scanner/shared/askConfirm";
 import { loadSavedAccountUids, resolveUsableSavedUids, saveSelectedAccountUids } from "@/modules/module_11_page_scanner/shared/accountStorage";
-import { exportProfiles } from "../shared/exportProfiles";
+import { exportMessage, exportProfiles } from "../shared/exportProfiles";
 import { controlScan, getLatestScan, getScanProgress, getScanResults, startProfileScan } from "../service";
 import { SCALE_UNITS, SOURCE_TYPES, fmtNum, parseProfileLines, pickProfileCell, shortFbUrl, summarizeSources } from "../utils.mjs";
 import ProfileTable, { rowId } from "./ProfileTable";
@@ -59,7 +62,7 @@ function NumCtrl({ label, value, onChange, min = 1, max = 500, step = 1 }) {
 
 function LinkPreview({ rows, onRemove }) {
   return (
-    <div className="max-h-[420px] space-y-2.5 overflow-y-auto bg-[#F8FAFC] p-2.5">
+    <div className="max-h-[520px] space-y-2.5 overflow-y-auto bg-[#F8FAFC] p-2.5 custom-scrollbar">
       {rows.length === 0 && <p className="py-8 text-center text-xs text-[#94A3B8]">Chưa có link nào trong danh sách.</p>}
       {rows.map((r) => {
         const [text, cls] = STATUS[r.status];
@@ -74,7 +77,7 @@ function LinkPreview({ rows, onRemove }) {
               </span>
             )}
             <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${cls}`}>{text}</span>
-            <button type="button" aria-label="Xóa link" onClick={() => onRemove(r.id)} className="shrink-0 text-[#94A3B8] hover:text-[#DC2626]"><X className="size-4" /></button>
+            {onRemove && <button type="button" aria-label="Xóa link" onClick={() => onRemove(r.id)} className="shrink-0 text-[#94A3B8] hover:text-[#DC2626]"><X className="size-4" /></button>}
           </div>
         );
       })}
@@ -85,9 +88,9 @@ function LinkPreview({ rows, onRemove }) {
 function SourcePreview({ sources, onRemove }) {
   const list = Object.entries(sources);
   return (
-    <div className="overflow-x-auto">
+    <div className="max-h-[680px] overflow-auto custom-scrollbar">
       <table className="w-full min-w-[640px] text-xs">
-        <thead className="bg-[#F8FAFC] text-[11px] uppercase tracking-[0.5px] text-[#475569] [&_th]:px-5 [&_th]:py-3 [&_th]:font-bold">
+        <thead className="sticky top-0 z-10 bg-[#F8FAFC] text-[11px] uppercase tracking-[0.5px] text-[#475569] [&_th]:px-5 [&_th]:py-3 [&_th]:font-bold">
           <tr>
             <th className="w-16">STT</th>
             <th className="text-left">Tên nhóm / Nguồn</th>
@@ -107,7 +110,7 @@ function SourcePreview({ sources, onRemove }) {
               </td>
               <td className="text-right text-[#94A3B8]">{s.scale != null ? <><b className="text-[#0F172A]">{fmtNum(s.scale)}</b> {SCALE_UNITS[s.type]}</> : s.scaleLabel || "—"}</td>
               <td className="text-center font-bold text-[#0F172A]">{fmtNum(Object.keys(s.profiles).length)}</td>
-              <td className="text-center"><button type="button" aria-label={`Xóa nguồn ${s.name}`} onClick={() => onRemove(key)} className="text-[#94A3B8] hover:text-[#DC2626]"><Trash2 className="size-4" /></button></td>
+              <td className="text-center">{onRemove && <button type="button" aria-label={`Xóa nguồn ${s.name}`} onClick={() => onRemove(key)} className="text-[#94A3B8] hover:text-[#DC2626]"><Trash2 className="size-4" /></button>}</td>
             </tr>
           ))}
         </tbody>
@@ -122,7 +125,6 @@ export default function ProfileScanInfo() {
   const [uids, setUids] = useState([]);
   const [showAccounts, setShowAccounts] = useState(false);
   const [delay, setDelay] = useState({ min: 5, max: 8 });
-  const [rotateEvery, setRotateEvery] = useState(50);
   const [workers, setWorkers] = useState(2);
   const [minFriends, setMinFriends] = useState(false);
 
@@ -167,6 +169,25 @@ export default function ProfileScanInfo() {
       ignore = true;
     };
   }, []);
+
+  // Cấu hình phiên quét (khoảng cách, số luồng, lọc bạn bè) giữ cho lần sau; tài khoản đã chọn lưu riêng ở trên
+  const configLoaded = useRef(false);
+  useEffect(() => {
+    const saved = loadScanState("profile_scan")?.config;
+    if (saved) {
+      const num = (v, lo, hi, fallback) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : fallback);
+      const min = num(saved.delay_min, 1, 180, 5);
+      // Đặt sau lần dựng đầu (localStorage chỉ có ở trình duyệt)
+      setDelay({ min, max: num(saved.delay_max, min, 180, Math.max(min, 8)) });
+      setWorkers(num(saved.workers, 1, 50, 2));
+      setMinFriends(Boolean(saved.min_friends));
+    }
+    configLoaded.current = true;
+  }, []);
+  useEffect(() => {
+    if (!configLoaded.current) return;
+    saveScanState("profile_scan", { config: { delay_min: delay.min, delay_max: delay.max, workers, min_friends: minFriends } });
+  }, [delay, workers, minFriends]);
 
   // ?demo=1: nạp dữ liệu mẫu để xem giao diện kết quả khi chưa có backend
   useEffect(() => {
@@ -214,7 +235,7 @@ export default function ProfileScanInfo() {
         if (ignore) return;
         if (res.logs.length) {
           lastLogRef.current = res.logs[res.logs.length - 1].id;
-          setLogs((prev) => [...prev, ...res.logs.map((l) => ({ id: `s${l.id}`, timestamp: l.time, message: l.message, type: l.level }))].slice(-500));
+          setLogs((prev) => [...prev, ...res.logs.map((l) => ({ id: `s${l.id}`, timestamp: l.time, thread: threadLabel(l.thread), message: l.message, type: l.level }))].slice(-500));
         }
         setSession(res.session);
         again = res.session.status === "RUNNING" || res.session.status === "PAUSED";
@@ -248,7 +269,7 @@ export default function ProfileScanInfo() {
   }, [sessionId, doneCount]);
 
   const log = (message, type = "info") =>
-    setLogs((prev) => [...prev, { id: `${Date.now()}_${prev.length}`, timestamp: nowStamp(), message, type }].slice(-500));
+    setLogs((prev) => [...prev, { id: `${Date.now()}_${prev.length}`, timestamp: nowStamp(), thread: threadLabel(null), message, type }].slice(-500));
 
   const typedCount = linkText.split(/\r?\n/).filter((l) => l.trim()).length;
   const rows = mode === "link" ? linkRows : fileRows;
@@ -326,9 +347,7 @@ export default function ProfileScanInfo() {
         account_uids: uids,
         delay_min: delay.min,
         delay_max: delay.max,
-        rotate_every: rotateEvery,
         workers: Math.min(workers, uids.length),
-        skip_scanned: skipScanned,
         min_friends: minFriends ? 500 : 0,
         mode,
         targets: targets.map((t) => ({ uid: t.uid || t.key, url: t.url, name: t.name, avatar: t.avatar, source_keys: t.source_keys || [] })),
@@ -398,8 +417,8 @@ export default function ProfileScanInfo() {
   const exportRows = async (list, name) => {
     if (!list.length) return toast.warning("Chưa có profile để xuất.");
     try {
-      await exportProfiles(list, name, (r) => resultSources[r.sourceKey]?.name || "");
-      return toast.success(`Đã xuất ${fmtNum(list.length)} profile.`);
+      const msg = exportMessage(await exportProfiles(list, name, (r) => resultSources[r.sourceKey]?.name || ""), list.length);
+      return toast[msg.type](msg.text);
     } catch (err) {
       return toast.error(`Không xuất được: ${err.message}`);
     }
@@ -431,11 +450,18 @@ export default function ProfileScanInfo() {
         {demo && <p className="mt-2 inline-block rounded-md bg-[#FEF3C7] px-2.5 py-1 text-xs font-semibold text-[#92400E]">Đang xem dữ liệu mẫu — không phải kết quả quét thật</p>}
       </div>
 
-      <section className={`${CARD} p-6 ${live ? "hidden" : ""}`}>
-        <div className="flex items-center gap-2.5 border-b border-[#F1F5F9] pb-3">
+      {/* Đang có phiên (chạy hoặc đã xong): vẫn hiện thiết lập để xem lại nhưng khóa thao tác; bấm "Quét mới" mới sửa được */}
+      <section inert={showResults} aria-disabled={showResults || undefined} className={`${CARD} p-6 ${showResults ? "select-none" : ""}`}>
+        <div className="flex flex-wrap items-center gap-2.5 border-b border-[#F1F5F9] pb-3">
           <span className="flex size-6 items-center justify-center rounded-full bg-[#1877F2] text-xs font-bold text-white">1</span>
           <h2 className="text-sm font-bold text-[#0F172A]">Chọn tài khoản & Thiết lập phiên quét</h2>
+          {showResults && (
+            <span className="ml-auto rounded-md bg-[#F1F5F9] px-2.5 py-1 text-[11px] font-semibold text-[#64748B]">
+              {live ? "Đang quét — không thể chỉnh sửa" : "Phiên đã kết thúc — bấm “Quét mới” để thiết lập lại"}
+            </span>
+          )}
         </div>
+        <div className={showResults ? "opacity-60" : ""}>
         <div className="mt-4 rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] p-4">
           <button type="button" onClick={() => setShowAccounts(true)} className="inline-flex h-8 items-center gap-2 rounded-lg bg-[#1877F2] px-4 text-xs font-semibold text-white hover:bg-[#1D4ED8]">
             <UserPlus className="size-4" /> Chọn tài khoản
@@ -453,10 +479,6 @@ export default function ProfileScanInfo() {
             -
             <NumCtrl label="khoảng cách tối đa" max={180} value={delay.max} onChange={(v) => setDelay((d) => ({ ...d, max: Math.max(d.min, v) }))} />
             giây
-          </div>
-          <p className="mt-5 text-xs font-medium text-[#334155]">Đổi tài khoản mới khi quét được:</p>
-          <div className="mt-2 flex items-center gap-3 text-xs text-[#64748B]">
-            <NumCtrl label="số profile mỗi tài khoản" value={rotateEvery} step={10} onChange={setRotateEvery} /> profile / acc
           </div>
           <p className="mt-5 text-xs font-medium text-[#334155]">Số tài khoản chạy song song:</p>
           <div className="mt-2 flex items-center gap-3 text-xs text-[#64748B]">
@@ -546,15 +568,13 @@ export default function ProfileScanInfo() {
                 <FileUp className="size-6 text-[#1877F2]" /> Kéo thả hoặc bấm để chọn tệp .csv, .txt, .xlsx
               </button>
             )}
-            <div className="mt-3 space-y-1.5 text-xs text-[#334155]">
-              <label className="flex cursor-pointer items-center gap-2"><Checkbox checked={skipDup} onCheckedChange={setSkipDup} /> Bỏ qua trùng lặp profile/link trong tệp</label>
-              <label className="flex cursor-pointer items-center gap-2"><Checkbox checked={skipInvalid} onCheckedChange={setSkipInvalid} /> Bỏ qua dòng trống và định dạng lỗi</label>
-            </div>
             <button type="button" disabled={!file || reading} onClick={readFile} className="mt-3 inline-flex h-[30px] w-full items-center justify-center gap-2 rounded-lg border border-[#93C5FD] bg-[#EFF6FF] text-xs font-semibold text-[#1D4ED8] hover:bg-[#DBEAFE] disabled:opacity-50"><Database className="size-3.5" /> {reading ? "Đang đọc…" : "Đọc dữ liệu & Xem trước danh sách"}</button>
           </div>
         )}
+        </div>
       </section>
 
+      {/* Đang quét / quét xong: vẫn xem được danh sách mục tiêu nhưng không sửa được (ẩn nút xóa) */}
       {hasPreview && (
       <section className={`${CARD} overflow-hidden`}>
         <div className="flex items-center gap-3 border-b border-[#E2E8F0] px-5 py-5">
@@ -567,7 +587,7 @@ export default function ProfileScanInfo() {
         {bySource ? (
           <SourcePreview
             sources={sources}
-            onRemove={(key) =>
+            onRemove={showResults ? undefined : (key) =>
               setSources((prev) => {
                 const next = { ...prev };
                 delete next[key];
@@ -576,7 +596,7 @@ export default function ProfileScanInfo() {
             }
           />
         ) : (
-          <LinkPreview rows={rows} onRemove={(id) => (mode === "link" ? setLinkRows : setFileRows)((prev) => prev.filter((r) => r.id !== id))} />
+          <LinkPreview rows={rows} onRemove={showResults ? undefined : (id) => (mode === "link" ? setLinkRows : setFileRows)((prev) => prev.filter((r) => r.id !== id))} />
         )}
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#E2E8F0] bg-[#F8FAFC] px-5 py-3 text-xs text-[#475569]">
           <span><b>Tổng nguồn:</b> {fmtNum(sourceCount)} nguồn được liên kết</span>

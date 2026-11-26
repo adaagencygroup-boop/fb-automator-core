@@ -148,6 +148,12 @@ _OVERVIEW = {"overview", "tổng quan"}
 _EMPTY = re.compile(
     r"^(?:no .+ to show|no .+ info to show|không có .+ để hiển thị|add (?:a |an |your )?.+|thêm .+|chưa có .+)$", re.IGNORECASE
 )
+# Khối "Bạn bè" nằm dưới phần Giới thiệu ở bố cục mới: bộ lọc của nó có cả nhãn "Current city" / "Hometown"
+# ("All friends · Recently Added · Current city · Following") → gặp các dòng này là hết phần Giới thiệu
+_FRIENDS_WIDGET = {
+    "all friends", "recently added", "birthdays", "see all friends", "mutual friends",
+    "tất cả bạn bè", "đã thêm gần đây", "mới thêm gần đây", "sinh nhật bạn bè", "xem tất cả bạn bè", "bạn chung",
+}
 _NOISE = {"public", "công khai", "shared with public", "edit", "chỉnh sửa"}
 
 _LIVES = re.compile(r"^(?:lives in|sống tại|sống ở|đang sống (?:tại|ở))\s+(.+)$", re.IGNORECASE)
@@ -161,7 +167,9 @@ _WORKS = re.compile(
 _TITLE_AT = re.compile(r"^(?:former\s+|cựu\s+|từng là\s+)?(.{2,80}?)\s+(?:at|tại)\s+(.{2,120})$", re.IGNORECASE)
 
 _L_CITY = {"current city", "current town/city", "current town or city", "thành phố hiện tại", "tỉnh/thành phố hiện tại",
-           "thành phố/thị xã hiện tại", "nơi ở hiện tại"}
+           "thành phố/thị xã hiện tại", "nơi ở hiện tại",
+           # Trang chuyên nghiệp (profile chế độ Page): mục Chi tiết ghi 'Address / Địa chỉ'
+           "address", "địa chỉ"}
 _L_HOME = {"hometown", "home town", "quê quán"}
 _L_BIRTH = {"birth date", "birthday", "date of birth", "ngày sinh", "sinh nhật"}
 _L_BYEAR = {"birth year", "year of birth", "năm sinh"}
@@ -225,6 +233,8 @@ def parse_about(lines: List[str]) -> Dict[str, str]:
 
     for i, line in enumerate(lines):
         low = line.lower()
+        if low in _FRIENDS_WIDGET:
+            break
         if low in _LABELS:
             section = "work" if low in _H_WORK else "edu" if low in _H_EDU else ""
             if low in _L_CITY:
