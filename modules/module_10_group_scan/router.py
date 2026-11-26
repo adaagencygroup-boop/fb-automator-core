@@ -80,11 +80,16 @@ def _status(account) -> str:
 # Delay tối thiểu giữa 2 lần quét — nhanh hơn dễ bị Facebook chặn / checkpoint. Gửi nhỏ hơn (client cũ,
 # Chạy tiếp phiên cũ) thì tự nâng lên, nhập ngược (Min > Max) thì tự đổi chỗ — không báo lỗi.
 MIN_DELAY_SEC = 3.0
+# Trần Delay: Min <= 60s, Max <= 120s — vượt thì tự ép về ngưỡng (giao diện cũng chặn và báo).
+MAX_DELAY_MIN_SEC = 60.0
+MAX_DELAY_MAX_SEC = 120.0
 
 
 def _safe_delay_range(delay_min: float, delay_max: float) -> tuple[float, float]:
     lo, hi = max(MIN_DELAY_SEC, float(delay_min or 0)), max(MIN_DELAY_SEC, float(delay_max or 0))
-    return (hi, lo) if lo > hi else (lo, hi)
+    if lo > hi:
+        lo, hi = hi, lo
+    return min(lo, MAX_DELAY_MIN_SEC), min(hi, MAX_DELAY_MAX_SEC)
 
 
 class KeywordQuota(BaseModel):

@@ -383,13 +383,34 @@ export default function GroupScanMembersPage() {
     setTimeout(() => setCopiedLog(false), 2000);
   };
 
+  // Kết quả quét thành viên chỉ hiện các danh mục chứa nhóm đã chọn để quét (không hiện danh mục không có nhóm nào được chọn)
+  const scopedCategories = useMemo(() => {
+    const norm = (s) => String(s || "").trim().replace(/\s+/g, " ").toLowerCase();
+    const keys = new Set();
+    selectedGroups.forEach((g) => {
+      const own = Array.isArray(g.category_keys) && g.category_keys.length ? g.category_keys : [g.category_name || g.keyword];
+      own.forEach((k) => norm(k) && keys.add(norm(k)));
+    });
+    return categories.filter((c) => keys.has(norm(c.name)));
+  }, [categories, selectedGroups]);
+
+  // Danh mục đang xem không còn trong phạm vi → chuyển sang danh mục đầu tiên của các nhóm đã chọn
+  useEffect(() => {
+    if (scopedCategories.some((c) => c.id === selectedCategory)) return;
+    if (scopedCategories.length) setSelectedCategory(scopedCategories[0].id);
+    else {
+      setSelectedCategory("");
+      setMembers([]);
+    }
+  }, [scopedCategories, selectedCategory]);
+
   // Filter Categories
   const filteredCategories = useMemo(() => {
-    if (!categorySearch.trim()) return categories;
-    return categories.filter((c) =>
+    if (!categorySearch.trim()) return scopedCategories;
+    return scopedCategories.filter((c) =>
       c.name.toLowerCase().includes(categorySearch.toLowerCase())
     );
-  }, [categories, categorySearch]);
+  }, [scopedCategories, categorySearch]);
 
   // Filter Members
   const filteredMembers = useMemo(() => {
@@ -438,7 +459,7 @@ export default function GroupScanMembersPage() {
   };
 
   const currentCategoryData =
-    categories.find((c) => c.id === selectedCategory) || categories[0] || null;
+    scopedCategories.find((c) => c.id === selectedCategory) || scopedCategories[0] || null;
 
   // Xuất Excel thành viên — lấy ĐỦ từ máy chủ (bảng kết quả chỉ tải 100 người đầu của danh mục).
   const exportMembers = async (params, baseName) => {

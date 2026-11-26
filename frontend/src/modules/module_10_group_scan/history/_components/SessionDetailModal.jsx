@@ -6,6 +6,21 @@ import { Layers, X, Copy, ExternalLink, Play, Loader2 } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { renderTypeBadge, renderStatusBadge } from "./HistoryDataTable";
 
+// Tên hiển thị cho các tham số cấu hình phiên (backend lưu theo khoá tiếng Anh)
+const CONFIG_LABELS = {
+  delay: "Khoảng nghỉ giữa các lần quét",
+  privacy: "Loại nhóm",
+  minMembers: "Thành viên tối thiểu / nhóm",
+  maxKeywords: "Số từ khóa",
+  autoJoin: "Tự tham gia nhóm",
+  accounts_count: "Số tài khoản",
+  groups_count: "Số nhóm",
+  members_limit: "Tối đa thành viên / nhóm",
+  skip_admin: "Bỏ qua quản trị viên",
+  auto_dedupe: "Bỏ qua thành viên đã quét",
+  new_members_only: "Chỉ thành viên mới (30 ngày)",
+};
+
 export default function SessionDetailModal({
   isOpen,
   onClose,
@@ -46,36 +61,37 @@ export default function SessionDetailModal({
     >
       <div className="relative w-full max-w-2xl rounded-2xl bg-white shadow-2xl border border-slate-200/90 overflow-hidden animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[85vh] select-text">
         {/* Modal Header */}
-        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4 bg-[#F8FAFC]">
-          <div className="flex items-center gap-3">
-            <div className="size-9 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center text-[#2563EB] shrink-0">
-              <Layers className="size-4.5" />
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4 bg-[#F8FAFC]">
+          <div className="flex items-start gap-3 min-w-0">
+            <div className="size-10 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center text-[#2563EB] shrink-0">
+              <Layers className="size-5" />
             </div>
-            <div className="flex flex-col">
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-bold text-slate-900">
-                  Chi tiết phiên #{session.id}
-                </h3>
+            <div className="flex flex-col gap-1.5 min-w-0">
+              <h3 className="text-sm font-bold text-slate-900 whitespace-nowrap">
+                Chi tiết phiên{" "}
+                <span className="font-mono text-[12px] font-semibold text-slate-500">#{session.id}</span>
+              </h3>
+              <div className="flex flex-wrap items-center gap-1.5 [&>span]:whitespace-nowrap">
                 {renderTypeBadge(session.type)}
                 {renderStatusBadge(session.status)}
               </div>
-              <p className="text-[11px] text-slate-500 mt-0.5">
+              <p className="text-[11px] text-slate-500">
                 Khởi tạo lúc: {session.startTime} • Thời lượng: {session.duration || "—"}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             {session.resumable && onResume && (
               <button
                 type="button"
                 onClick={() => onResume(session)}
                 disabled={Boolean(resumingId)}
-                title="Quét nốt phần còn thiếu của phiên này (cùng nick & cấu hình)"
-                className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+                title={`Quét nốt ${session.remainingItems} mục còn thiếu của phiên này (cùng nick & cấu hình)`}
+                className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-amber-600 px-3 h-8 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
               >
                 {resumingId === session.id ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
-                Chạy tiếp ({session.remainingItems} còn thiếu)
+                Chạy tiếp · còn {session.remainingItems}
               </button>
             )}
             <button
@@ -201,9 +217,9 @@ export default function SessionDetailModal({
                 <div className="grid grid-cols-2 gap-y-2 text-[11px]">
                   {Object.entries(session.config || {}).map(([key, val]) => (
                     <div key={key} className="flex flex-col">
-                      <span className="text-slate-500 capitalize">{key}:</span>
+                      <span className="text-slate-500">{CONFIG_LABELS[key] || key}</span>
                       <span className="font-semibold text-slate-800">
-                        {String(val)}
+                        {typeof val === "boolean" ? (val ? "Bật" : "Tắt") : String(val)}
                       </span>
                     </div>
                   ))}

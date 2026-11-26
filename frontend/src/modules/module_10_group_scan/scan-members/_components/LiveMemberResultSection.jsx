@@ -67,7 +67,7 @@ export default function LiveMemberResultSection({
           <div className="flex flex-col gap-2 w-full">
             {categories.length === 0 ? (
               <div className="text-center py-8 text-xs text-[#94A3B8]">
-                Chưa có danh mục nào từ cơ sở dữ liệu.
+                Chọn nhóm muốn quét để xem kết quả theo danh mục của các nhóm đó.
               </div>
             ) : (
               categories.map((cat) => {

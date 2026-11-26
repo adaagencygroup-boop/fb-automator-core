@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { RotateCcw, Download } from "lucide-react";
 import { toast } from "@/lib/toast";
 import {
@@ -32,6 +32,13 @@ export default function GroupScanMemberListPage() {
   const [loading, setLoading] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
   const [memberSearch, setMemberSearch] = useState("");
+  // Gõ tìm kiếm: chờ ngừng gõ 350ms mới gọi API (trước đây mỗi phím 1 request → hàng đợi dài, spinner quay mãi)
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(memberSearch.trim()), 350);
+    return () => clearTimeout(t);
+  }, [memberSearch]);
+  const requestSeq = useRef(0); // chỉ áp kết quả của lần gọi mới nhất
   const [selectedMemberIds, setSelectedMemberIds] = useState(new Set());
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 15;
@@ -63,14 +70,16 @@ export default function GroupScanMemberListPage() {
   }, []);
 
   const loadMembers = useCallback(async () => {
+    const seq = ++requestSeq.current;
     setLoading(true);
     try {
       const res = await getScannedMembers({
         category_id: selectedCatId,
-        search: memberSearch,
+        search: debouncedSearch,
         page: currentPage,
         page_size: pageSize,
       });
+      if (seq !== requestSeq.current) return; // đã có lần gọi mới hơn → bỏ kết quả cũ
       if (res?.members && Array.isArray(res.members)) {
         setMembers(
           res.members.map((m, idx) => ({
@@ -87,12 +96,14 @@ export default function GroupScanMemberListPage() {
         setTotalCount(0);
       }
     } catch {
+      if (seq !== requestSeq.current) return;
       setMembers([]);
       setTotalCount(0);
     } finally {
-      setLoading(false);
+      // Lần gọi mới nhất xong (có hay không có kết quả) → tắt spinner ngay để hiện bảng / Empty State
+      if (seq === requestSeq.current) setLoading(false);
     }
-  }, [selectedCatId, memberSearch, currentPage, pageSize]);
+  }, [selectedCatId, debouncedSearch, currentPage, pageSize]);
 
   useEffect(() => {
     loadCategories();

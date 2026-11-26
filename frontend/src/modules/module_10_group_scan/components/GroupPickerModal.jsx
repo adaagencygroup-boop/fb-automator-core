@@ -512,6 +512,9 @@ export default function GroupPickerModal({
         url: g.url || (g.group_id && !/^\d{1,7}$/.test(g.group_id) ? `https://www.facebook.com/groups/${g.group_id}` : ""),
         href: g.url || (g.group_id && !/^\d{1,7}$/.test(g.group_id) ? `https://www.facebook.com/groups/${g.group_id}` : ""),
         keyword: g.keyword,
+        // Các thư mục chứa nhóm — mục Kết quả quét thành viên chỉ hiện các thư mục này
+        category_name: g.category_name || "",
+        category_keys: Array.isArray(g.category_keys) ? g.category_keys : [],
       }));
 
     if (onConfirm) {

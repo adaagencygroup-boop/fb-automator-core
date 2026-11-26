@@ -38,7 +38,6 @@ export default function AdvancedScanFilterCard({
           <DelayRangeInput
             min={Number(minDelay) || 1}
             max={Number(maxDelay) || 1}
-            ceil={3600}
             onChange={(lo, hi) => {
               setMinDelay(lo);
               setMaxDelay(hi);
