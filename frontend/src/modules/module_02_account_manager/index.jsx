@@ -17,6 +17,7 @@ import { MoveCategoryDialog } from "./components/CategoryDialogs";
 import { useAccountCategories } from "./hooks/useAccountCategories";
 import { categoryQuery, moveAccountBatches } from "./utils/categories.mjs";
 import { importOutcome } from "./utils/import-categories.mjs";
+import { formatUidsForCopy, formatAccountsForCopy } from "./utils/account-export.mjs";
 import { useAccounts } from "./hooks/useAccounts";
 import useAccountRealtime from "./hooks/useAccountRealtime";
 import { isAccountBusy } from "./utils/account-realtime.mjs";
@@ -404,34 +405,43 @@ export default function AccountManagerModule() {
 
   const handleSelectAll = (filteredUids) => {
     const targetUids = filteredUids || accounts.map((account) => account.uid);
-    const allTargetSelected =
-      targetUids.length > 0 && targetUids.every((uid) => selectedUids.includes(uid));
-    if (allTargetSelected) {
+    const anyTargetSelected =
+      targetUids.length > 0 && targetUids.some((uid) => selectedUids.includes(uid));
+    if (anyTargetSelected) {
       setSelectedUids((current) => current.filter((id) => !targetUids.includes(id)));
     } else {
       setSelectedUids((current) => Array.from(new Set([...current, ...targetUids])));
     }
   };
 
+  const copyTextToClipboard = async (text) => {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    if (!copied) throw new Error("Clipboard unavailable");
+  };
+
+  const getCopyTargetAccounts = () =>
+    selectedUids.length > 0
+      ? accounts.filter((account) => selectedUids.includes(account.uid))
+      : accounts;
+
   const handleCopyAllUids = async () => {
-    if (!accounts.length) return false;
-    const text = accounts.map((a) => a.uid).join("\n");
+    const targets = getCopyTargetAccounts();
+    if (!targets.length) return false;
     try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        const textarea = document.createElement("textarea");
-        textarea.value = text;
-        textarea.setAttribute("readonly", "");
-        textarea.style.position = "fixed";
-        textarea.style.opacity = "0";
-        document.body.appendChild(textarea);
-        textarea.select();
-        const copied = document.execCommand("copy");
-        document.body.removeChild(textarea);
-        if (!copied) throw new Error("Clipboard unavailable");
-      }
-      toast.success(`Đã copy ${accounts.length} UID vào clipboard.`, "COPY UID");
+      await copyTextToClipboard(formatUidsForCopy(targets));
+      toast.success(`Đã copy ${targets.length} UID vào clipboard.`, "COPY UID");
       return true;
     } catch (error) {
       toast.error(`Không thể copy UID: ${error?.message || String(error)}`, "LỖI COPY");
@@ -439,11 +449,25 @@ export default function AccountManagerModule() {
     }
   };
 
+  const handleCopyAllAccounts = async () => {
+    const targets = getCopyTargetAccounts();
+    if (!targets.length) return false;
+    try {
+      await copyTextToClipboard(formatAccountsForCopy(targets));
+      toast.success(`Đã copy toàn bộ dữ liệu ${targets.length} tài khoản vào clipboard.`, "COPY DỮ LIỆU");
+      return true;
+    } catch (error) {
+      toast.error(`Không thể copy dữ liệu: ${error?.message || String(error)}`, "LỖI COPY");
+      return false;
+    }
+  };
+
   const handleCheckStatus = async () => {
-    if (!selectedUids.length || isCheckingStatus) return;
+    const targetUids = selectedUids.length > 0 ? selectedUids : accounts.map((a) => a.uid);
+    if (!targetUids.length || isCheckingStatus) return;
     setIsCheckingStatus(true);
     try {
-      const res = await checkAccountStatuses(selectedUids);
+      const res = await checkAccountStatuses(targetUids);
       toast.success(
         `Đã kiểm tra xong: ${res.live || 0} Live, ${res.die || 0} Die, ${res.inconclusive || 0} chưa kết luận được.`,
         "KIỂM TRA HOÀN TẤT"
@@ -605,6 +629,7 @@ export default function AccountManagerModule() {
         onOpenBrowser={handleOpenBrowser}
         onBulkDelete={handleBulkDelete}
         onCopyAllUids={handleCopyAllUids}
+        onCopyAllAccounts={handleCopyAllAccounts}
         onRefresh={handleCheckStatus}
         isCheckingStatus={isCheckingStatus}
         accountProgress={realtime.progress}
