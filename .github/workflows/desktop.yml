@@ -14,11 +14,12 @@ jobs:
       - name: Check Actor
         env:
           ACTOR: ${{ github.actor }}
-          ALLOWED: ${{ vars.RELEASE_ALLOWED_ACTOR || 'peterphenikaa' }}
+          # Danh sách người được chạy Release, cách nhau dấu phẩy (có thể đặt qua biến repo RELEASE_ALLOWED_ACTOR)
+          ALLOWED: ${{ vars.RELEASE_ALLOWED_ACTOR || 'peterphenikaa,TrBinhDev' }}
         run: |
           echo "Actor=$ACTOR Allowed=$ALLOWED"
-          if [ "$ACTOR" != "$ALLOWED" ]; then
-            echo "::error::Chỉ @$ALLOWED Dc Chạy Desktop Release (Tag/Workflow Dispatch). Actor Hiện Tại: @$ACTOR"
+          if ! echo ",${ALLOWED// /}," | grep -qi ",$ACTOR,"; then
+            echo "::error::Chỉ @${ALLOWED//,/, @} Dc Chạy Desktop Release (Tag/Workflow Dispatch). Actor Hiện Tại: @$ACTOR"
             exit 1
           fi
   buildDesktop:
