@@ -61,9 +61,7 @@ function statusLine(job) {
   if (job.status === "RUNNING") return { tone: "run", text: `Đang lấy bài… đã quét được ${n} bài viết${name}` };
   if (job.status === "STOPPING") return { tone: "run", text: `Đang dừng… đã quét được ${n} bài viết${name}` };
   if (job.status === "COMPLETED") {
-    return job.error_message
-      ? { tone: "warn", text: "\u0110\u00e3 qu\u00e9t xong " + n + " b\u00e0i: " + job.error_message }
-      : { tone: "ok", text: "\u0110\u00e3 qu\u00e9t \u0111\u01b0\u1ee3c " + n + " b\u00e0i vi\u1ebft" + name + "." };
+    return { tone: "ok", text: `Đã quét xong ${n} bài` };
   }
   if (job.status === "STOPPED") return { tone: "warn", text: `Đã dừng lấy bài: quét được ${n} bài viết${name}.` };
   return {
@@ -293,7 +291,6 @@ export default function PostSourceFetcher({
               terminalToastJobsRef.current.add(terminalKey);
               loadList(true);
               if (next.status === "STOPPED") toast.warning(statusLine(next).text, "ĐÃ DỪNG");
-              else if (next.status === "COMPLETED" && next.error_message) toast.warning(statusLine(next).text, "\u0110\u00c3 QU\u00c9T XONG");
               else if (next.status !== "COMPLETED") toast.error(statusLine(next).text, "LẤY BÀI THẤT BẠI");
             }
           } else if (next.found_count !== lastFound.current) {
