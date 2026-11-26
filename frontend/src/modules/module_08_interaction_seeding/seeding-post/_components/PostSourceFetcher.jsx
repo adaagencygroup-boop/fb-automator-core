@@ -8,7 +8,7 @@
  * - Bài lấy về chỉ lưu TẠM (RAM + file trên máy); bấm "Thêm bài viết đã chọn" mới lưu các bài đã chọn vào DB.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Check, CheckCircle2, FileText, Image as ImageIcon, Loader2, RefreshCw, Search, Square, Video } from "lucide-react";
+import { AlertCircle, Check, CheckCircle2, Loader2, RefreshCw, Search, Square } from "lucide-react";
 import { toast } from "@/components/ui/toast";
 import { postFetchApi } from "../../service";
 import {
@@ -24,11 +24,6 @@ import {
 const PAGE_SIZE = 100;
 const POLL_MS = 2000;
 const FETCH_ACCOUNT_CURSOR_KEY = "m8-seeding-post-fetch-account-cursor";
-const TYPES = {
-  photo: { Icon: ImageIcon },
-  video: { Icon: Video },
-  text: { Icon: FileText },
-};
 const INPUT =
   "min-w-0 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs text-gray-800 outline-none placeholder:text-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50 disabled:text-gray-400";
 const PRIMARY =
@@ -599,7 +594,6 @@ export default function PostSourceFetcher({
                 </p>
               ) : (
                 list.items.map((p) => {
-                  const { Icon } = TYPES[p.post_type] || TYPES.text;
                   const checked = p.added || isSelected(sel, p.id);
                   const contentPreview = splitContent(p.content);
                   const date = formatDateOnly(p.published_text) || formatDateOnly(p.published_at) || "\u0043\u0068\u01b0\u0061\u0020\u0111\u1ecdc\u0020\u0111\u01b0\u1ee3c\u0020ng\u00e0y\u0020\u0111\u0103ng";
@@ -636,7 +630,6 @@ export default function PostSourceFetcher({
                         }}
                         disabled={busy || p.added}
                       />
-                      <Icon className="size-4 shrink-0 text-gray-400" aria-hidden="true" />
                       <span className="min-w-0 space-y-1">
                         <span className="line-clamp-2 break-words text-xs font-bold text-gray-900">{contentPreview}</span>
                         <span className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
