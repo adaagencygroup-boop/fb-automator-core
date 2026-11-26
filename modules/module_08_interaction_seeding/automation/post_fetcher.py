@@ -1403,10 +1403,8 @@ def _run_fetch_job(
                 previous_phase = (status, reason, error)
                 if _select_reels_tab(driver, stop):
                     status, reason, error = "FAILED", "ERROR", None
-                    log("info", "Đã quét xong tab Bài viết; tiếp tục quét tab Reels…")
                     continue
                 status, reason, error = previous_phase
-                log("info", "Trang nguồn không có tab Reels; kết thúc sau tab Bài viết.")
             break
     except Exception as exc:
         logger.exception(f"[SeedingFetch #{job_id}] lỗi: {exc}")
