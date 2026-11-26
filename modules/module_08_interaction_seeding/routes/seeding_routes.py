@@ -406,7 +406,7 @@ def extract_fb_id(url: str, target_type: str = "") -> str:
         return m.group(1)
 
     # 4. Reel / Video: /reel/(\d+) hoặc /videos/(\d+) hoặc /watch/?v=(\d+)
-    m = re.search(r"/(?:reel|videos)/([a-zA-Z0-9_\-]+)", clean)
+    m = re.search(r"/(?:reels?|videos?)/([a-zA-Z0-9_\-]+)", clean)
     if m:
         return m.group(1)
     m = re.search(r"[?&]v=(\d+)", clean)

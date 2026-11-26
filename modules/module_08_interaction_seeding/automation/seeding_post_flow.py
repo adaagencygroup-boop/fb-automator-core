@@ -682,7 +682,7 @@ class PostSeedingFlow:
     ) -> tuple[bool, str]:
         """Thực hiện chia sẻ bài viết lên Bảng tin cá nhân ở chế độ Công khai (Public)."""
         try:
-            is_reel_target = bool(re.search(r"/(?:reels?)/\d+(?:/|$)", target_url or "", re.IGNORECASE))
+            is_reel_target = bool(re.search(r"/(?:reels?|videos?)/\d+(?:/|$)", target_url or "", re.IGNORECASE))
             if callback:
                 callback("🔄 Chuẩn bị chia sẻ bài viết...")
 

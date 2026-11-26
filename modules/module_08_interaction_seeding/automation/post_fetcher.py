@@ -399,6 +399,9 @@ const addCandidate = (el) => {
   if (candidates.some((existing) => existing.contains(el) || el.contains(existing))) return;
   candidates.push(el);
 };
+const hasMediaPostLink = (el) => Array.from(el.querySelectorAll('a[href]')).some((anchor) =>
+  /\/(?:reels?|videos?)\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)/i.test(anchor.href || anchor.getAttribute('href') || '')
+);
 
 // Dùng message của bài làm mốc; không chọn wrapper Timeline/Feed hoặc article của bình luận.
 const messages = Array.from(scanScope.querySelectorAll(MESSAGE_SEL)).filter((message) => {
@@ -455,7 +458,8 @@ for (const el of scanScope.querySelectorAll(SEMANTIC_POST_SEL)) {
   // A valid post card can omit its permalink anchor until Facebook hydrates it.
   // Keep the post-level action card; the reader can resolve its permalink from
   // Facebook's Embed dialog after reading the visible content and date.
-  if (topMessageCount(el) > 0 || !hasPostActions(el)) continue;
+  const hasStandaloneMediaPermalink = hasMediaPostLink(el) && topMessageCount(el) <= 1;
+  if ((topMessageCount(el) > 0 && !hasStandaloneMediaPermalink) || (!hasPostActions(el) && !hasStandaloneMediaPermalink)) continue;
   addCandidate(el);
 }
 
