@@ -119,6 +119,7 @@ export default function PostSourceFetcher({
   const listItemsRef = useRef([]);
   const dragSelectRef = useRef({ active: false, moved: false, startId: null });
   const terminalToastJobsRef = useRef(new Set());
+  const rotationJobsRef = useRef(new Set());
   const sourceKey = job?.source_key || "";
   const running = isActive(job);
   const fetchBusy = running || starting;
@@ -297,6 +298,42 @@ export default function PostSourceFetcher({
               if (next.status === "STOPPED") toast.warning(status.text, "ĐÃ DỪNG");
               else if (status.tone === "err") toast.error(status.text, "LẤY BÀI THẤT BẠI");
             }
+            if (
+              next.status === "COMPLETED" &&
+              next.stop_reason === "ACCOUNT_ROTATION_LIMIT" &&
+              !rotationJobsRef.current.has(next.id)
+            ) {
+              rotationJobsRef.current.add(next.id);
+              const eligibleUids = selectedUids.filter((uid) => accounts.some((account) => account.uid === uid));
+              const currentIndex = eligibleUids.indexOf(next.account_uid);
+              const nextUid = eligibleUids.length > 1
+                ? eligibleUids[(currentIndex + 1 + eligibleUids.length) % eligibleUids.length]
+                : "";
+              if (nextUid && (sourceUrl.trim() || next.source_url)) {
+                setStarting(true);
+                try {
+                  const nextCursor = (eligibleUids.indexOf(nextUid) + 1) % eligibleUids.length;
+                  const started = await postFetchApi.startJob(
+                    sourceUrl.trim() || next.source_url,
+                    nextUid,
+                    100,
+                  );
+                  setFetchAccountCursor(nextCursor);
+                  try {
+                    window.localStorage.setItem(FETCH_ACCOUNT_CURSOR_KEY, String(nextCursor));
+                  } catch {
+                    // Giữ luân phiên trong phiên hiện tại nếu storage không khả dụng.
+                  }
+                  lastFound.current = -1;
+                  setJob(started?.job || null);
+                  toast.info(`Đủ 100 bài mới; đang chuyển sang tài khoản ${nextUid}.`, "ĐỔI TÀI KHOẢN QUÉT");
+                } catch (err) {
+                  toast.error(err?.message || "Không thể chuyển sang tài khoản quét tiếp theo.", "LỖI ĐỔI TÀI KHOẢN");
+                } finally {
+                  setStarting(false);
+                }
+              }
+            }
           } else if (next.found_count !== lastFound.current) {
             lastFound.current = next.found_count;
             loadList(false);
@@ -315,7 +352,7 @@ export default function PostSourceFetcher({
       stopped = true;
       window.clearTimeout(timer);
     };
-  }, [running, job?.id, loadList]);
+  }, [running, job?.id, loadList, selectedUids, accounts, sourceUrl]);
 
   const chosen = selectedCount(sel, list.total);
   const pickN = Number(firstN);
@@ -341,8 +378,9 @@ export default function PostSourceFetcher({
     setList({ items: [], total: 0, available: true });
     setSel(emptySelection());
     try {
-      const res = await postFetchApi.startJob(sourceUrl.trim(), accountUid);
       const eligibleCount = selectedUids.filter((uid) => accounts.some((account) => account.uid === uid)).length;
+      const rotateAfterPosts = eligibleCount > 1 ? 100 : 0;
+      const res = await postFetchApi.startJob(sourceUrl.trim(), accountUid, rotateAfterPosts);
       if (eligibleCount > 0) {
         const nextCursor = (fetchAccountCursor + 1) % eligibleCount;
         setFetchAccountCursor(nextCursor);

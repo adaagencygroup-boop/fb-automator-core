@@ -141,7 +141,7 @@ export default function SeedingPostPage() {
         })
         .catch(() => {});
     checkActive();
-    const timer = setInterval(checkActive, 5000);
+    const timer = setInterval(checkActive, 15000);
     return () => {
       cancelled = true;
       clearInterval(timer);

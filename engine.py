@@ -101,20 +101,24 @@ def _warm_auth_hwid():
   except Exception as exc:
     print(f"[Local Engine] HWID Warmup Note: {exc}", flush=True)
 threading.Thread(target=_warm_auth_hwid, name="hwid-warm", daemon=True).start()
-def _init_remaining_schemas():
-  with startup_step("Core Database And Module Schemas"):
-    init_database()
-  with startup_step("Module 02 Account Manager"):
-    initialize_accounts()
-  with startup_step("Module 08 Seeding Post Fetch"):
+def _init_module_08_schema():
+  with startup_step("Module 08 Seeding Schema"):
+    from modules.module_08_interaction_seeding.schema import init_models as init_seeding_models
+    init_seeding_models()
     from modules.module_08_interaction_seeding.automation.post_fetcher import (
       init_post_fetch_schema,
     )
-    try:
-      init_post_fetch_schema()
-    except Exception as exc:
-      # Không chặn khởi động: API lấy bài sẽ tạo bảng lại ở lần gọi đầu
-      print(f"[Module 08] Bỏ qua tạo bảng lấy bài lúc khởi động: {exc}", flush=True)
+    init_post_fetch_schema()
+
+def _init_account_and_module_08_schemas():
+  """Bind account sessions and prepare Module 8 before its APIs can be called."""
+  with startup_step("Module 02 Account Manager"):
+    initialize_accounts()
+  _init_module_08_schema()
+
+def _init_remaining_schemas():
+  with startup_step("Core Database And Module Schemas"):
+    init_database()
   with startup_step("Module 04 Created Pages"):
     from modules.module_04_page_creator.database import (
       ensure_schema as ensure_creator_schema,
@@ -154,6 +158,7 @@ async def _finish_engine_startup(fast_startup: bool):
     await asyncio.to_thread(_init_remaining_schemas)
   else:
     await asyncio.to_thread(initialize_accounts)
+    await asyncio.to_thread(_init_module_08_schema)
   with startup_step("Backend Module Imports"):
     loaded = load_backend_modules()
   print(
@@ -192,6 +197,9 @@ async def lifespan(app: FastAPI):
       await asyncio.to_thread(init_auth_tables)
     with startup_step("Admin Account"):
       await asyncio.to_thread(ensure_admin)
+    # Don't accept account/seeding requests until SessionLocal is bound and
+    # Module 8's tables have been created (including after a manual table drop).
+    await asyncio.to_thread(_init_account_and_module_08_schemas)
     print("[Startup] Auth Ready — Accepting Login/HWID", flush=True)
     deferred = asyncio.create_task(_finish_engine_startup(False))
   try:

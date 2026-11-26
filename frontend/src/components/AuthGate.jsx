@@ -23,9 +23,9 @@ const ADMIN_URL =
 /** Proactive refresh trước khi access hết hạn (12h) — desktop không có cookie. */
 const REFRESH_EVERY_MS = 30 * 60 * 1000;
 /** Timeout ngắn cho bước khôi phục phiên — tránh treo trắng khi engine restart/chậm. */
-const AUTH_BOOT_TIMEOUT_MS = 8000;
+const AUTH_BOOT_TIMEOUT_MS = 20000;
 /** Quá hạn thì mở login ngay — HWID retry ở LoginScreen, không chặn overlay. */
-const AUTH_BOOT_HARD_DEADLINE_MS = 20000;
+const AUTH_BOOT_HARD_DEADLINE_MS = 45000;
 /** Chỉ đá phiên sau vài lần 401 liên tiếp — tránh dừng automation vì lỗi tạm. */
 const AUTH_KICK_AFTER_FAILURES = 3;
 

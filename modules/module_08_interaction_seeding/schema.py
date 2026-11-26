@@ -126,4 +126,4 @@ def init_models():
                 clean_stmt = stmt
             db.execute(clean_stmt)
         except Exception as e:
-            print(f"[Module 8 DB] DDL error: {e}")
+            raise RuntimeError(f"Không khởi tạo được schema Module 8: {e}") from e

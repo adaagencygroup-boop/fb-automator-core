@@ -44,6 +44,10 @@ export default function PostTargetSection({
 
   // Tải danh sách toàn bộ mục tiêu trong DB (bao gồm cả các link đã chạy) để kiểm tra trùng lặp thời gian thực
   useEffect(() => {
+    if (!textInput.trim()) {
+      setDbHistoryTargets([]);
+      return undefined;
+    }
     let active = true;
     seedingApi
       .getSeedingTargets("POST", true)
@@ -54,7 +58,7 @@ export default function PostTargetSection({
     return () => {
       active = false;
     };
-  }, [targets]);
+  }, [targets, textInput]);
 
   const allKnownTargets = useMemo(() => {
     return [...dbHistoryTargets, ...(targets || [])];

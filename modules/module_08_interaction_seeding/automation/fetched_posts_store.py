@@ -168,7 +168,13 @@ def begin(owner_id: int, source_key: str, job_id: Optional[int]) -> None:
         _flush(owner_id, state, force=True)
 
 
-def upsert(owner_id: int, source_key: str, job_id: Optional[int], rows: Iterable[Dict[str, Any]]) -> int:
+def upsert(
+    owner_id: int,
+    source_key: str,
+    job_id: Optional[int],
+    rows: Iterable[Dict[str, Any]],
+    max_new: Optional[int] = None,
+) -> int:
     """Thêm / cập nhật 1 nhóm bài. Trả về số bài MỚI. Gộp giống bản lưu DB trước đây:
     nội dung dài hơn thắng, số tương tác lấy lớn nhất, trường rỗng giữ giá trị cũ."""
     with _lock:
@@ -180,6 +186,8 @@ def upsert(owner_id: int, source_key: str, job_id: Optional[int], rows: Iterable
                 continue
             old = state["rows"].get(key)
             if old is None:
+                if max_new is not None and new >= max_new:
+                    continue
                 row = {f: r.get(f) for f in _FIELDS}
                 row["post_key"] = key
                 row["post_type"] = row.get("post_type") or None

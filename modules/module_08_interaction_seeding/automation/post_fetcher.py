@@ -981,13 +981,21 @@ def job_to_dict(job: SeedingPostFetchJob | None) -> Optional[Dict[str, Any]]:
 # ─────────────────────────────────────────────────────────────
 # Chạy job
 # ─────────────────────────────────────────────────────────────
-def start_fetch_thread(job_id: int, owner_id: int, owner_identifiers: List[str], source_url: str, source_key: str, account_uid: str) -> None:
+def start_fetch_thread(
+    job_id: int,
+    owner_id: int,
+    owner_identifiers: List[str],
+    source_url: str,
+    source_key: str,
+    account_uid: str,
+    rotate_after_posts: int = 0,
+) -> None:
     """Job phải được try_register_job trước. Chạy trong thread riêng (không chiếm threadpool của FastAPI)."""
     with _jobs_lock:
         stop = _running_jobs[job_id]["stop"]
     threading.Thread(
         target=_run_fetch_job,
-        args=(job_id, owner_id, owner_identifiers, source_url, source_key, account_uid, stop),
+        args=(job_id, owner_id, owner_identifiers, source_url, source_key, account_uid, stop, rotate_after_posts),
         name=f"seeding-post-fetch-{job_id}",
         daemon=True,
     ).start()
@@ -1037,6 +1045,7 @@ def _run_fetch_job(
     source_key: str,
     account_uid: str,
     stop: threading.Event,
+    rotate_after_posts: int = 0,
 ) -> None:
     from modules.module_02_account_manager.automation.browser_manager import create_driver
     from modules.module_02_account_manager.automation.login_flow import is_checkpoint_url
@@ -1126,7 +1135,7 @@ def _run_fetch_job(
         last_new_at = time.time()
         last_beat = 0.0
         next_rest_at = LONG_REST_EVERY
-        next_log_at = 50
+        next_log_at = 100
 
         while not stop.is_set():
             rounds += 1
@@ -1231,7 +1240,18 @@ def _run_fetch_job(
                     found_keys.update(r["post_key"] for r in rows)
                     if rows:
                         # Chỉ lưu tạm (RAM + file trên máy) — DB chỉ ghi khi người dùng bấm thêm bài đã chọn
-                        new_total += fetched_posts_store.upsert(owner_id, source_key, job_id, rows)
+                        remaining_for_account = (
+                            max(0, rotate_after_posts - new_total)
+                            if rotate_after_posts > 0
+                            else None
+                        )
+                        new_total += fetched_posts_store.upsert(
+                            owner_id,
+                            source_key,
+                            job_id,
+                            rows,
+                            max_new=remaining_for_account,
+                        )
                     driver.execute_script(_FINISH_BATCH_JS, batch, TRIM_MEDIA, pending_candidate_indexes)
                 errors = 0
             except Exception as exc:
@@ -1259,7 +1279,12 @@ def _run_fetch_job(
                 last_beat = now
             if len(found_keys) >= next_log_at:
                 log("info", f"Đã lấy {len(found_keys):,} bài ({new_total:,} bài mới).".replace(",", "."))
-                next_log_at += 50
+                next_log_at += 100
+
+            if rotate_after_posts > 0 and new_total >= rotate_after_posts:
+                status, reason = "COMPLETED", "ACCOUNT_ROTATION_LIMIT"
+                log("info", f"Đã quét đủ {rotate_after_posts} bài mới; chuyển sang tài khoản kế tiếp.")
+                break
 
             # Nếu lần cuộn trước đã chạm đáy, cho thêm một vòng đọc DOM sau thời gian chờ.
             # Chỉ kết thúc khi vòng đó cũng không thấy bài mới hay chiều cao feed tăng.

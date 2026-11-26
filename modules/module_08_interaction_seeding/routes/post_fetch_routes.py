@@ -34,6 +34,7 @@ _NOT_SOURCE_MARKERS = ("/posts/", "/permalink", "story_fbid", "/videos/", "/phot
 class StartFetchRequest(BaseModel):
     source_url: str = Field(..., max_length=2000)
     account_uid: str = Field(..., max_length=50)
+    rotate_after_posts: int = Field(0, ge=0, le=1000)
 
 
 class AddFetchedRequest(BaseModel):
@@ -166,7 +167,15 @@ def start_post_fetch(
         db.refresh(job)
         post_fetcher.try_register_job(job.id, user_id)
 
-    post_fetcher.start_fetch_thread(job.id, user_id, owner_ids, source_url, source_key, account.uid)
+    post_fetcher.start_fetch_thread(
+        job.id,
+        user_id,
+        owner_ids,
+        source_url,
+        source_key,
+        account.uid,
+        body.rotate_after_posts,
+    )
     return {"job": post_fetcher.job_to_dict(job)}
 
 
