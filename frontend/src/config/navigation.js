@@ -70,6 +70,13 @@ export const NAV_ITEMS = [
         icon: icon("icon_nav_account_engage", 14, 11),
       },
       {
+        id: "interact.tiktok",
+        label: "Tải video từ TikTok",
+        description: "Tìm kiếm, quét và tải video TikTok theo từ khóa cho các tài khoản Facebook.",
+        moduleId: "farm",
+        icon: icon("icon_nav_tiktok", 24, 12.0054),
+      },
+      {
         id: "interact.history",
         label: "Lịch sử",
         title: "Lịch sử đăng bài",
@@ -283,7 +290,7 @@ export const NAV_ITEMS = [
   {
     id: "engage",
     label: "Quét tài khoản từ bài viết",
-    icon: icon("icon_nav_group_spam", 30, 13),
+    icon: icon("icon_nav_scan_post", 16, 16),
     children: [
       {
         id: "engage.scan",
@@ -306,7 +313,7 @@ export const NAV_ITEMS = [
   {
     id: "scanner",
     label: "Quét page",
-    icon: icon("icon_nav_group_spam", 30, 13),
+    icon: icon("icon_nav_scan_page", 16, 16),
     children: [
       {
         id: "scanner.search",
@@ -353,7 +360,7 @@ export const NAV_ITEMS = [
   {
     id: "profile_scan",
     label: "Quét profile",
-    icon: icon("icon_nav_group_spam", 30, 13),
+    icon: icon("icon_nav_scan_profile", 16, 16),
     children: [
       {
         id: "profile_scan.info",

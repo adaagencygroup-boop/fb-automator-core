@@ -58,6 +58,13 @@ try:
 except Exception as _post_import_error:
   post_router = None
   print(f"[Local Engine] Module 03 (Post) Not Loaded: {_post_import_error}")
+try:
+  from modules.module_03_acc_farm.tiktok_download import (
+    router as post_tiktok_router,
+  )
+except Exception as _post_tiktok_import_error:
+  post_tiktok_router = None
+  print(f"[Local Engine] Module 03 (TikTok) Not Loaded: {_post_tiktok_import_error}")
 if hasattr(sys.stdout, "reconfigure"):
   try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -309,6 +316,8 @@ if farm_router:
   app.include_router(farm_router)
 if post_router:
   app.include_router(post_router)
+if post_tiktok_router:
+  app.include_router(post_tiktok_router)
 try:
   from prometheus_fastapi_instrumentator import Instrumentator
   Instrumentator(should_group_status_codes=False).instrument(app).expose(
