@@ -28,6 +28,10 @@ export function pickerErrorMessage(err, moduleName) {
 
 export const getTikTokAuth = () => api.get("/api/post/tiktok/auth-status");
 export const openTikTokLogin = () => api.post("/api/post/tiktok/open-login");
+export const logoutTikTok = () => api.post("/api/post/tiktok/logout");
+export const getTikTokConfig = () => api.get("/api/post/tiktok/config");
+/** { folder?, per_keyword? } — chỉ gửi trường cần lưu */
+export const saveTikTokConfig = (config) => api.put("/api/post/tiktok/config", config);
 export const startTikTokDownload = (payload) => api.post("/api/post/tiktok/start", payload);
 export const stopTikTokDownload = () => api.post("/api/post/tiktok/stop");
 export const getTikTokDownloadStatus = (page, size) => api.get("/api/post/tiktok/status", { params: { page, size } });

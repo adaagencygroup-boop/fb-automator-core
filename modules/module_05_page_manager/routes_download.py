@@ -785,7 +785,10 @@ def open_tiktok_login_endpoint():
 @router.post("/tiktok/disconnect")
 def disconnect_tiktok_endpoint():
   from core.media.tiktok_browser import disconnect_tiktok
-  return {"success": disconnect_tiktok()}
+  try:
+    return {"success": disconnect_tiktok()}
+  except RuntimeError as e:
+    raise HTTPException(409, str(e)) from e
 @router.get("/tiktok/config")
 def get_tiktok_config_endpoint():
   return read_persistent_tiktok_config()

@@ -111,7 +111,7 @@ def check_profile_cookies() -> Dict[str, Any]:
     if has_session:
       session_info = {
         "connected": True,
-        "username": "",
+        "username": _saved_username(),
         "cookies": cookies_list,
         "updated_at": int(time.time()),
       }
@@ -126,6 +126,54 @@ def check_profile_cookies() -> Dict[str, Any]:
   _last_cookie_check_ts = now
   _last_cookie_check_cache = {"connected": False}
   return {"connected": False}
+_username_tried_at = 0.0
+
+
+def _saved_username() -> str:
+  try:
+    with open(SESSION_FILE, "r", encoding="utf-8") as f:
+      return json.load(f).get("username") or ""
+  except Exception:
+    return ""
+
+
+def _fetch_tiktok_username(cookies: List[Dict[str, Any]]) -> str:
+  """Hỏi TikTok tên tài khoản đang đăng nhập bằng cookie phiên (lỗi → chuỗi rỗng)."""
+  import requests
+  jar = "; ".join(
+    f"{c['name']}={c['value']}" for c in cookies
+    if c.get("name") and c.get("value") and f"{c['name']}{c['value']}".isascii()
+  )
+  try:
+    res = requests.get(
+      "https://www.tiktok.com/passport/web/account/info/",
+      params={"aid": "1459"},
+      headers={"Cookie": jar, "User-Agent": DEFAULT_DESKTOP_UA, "Referer": "https://www.tiktok.com/"},
+      timeout=8,
+    )
+    data = (res.json() or {}).get("data") or {}
+    return str(data.get("username") or data.get("screen_name") or "").strip()
+  except Exception:
+    return ""
+
+
+def _ensure_username(data: Dict[str, Any]) -> Dict[str, Any]:
+  """Chưa biết tên tài khoản → hỏi TikTok (tối đa 1 lần/phút) rồi ghi vào file phiên."""
+  global _username_tried_at
+  if data.get("username") or time.time() - _username_tried_at < 60:
+    return data
+  _username_tried_at = time.time()
+  username = _fetch_tiktok_username(data.get("cookies", []))
+  if username:
+    data = {**data, "username": username}
+    try:
+      with open(SESSION_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+      pass
+  return data
+
+
 def get_session_data() -> Dict[str, Any]:
   if os.path.exists(SESSION_FILE):
     try:
@@ -155,6 +203,8 @@ def get_tiktok_auth_status() -> Dict[str, Any]:
     data.get("connected")
     and any(c.get("name") in ["sessionid", "sessionid_ss", "sid_tt"] and c.get("value") for c in cookies)
   )
+  if is_logged:
+    data = _ensure_username(data)
   raw_user = data.get("username", "") if is_logged else ""
   safe_user = "" if raw_user.lower().startswith("user_") else raw_user
   return {
@@ -174,11 +224,24 @@ def disconnect_tiktok() -> bool:
       except Exception:
         pass
       _live_driver = None
-  if os.path.exists(SESSION_FILE):
-    try:
+  if not _browser_session_lock.acquire(timeout=5):
+    raise RuntimeError("Đang có phiên TikTok chạy, hãy dừng trước khi đăng xuất.")
+  try:
+    db_path = os.path.join(PROFILE_DIR, "Default", "Network", "Cookies")
+    if os.path.exists(db_path):
+      import sqlite3
+      conn = sqlite3.connect(db_path, timeout=5)
+      try:
+        conn.execute("DELETE FROM cookies WHERE host_key LIKE '%tiktok.com%'")
+        conn.commit()
+      finally:
+        conn.close()
+    if os.path.exists(SESSION_FILE):
       os.remove(SESSION_FILE)
-    except Exception:
-      pass
+  finally:
+    _browser_session_lock.release()
+  _last_cookie_check_ts = 0.0
+  _last_cookie_check_cache = {"connected": False}
   return True
 def _watch_tiktok_login(driver: webdriver.Chrome):
   global _live_driver, _is_opening
@@ -202,6 +265,18 @@ def _watch_tiktok_login(driver: webdriver.Chrome):
         u_match = re.search(r'tiktok\.com/@([a-zA-Z0-9_.-]+)', curr_url)
         if u_match:
           username = u_match.group(1)
+        if not username:
+          # Hỏi tên tài khoản ngay trong cửa sổ đăng nhập (trình duyệt thật, TikTok không chặn)
+          try:
+            driver.set_script_timeout(10)
+            username = driver.execute_async_script(
+              "const done = arguments[arguments.length - 1];"
+              "fetch('/passport/web/account/info/?aid=1459', {credentials: 'include'})"
+              ".then(r => r.json()).then(j => done((j && j.data && (j.data.username || j.data.screen_name)) || ''))"
+              ".catch(() => done(''));"
+            ) or ""
+          except Exception:
+            username = ""
         os.makedirs(os.path.dirname(SESSION_FILE), exist_ok=True)
         session_info = {
           "connected": True,

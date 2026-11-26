@@ -1235,7 +1235,11 @@ def run_follower_scan_flow(
                 late_avatars: Dict[str, str] = {}
                 dup_this = 0
                 fresh_known = 0  # UID đã có trong kho nhưng LẦN ĐẦU hiện ra ở lượt quét Page này
+                # Mỗi lượt đọc ra cả mẻ follower: chỉ lấy đủ số còn thiếu, không vượt giới hạn Page / tổng
+                room = min(max_per_page - page_got, target_followers - total_unique)
                 for item in batch_items:
+                    if len(new_items) >= room:
+                        break
                     fk = item["follower_key"]
                     total_seen += 1
                     first_seen_on_page = fk not in page_seen
