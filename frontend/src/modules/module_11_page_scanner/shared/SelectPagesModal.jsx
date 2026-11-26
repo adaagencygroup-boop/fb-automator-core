@@ -80,6 +80,8 @@ function clockOf(value) {
 }
 
 /** Số ngày nuôi tính từ lần đăng nhập đầu tiên (null nếu chưa từng đăng nhập). */
+const FARM_UNIT_DAYS = { D: 1, M: 30, Y: 365 };
+
 function farmDays(acc) {
   const t = Date.parse(acc?.first_login_at || "");
   if (!Number.isFinite(t)) return null;
@@ -141,7 +143,9 @@ export function SelectAccountsModal({
   const [draftUids, setDraftUids] = useState(selectedUids);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("ALL");
-  const [farmTime, setFarmTime] = useState("ALL");
+  // Lọc thời gian nuôi: người dùng tự nhập số tháng / năm (trống = không lọc)
+  const [farmMin, setFarmMin] = useState("");
+  const [farmUnit, setFarmUnit] = useState("M");
   const [page, setPage] = useState(1);
   const [categoriesById, setCategoriesById] = useState({});
   const [isCopyingUid, guardCopyUid] = useActionLock();
@@ -188,21 +192,23 @@ export function SelectAccountsModal({
   );
 
   const categoryOptions = useMemo(() => {
-    const ids = new Set(accounts.map((a) => (a.category_id == null ? "NONE" : String(a.category_id))));
+    const ids = new Set(usableAccounts.map((a) => (a.category_id == null ? "NONE" : String(a.category_id))));
     return [...ids].map((id) => ({
       id,
       name: id === "NONE" ? "Chưa gán" : categoriesById[id]?.name || `Danh mục #${id}`,
     }));
-  }, [accounts, categoriesById]);
+  }, [usableAccounts, categoriesById]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return accounts.filter((acc) => {
+    // Tài khoản Die / chưa đăng nhập không dùng quét được → ẩn khỏi danh sách
+    return usableAccounts.filter((acc) => {
       const cid = acc.category_id == null ? "NONE" : String(acc.category_id);
       if (category !== "ALL" && cid !== category) return false;
-      if (farmTime !== "ALL") {
+      const minFarm = Number(farmMin) || 0;
+      if (minFarm > 0) {
         const days = farmDays(acc);
-        if (days == null || days < (farmTime === "1Y" ? 365 : 180)) return false;
+        if (days == null || days < minFarm * FARM_UNIT_DAYS[farmUnit]) return false;
       }
       if (q) {
         const hay = `${acc.name || ""} ${acc.uid || ""} ${acc.proxy || ""} ${categoryName(acc)}`.toLowerCase();
@@ -210,7 +216,7 @@ export function SelectAccountsModal({
       }
       return true;
     });
-  }, [accounts, category, farmTime, search, categoryName]);
+  }, [usableAccounts, category, farmMin, farmUnit, search, categoryName]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -330,18 +336,36 @@ export function SelectAccountsModal({
               </option>
             ))}
           </select>
-          <select
-            value={farmTime}
-            onChange={(e) => {
-              setFarmTime(e.target.value);
-              setPage(1);
-            }}
-            className="h-10 min-w-[170px] rounded-xl border border-[#E2E8F0] bg-white px-3 text-xs font-medium text-[#334155] outline-none"
+          <label
+            title="Chỉ hiện tài khoản đã nuôi từ số ngày / tháng / năm này trở lên. Để trống: tất cả thời gian nuôi"
+            className="flex h-10 items-center gap-2 rounded-xl border border-[#E2E8F0] bg-white pl-3 pr-1 text-xs font-medium text-[#334155] focus-within:border-[#2563EB]"
           >
-            <option value="ALL">Tất cả thời gian nuôi</option>
-            <option value="6M">Trên 6 tháng</option>
-            <option value="1Y">Trên 1 năm</option>
-          </select>
+            <span className="whitespace-nowrap text-[#64748B]">Nuôi từ</span>
+            <input
+              inputMode="numeric"
+              value={farmMin}
+              placeholder="Tất cả"
+              aria-label="Thời gian nuôi tối thiểu"
+              onChange={(e) => {
+                setFarmMin(e.target.value.replace(/\D/g, "").slice(0, 4));
+                setPage(1);
+              }}
+              className="w-14 bg-transparent text-center font-semibold text-[#0F172A] outline-none placeholder:font-normal placeholder:text-[#94A3B8]"
+            />
+            <select
+              value={farmUnit}
+              aria-label="Đơn vị thời gian nuôi"
+              onChange={(e) => {
+                setFarmUnit(e.target.value);
+                setPage(1);
+              }}
+              className="h-8 rounded-lg bg-[#F1F5F9] px-2 text-xs font-medium text-[#334155] outline-none"
+            >
+              <option value="D">ngày</option>
+              <option value="M">tháng</option>
+              <option value="Y">năm</option>
+            </select>
+          </label>
         </div>
 
         <div ref={scrollRef} className="flex-1 overflow-auto border-t border-[#F1F5F9] custom-scrollbar">
@@ -499,7 +523,7 @@ export function SelectAccountsModal({
             {filtered.length} tài khoản
             {accounts.length > usableAccounts.length && (
               <span className="text-slate-400">
-                {" "}· Có {accounts.length - usableAccounts.length} tài khoản không khả dụng (chưa đăng nhập / Die)
+                {" "}· Đã ẩn {accounts.length - usableAccounts.length} tài khoản không khả dụng (chưa đăng nhập / Die)
               </span>
             )}
           </span>

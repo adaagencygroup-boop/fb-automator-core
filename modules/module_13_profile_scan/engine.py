@@ -57,9 +57,11 @@ class Run:
         self._order: List[str] = [str(a["uid"]) for a in accounts]
         self._by_uid = {str(a["uid"]): a for a in accounts}
         self._open: Dict[str, Optional[str]] = {}
+        self._local = threading.local()  # số luồng của worker đang chạy → gắn vào log
 
     def log(self, message: str, level: str = "info") -> None:
-        models.log(self.id, message, level)
+        # Log trong worker (kể cả log mở Chrome / proxy / đăng nhập) mang số luồng; log chung của phiên thì không
+        models.log(self.id, message, level, getattr(self._local, "number", None))
 
     # ---------- Kho tài khoản ----------
 
@@ -98,6 +100,7 @@ class Run:
             driver = open_browser(
                 uid=uid, owner=owner, proxy=acc.get("proxy"), scope="profile_scan", verify_egress=False,
                 allow_direct_fallback=True,
+                extra_init_scripts=[reader.KEEP_RENDERING_JS],  # thu nhỏ cửa sổ vẫn quét được
                 on_log=lambda level, message: self.log(message, "warn" if level == "warning" else level),
             )
             try:
@@ -214,16 +217,17 @@ class Run:
         self.log(f"[{uid}] Đã quét {data['name']} (UID {data['uid']}){phone}", "success")
 
     def _worker(self, number: int) -> None:
+        self._local.number = number
         uid: Optional[str] = None
         driver = lock = None
         used = 0
-        rotate = int(self.settings["rotate_every"])
+        rotate = int(self.settings.get("rotate_every") or 0)  # 0: giữ tài khoản tới hết phiên
         target: Optional[Dict[str, Any]] = None
         dead = False
         try:
             while not self._stopped():
                 # Đủ số profile → đổi sang tài khoản khác đang rảnh (không có thì dùng tiếp)
-                if driver is not None and used >= rotate:
+                if driver is not None and rotate and used >= rotate:
                     other = self.take_account()
                     used = 0
                     if other:

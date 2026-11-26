@@ -146,6 +146,8 @@ export default function TikTokDownloadView() {
   const restored = useRef(false);
   const configLoaded = useRef(false);
   const running = job.phase === "running" || job.phase === "stopping";
+  // Chưa quét lần nào thì ẩn bảng kết quả + log
+  const started = job.phase !== "idle" || job.videos.length > 0 || job.logs.length > 0;
 
   const { accounts, total, loading, loadingMore, loadError, moreError, hasMore, reload, loadMore } = useFarmAccounts();
   const usable = useMemo(() => accounts.filter(isEligible), [accounts]);
@@ -501,42 +503,46 @@ export default function TikTokDownloadView() {
         {job.phase === "stopping" ? "Đang dừng…" : running ? "Dừng quét và tải video" : "Bắt đầu quét và tải video TikTok"}
       </button>
 
-      <section className={cn(CARD, "overflow-hidden")}>
-        <div className="flex items-center gap-2.5 p-5">
-          <h2 className="font-heading text-base font-semibold text-[#0F172A]">Danh sách kết quả quét</h2>
-          <CountBadge>Đã tải: {job.done} / {job.total} video</CountBadge>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[1040px]">
-            <thead>
-              <tr>
-                {["STT", "Tài khoản Facebook", "Thư mục lưu", "Link video", "Nội dung caption & file TXT", "Trạng thái"].map((title) => (
-                  <th key={title} className={TH}>{title}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((video, index) => <VideoRow key={video.id} video={video} index={first + index} />)}
-              {!rows.length && (
-                <tr><td colSpan={6} className="py-10 text-center text-xs text-[#94A3B8]">{running ? "Đang tìm video…" : "Chưa có video nào được quét."}</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-        <div className="flex items-center justify-between border-t border-[#E2E8F0] px-5 py-3 text-xs text-[#64748B]">
-          <span>
-            Hiển thị <strong className="text-[#0F172A]">{rows.length ? first + 1 : 0} - {first + rows.length}</strong> của{" "}
-            <strong className="text-[#0F172A]">{job.total}</strong> video quét được
-          </span>
-          {totalPages > 1 && <Pager page={page} totalPages={totalPages} onChange={setPage} />}
-        </div>
-      </section>
+      {started && (
+        <>
+          <section className={cn(CARD, "overflow-hidden")}>
+            <div className="flex items-center gap-2.5 p-5">
+              <h2 className="font-heading text-base font-semibold text-[#0F172A]">Danh sách kết quả quét</h2>
+              <CountBadge>Đã tải: {job.done} / {job.total} video</CountBadge>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1040px]">
+                <thead>
+                  <tr>
+                    {["STT", "Tài khoản Facebook", "Thư mục lưu", "Link video", "Nội dung caption & file TXT", "Trạng thái"].map((title) => (
+                      <th key={title} className={TH}>{title}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((video, index) => <VideoRow key={video.id} video={video} index={first + index} />)}
+                  {!rows.length && (
+                    <tr><td colSpan={6} className="py-10 text-center text-xs text-[#94A3B8]">{running ? "Đang tìm video…" : "Chưa có video nào được quét."}</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex items-center justify-between border-t border-[#E2E8F0] px-5 py-3 text-xs text-[#64748B]">
+              <span>
+                Hiển thị <strong className="text-[#0F172A]">{rows.length ? first + 1 : 0} - {first + rows.length}</strong> của{" "}
+                <strong className="text-[#0F172A]">{job.total}</strong> video quét được
+              </span>
+              {totalPages > 1 && <Pager page={page} totalPages={totalPages} onChange={setPage} />}
+            </div>
+          </section>
 
-      <LiveLogConsole
-        title="Live Automation Log Console"
-        logs={job.logs}
-        phase={running ? "running" : job.phase}
-      />
+          <LiveLogConsole
+            title="Live Automation Log Console"
+            logs={job.logs}
+            phase={running ? "running" : job.phase}
+          />
+        </>
+      )}
     </div>
   );
 }

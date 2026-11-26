@@ -1,17 +1,17 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Download, ExternalLink, FileSpreadsheet, FolderInput, ListChecks, Loader2, MessageCircle, MoreVertical, Pencil, Plus, Search, Share2, ThumbsUp, Trash2, Users } from "lucide-react";
+import { Download, ExternalLink, FileSpreadsheet, ListChecks, Loader2, MessageCircle, MoreVertical, Pencil, Plus, Search, Share2, ThumbsUp, Trash2, Users } from "lucide-react";
 
 import CustomSelect from "@/components/ui/custom-select";
-import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/lib/toast";
 import { askConfirm } from "@/modules/module_11_page_scanner/shared/askConfirm";
 import * as service from "../service";
 import { SCALE_UNITS, SOURCE_TYPES, UNCATEGORIZED, fmtNum, shortFbUrl } from "../utils.mjs";
-import { exportProfiles, jobText } from "../shared/exportProfiles";
+import { exportMessage, exportProfiles, jobText } from "../shared/exportProfiles";
 import ProfileTable, { rowId } from "../scan-info/ProfileTable";
 import { CategoryFormModal, MoveProfilesModal } from "./CategoryModals";
+import { SelectionBar } from "@/modules/module_11_page_scanner/_listLayout";
 import { createDemoStore } from "./demoStore";
 
 const CARD = "rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.05)]";
@@ -38,6 +38,20 @@ const FRIEND_OPTIONS = [
   { value: "500", label: "500 – 999" },
   { value: "1000", label: "1.000 – 2.999" },
   { value: "3000", label: "Từ 3.000" },
+];
+const FOLLOWER_RANGES = {
+  ALL: null,
+  lt100: [0, 100],
+  "100": [100, 1000],
+  "1000": [1000, 10000],
+  "10000": [10000, Infinity],
+};
+const FOLLOWER_OPTIONS = [
+  { value: "ALL", label: "Số follower" },
+  { value: "lt100", label: "Dưới 100" },
+  { value: "100", label: "100 – 999" },
+  { value: "1000", label: "1.000 – 9.999" },
+  { value: "10000", label: "Từ 10.000" },
 ];
 const SELECT = "!h-[30px] !border-[#E2E8F0] !shadow-none";
 
@@ -143,6 +157,7 @@ export default function ProfileList() {
   const [search, setSearch] = useState("");
   const [phone, setPhone] = useState("ALL");
   const [friends, setFriends] = useState("ALL");
+  const [followers, setFollowers] = useState("ALL");
   const [menuKey, setMenuKey] = useState(null);
   const [form, setForm] = useState(null); // { category } — null khi đóng
   const [moving, setMoving] = useState(false);
@@ -196,15 +211,17 @@ export default function ProfileList() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const range = FRIEND_RANGES[friends];
+    const fRange = FOLLOWER_RANGES[followers];
     return rows.filter((r) => {
       if (phone !== "ALL" && Boolean(r.phone) !== (phone === "yes")) return false;
       if (range && !(r.friends != null && r.friends >= range[0] && r.friends < range[1])) return false;
+      if (fRange && !(r.followers != null && r.followers >= fRange[0] && r.followers < fRange[1])) return false;
       return !q || [r.name, r.uid, r.url, r.bio, r.hometown, r.location, r.education, jobText(r)].some((v) => String(v || "").toLowerCase().includes(q));
     });
-  }, [rows, search, phone, friends]);
+  }, [rows, search, phone, friends, followers]);
 
   // Chỉ thao tác trên dòng đang hiện sau bộ lọc, tránh xóa nhầm dòng bị ẩn
-  const picked = isCategory ? filtered.filter((r) => selected.has(rowId(r))) : [];
+  const picked = filtered.filter((r) => selected.has(rowId(r)));
   const categories = collections.filter((c) => c.type === "category");
   const refresh = useCallback(() => setReload((n) => n + 1), []);
 
@@ -249,7 +266,8 @@ export default function ProfileList() {
 
   const move = async (toKey) => {
     await api.moveProfiles(currentKey, toKey, picked.map((r) => r.uid));
-    toast.success(`Đã chuyển ${fmtNum(picked.length)} profile.`);
+    // Nguồn quét giữ nguyên profile, chỉ thêm vào danh mục đích
+    toast.success(isCategory ? `Đã chuyển ${fmtNum(picked.length)} profile.` : `Đã thêm ${fmtNum(picked.length)} profile vào danh mục.`);
     setSelected(new Set());
     refresh();
   };
@@ -257,7 +275,7 @@ export default function ProfileList() {
   const removeProfiles = async () => {
     const ok = await askConfirm({
       title: "Xóa profile",
-      description: `Xóa ${fmtNum(picked.length)} profile khỏi "${current.name}"? Thao tác này không thể hoàn tác.`,
+      description: `Xóa ${fmtNum(picked.length)} profile khỏi "${current.name}"? Profile không còn thuộc nguồn/danh mục nào sẽ bị xóa hẳn dữ liệu. Thao tác này không thể hoàn tác.`,
       confirmText: "Xóa",
       cancelText: "Hủy",
     });
@@ -281,8 +299,8 @@ export default function ProfileList() {
         return;
       }
       const names = new Map(collections.map((c) => [c.key, c.name]));
-      await exportProfiles(list, fileName, (r) => names.get(r.sourceKey) || "");
-      toast.success(`Đã xuất ${fmtNum(list.length)} profile.`);
+      const msg = exportMessage(await exportProfiles(list, fileName, (r) => names.get(r.sourceKey) || ""), list.length);
+      toast[msg.type](msg.text);
     } catch (err) {
       toast.error(`Không xuất được: ${err.message}`);
     } finally {
@@ -291,6 +309,7 @@ export default function ProfileList() {
   };
   const exportAll = () => runExport(async () => (await Promise.all(collections.map((c) => api.getCollectionProfiles(c.key)))).flat(), "danh_sach_profile");
   const exportCurrent = () => runExport(async () => (picked.length ? picked : filtered), "profile_theo_danh_muc");
+  const exportPicked = () => runExport(async () => picked, "profile_da_chon");
 
   return (
     <div className="-m-6 min-h-full space-y-5 bg-[#F8FAFC] p-6">
@@ -355,20 +374,13 @@ export default function ProfileList() {
                   </div>
                   <CustomSelect className="w-[124px]" buttonClassName={SELECT} value={phone} onChange={setPhone} options={PHONE_OPTIONS} />
                   <CustomSelect className="w-[130px]" buttonClassName={SELECT} value={friends} onChange={setFriends} options={FRIEND_OPTIONS} />
+                  <CustomSelect className="w-[136px]" buttonClassName={SELECT} value={followers} onChange={setFollowers} options={FOLLOWER_OPTIONS} />
                 </div>
-                {picked.length > 0 && (
-                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-3 py-2">
-                    <span className="flex items-center gap-2 text-xs font-semibold text-[#1D4ED8]"><Checkbox aria-label="Bỏ chọn tất cả" checked onCheckedChange={() => setSelected(new Set())} /> Đã chọn {fmtNum(picked.length)} / {fmtNum(filtered.length)} profile</span>
-                    <span className="flex gap-2">
-                      <button type="button" onClick={() => setMoving(true)} className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[#E2E8F0] bg-white px-3 text-xs text-[#334155] hover:bg-slate-50"><FolderInput className="size-3.5" /> Chuyển mục</button>
-                      <button type="button" onClick={removeProfiles} className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[#FECACA] bg-[#FEF2F2] px-3 text-xs text-[#DC2626] hover:bg-red-100"><Trash2 className="size-3.5" /> Xóa</button>
-                    </span>
-                  </div>
-                )}
+                <SelectionBar count={picked.length} onMoveCategory={() => setMoving(true)} onExport={exportPicked} onDelete={removeProfiles} exportDisabled={exporting} />
                 {rowsLoading ? (
                   <div className={`${CARD} py-16`}><Loader2 className="mx-auto size-5 animate-spin text-[#1877F2]" /></div>
                 ) : (
-                  <ProfileTable key={`${currentKey}|${search}|${phone}|${friends}`} rows={filtered} selected={selected} onSelect={isCategory ? setSelected : null} emptyText={rows.length ? "Không có profile phù hợp bộ lọc." : "Chưa có profile trong mục này."} />
+                  <ProfileTable key={`${currentKey}|${search}|${phone}|${friends}|${followers}`} rows={filtered} selected={selected} onSelect={setSelected} emptyText={rows.length ? "Không có profile phù hợp bộ lọc." : "Chưa có profile trong mục này."} />
                 )}
               </>
             )}
