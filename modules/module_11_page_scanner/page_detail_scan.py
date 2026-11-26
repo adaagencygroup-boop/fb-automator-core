@@ -1552,6 +1552,31 @@ def _existing_page_keys(owner_key: str, page_keys: List[str]) -> set:
         return set()
 
 
+def _format_detail_reason_vi(reason: Optional[str]) -> str:
+    raw = str(reason or "").strip().lower()
+    if raw == "unavailable":
+        return "trang không tồn tại hoặc bị hạn chế quyền xem"
+    if raw == "checkpoint":
+        return "tài khoản gặp yêu cầu xác minh (checkpoint)"
+    if raw == "logged_out":
+        return "tài khoản bị đăng xuất khỏi Facebook"
+    if raw.startswith("header_error"):
+        return "không tải được nội dung trang (lỗi kết nối hoặc giao diện)"
+    return "không đọc được thông tin trang"
+
+
+def _format_detail_stop_reason_vi(reason: Optional[str]) -> str:
+    return {
+        "TARGET_REACHED": "đạt đủ mục tiêu",
+        "COMPLETED": "hoàn thành",
+        "NO_NEW_RESULTS": "không có trang nào lưu được",
+        "USER_STOPPED": "đã dừng theo yêu cầu",
+        "CHECKPOINT": "dừng do mất đăng nhập / checkpoint",
+        "TIMEOUT": "đạt giới hạn quét trong ngày",
+        "ERROR": "gặp lỗi hệ thống",
+    }.get(str(reason or "").upper(), "hoàn tất")
+
+
 def run_page_detail_flow(
     pages: List[Dict[str, Any]],
     owner_key: str,
@@ -1616,10 +1641,10 @@ def run_page_detail_flow(
                 raise
 
         log(
-            f"DETAIL · {len(pages)} page · mục tiêu {target} · acc {rotation.uid} ({len(rotation.accounts)} acc)"
-            f"{f' · followers ≥ {min_followers}' if min_followers else ''}"
-            f"{f' · đổi acc sau {rotate_every} page' if rotate_every and rotation.can_rotate else ''}",
-            "warn",
+            f"Bắt đầu quét {len(pages)} Page (mục tiêu {target}) · tài khoản {rotation.uid}"
+            f"{f' · tối thiểu {min_followers:,} người theo dõi' if min_followers else ''}"
+            f"{f' · đổi tài khoản sau {rotate_every} Page' if rotate_every and rotation.can_rotate else ''}",
+            "info",
         )
         left = quota_left()
 
@@ -1631,16 +1656,16 @@ def run_page_detail_flow(
                 stop_reason = "TARGET_REACHED"
                 break
             if left <= 0:
-                if rotation.rotate(f"hết quota {max_pages_per_acc} page/ngày"):
+                if rotation.rotate(f"đạt giới hạn {max_pages_per_acc} Page/ngày"):
                     driver = rotation.driver
                     left = quota_left()
                 if left <= 0:
-                    log(f"Tài khoản đã đạt {max_pages_per_acc} page hôm nay — dừng", "warn")
+                    log(f"Tài khoản đã đạt giới hạn {max_pages_per_acc} Page hôm nay — dừng phiên.", "warn")
                     stop_reason = "TIMEOUT"
                     break
 
             page_key, page_url = page["page_key"], page["page_url"]
-            log(f"[{idx + 1}/{len(pages)}] Mở {page_url} · acc {rotation.uid}")
+            log(f"[{idx + 1}/{len(pages)}] Đang quét {page_url}")
 
             detail: Dict[str, Any] = {}
             relogged = False
@@ -1652,12 +1677,14 @@ def run_page_detail_flow(
                 if reason == "logged_out" and not relogged:
                     # Phiên hết hạn giữa chừng → đăng nhập lại 1 lần trên acc hiện tại rồi mở lại Page
                     relogged = True
-                    log(f"Tài khoản {rotation.uid} bị đăng xuất — đăng nhập lại", "warn")
+                    log(f"Tài khoản {rotation.uid} bị đăng xuất — đang thử đăng nhập lại.", "warn")
                     if rotation.relogin():
                         continue
-                log(f"{page_key}: {'mất đăng nhập' if reason == 'logged_out' else 'checkpoint/login'}"
-                    f" trên acc {rotation.uid}", "error")
-                if not (rotate_on_checkpoint and rotation.rotate("checkpoint/đăng xuất", mark_dead=True)):
+                log(
+                    f"Lỗi trên tài khoản {rotation.uid} khi mở {page_url}: {_format_detail_reason_vi(reason)}.",
+                    "error",
+                )
+                if not (rotate_on_checkpoint and rotation.rotate("mất đăng nhập / checkpoint", mark_dead=True)):
                     break
                 driver = rotation.driver
                 left = quota_left()
@@ -1677,7 +1704,11 @@ def run_page_detail_flow(
 
             if not detail.get("ok"):
                 failed += 1
-                log(f"{page_key}: không đọc được Page ({detail.get('reason')})", "warn")
+                logger.debug(f"[DETAIL] {page_key} failed raw reason={detail.get('reason')!r}")
+                log(
+                    f"Không đọc được {page_url}: {_format_detail_reason_vi(detail.get('reason'))}.",
+                    "warn",
+                )
                 save_page_detail(
                     owner_key, session_id, page_key, page_url, {}, "FAILED",
                     source_type, rotation.uid, idx + 1,
@@ -1687,8 +1718,8 @@ def run_page_detail_flow(
                 # Chỉ page MỚI mới bị bỏ qua khi dưới ngưỡng; page đã có trong DB vẫn quét tiếp để cập nhật dữ liệu
                 skipped += 1
                 log(
-                    f"{detail.get('page_name') or page_key}: {detail['follower_count']} followers"
-                    f" < {min_followers} — bỏ qua",
+                    f"Bỏ qua «{detail.get('page_name') or page_url}»: chỉ có {detail['follower_count']:,} người theo dõi"
+                    f" (dưới mức tối thiểu {min_followers:,}).",
                     "info",
                 )
             else:
@@ -1710,28 +1741,29 @@ def run_page_detail_flow(
                     page_key, header_raw_text, contacts.get("_raw") or [], detail
                 )
                 if dump_path:
-                    log(f"Text thô đã đọc: {dump_path}", "info")
+                    logger.debug(f"[DETAIL] Text thô đã đọc: {dump_path}")
                 save_page_detail(
                     owner_key, session_id, page_key, page_url, detail, "SCANNED",
                     source_type, rotation.uid, idx + 1,
                 )
                 saved += 1
                 found = [
-                    f"{label} {detail[k]}" for k, label in
-                    (("phone", "SĐT"), ("email", "Email"), ("website", "Web")) if detail.get(k)
+                    f"{label}: {detail[k]}" for k, label in
+                    (("phone", "SĐT"), ("email", "Email"), ("website", "Website")) if detail.get(k)
                 ]
+                fl_display = detail.get("follower_text") or "chưa rõ lượt theo dõi"
                 log(
-                    f"{'Cập nhật page đã có trong DB' if page_key in existing_keys else 'Quét xong'}"
-                    f" {detail.get('page_name') or page_key}"
-                    f" · FL {detail.get('follower_text') or '—'}"
-                    f" · {' · '.join(found) if found else 'không có thông tin liên hệ công khai'}",
+                    f"{'Đã cập nhật' if page_key in existing_keys else 'Quét xong'}"
+                    f" «{detail.get('page_name') or page_url}»"
+                    f" · {fl_display}"
+                    f" · {' · '.join(found) if found else 'không có thông tin liên hệ công khai'}.",
                     "success",
                 )
             _update_progress(session_id, processed, saved)
 
             has_next = idx < len(pages) - 1 and saved < target
             if has_next and rotate_every and rotation.can_rotate and rotation.count >= rotate_every:
-                rotation.rotate(f"đủ {rotation.count} page / tài khoản")
+                rotation.rotate(f"đủ {rotation.count} Page / tài khoản")
                 if rotation.driver is None:
                     stop_reason, error_message = "ERROR", "Không mở lại được trình duyệt sau khi đổi tài khoản"
                     break
@@ -1739,7 +1771,7 @@ def run_page_detail_flow(
                 left = quota_left()
             if has_next:
                 delay = pick_page_delay(page_delay_min_s, page_delay_max_s, page_delay_s)
-                log(f"Nghỉ {delay:.0f}s trước page tiếp theo")
+                log(f"Chờ {delay:.0f} giây trước khi quét Page tiếp theo…")
                 if sleep_page_delay(delay, stop_event):
                     stop_reason = "USER_STOPPED"
                     break
@@ -1751,7 +1783,7 @@ def run_page_detail_flow(
         elif stop_reason != "CHECKPOINT":
             logger.exception(f"[DETAIL] #{session_id}: {exc}")
             stop_reason, error_message = "ERROR", str(exc)[:500]
-            log(f"Lỗi: {error_message}", "error")
+            log(f"Phiên gặp lỗi: {error_message}", "error")
     finally:
         # Nhả trước khi ghi DB để DB lỗi không làm kẹt khóa profile
         rotation.release(stop_reason, keep_browser)
@@ -1767,8 +1799,8 @@ def run_page_detail_flow(
                 processed, int(time.time() - start), error_message,
             )
             log(
-                f"Kết thúc DETAIL · {final_status}/{stop_reason} · lưu {saved}"
-                f" · bỏ qua {skipped} · lỗi {failed}",
+                f"Kết thúc phiên ({_format_detail_stop_reason_vi(stop_reason)}):"
+                f" đã lưu {saved} Page · bỏ qua {skipped} · lỗi {failed}.",
                 "success" if final_status == "COMPLETED" else "warn",
             )
         finally:

@@ -36,9 +36,8 @@ export function formatLogsForCopy(logs = []) {
   return logs
     .map((log) => {
       const ts = log.timestamp || log.ts || log.time || "";
-      const thread = log.thread != null && log.thread !== "" ? ` [${log.thread}]` : "";
       const msg = log.message || log.text || "";
-      return ts ? `[${ts}]${thread} ${msg}` : `${thread} ${msg}`.trim();
+      return ts ? `[${ts}] ${msg}` : msg.trim();
     })
     .join("\n");
 }
@@ -71,17 +70,24 @@ function isNearBottom(el) {
  * Smart auto-scroll: mặc định tự cuộn tới dòng mới nhất; khi người dùng kéo lên đọc log cũ
  * sẽ tạm dừng auto-scroll và hiện nút "Mới nhất" để nhảy về cuối.
  */
-export function LiveLogConsole({ title, task, thread = "Thread-01", logs, phase }) {
+export function LiveLogConsole({ title, task, logs, phase }) {
   const list = Array.isArray(logs) ? logs : [];
   const lastLogId = list.length ? list[list.length - 1]?.id ?? list[list.length - 1]?.message : null;
-  const label = phase === "paused" ? "PAUSED" : phase === "running" ? "RUNNING" : phase === "done" ? "DONE" : "IDLE";
+  const label =
+    phase === "paused"
+      ? "TẠM DỪNG"
+      : phase === "running"
+        ? "ĐANG CHẠY"
+        : phase === "done"
+          ? "HOÀN TẤT"
+          : "CHỜ CHẠY";
   const color =
     phase === "paused"
       ? "border-amber-500/30 bg-amber-500/10 text-amber-400"
       : phase === "running"
         ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
         : "border-slate-500/30 bg-slate-500/10 text-slate-400";
-  const heading = title || `Live Automation Log Console [${thread}${task ? ` - ${task}` : ""}]`;
+  const heading = title || (task ? `Nhật ký quét — ${task}` : "Nhật ký quét");
 
   const [isCopying, guardCopy] = useActionLock();
   const handleCopy = useCallback(() => guardCopy(() => copyLogsToClipboard(list)), [guardCopy, list]);
@@ -159,12 +165,11 @@ export function LiveLogConsole({ title, task, thread = "Thread-01", logs, phase 
           className="max-h-64 space-y-2 overflow-y-auto px-4 py-4 font-mono text-[11px] leading-relaxed"
         >
           {list.length === 0 ? (
-            <p className="text-slate-500">Chờ log phiên…</p>
+            <p className="text-slate-500">Chờ tiến trình quét…</p>
           ) : (
             list.map((log) => (
               <div key={log.id} className="flex items-start gap-2 text-slate-300">
                 <span className="shrink-0 text-slate-500">[{log.timestamp}]</span>
-                <span className="shrink-0 text-[#60A5FA]">[{log.thread || thread}]</span>
                 <span
                   className={
                     log.type === "success"

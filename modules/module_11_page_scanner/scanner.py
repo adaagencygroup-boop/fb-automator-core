@@ -960,13 +960,10 @@ def run_page_search_flow(
             return {"session_id": session_id, "count": 0, "pages": [], "stop_reason": stop_reason}
 
         if created_new_driver:
-            append_session_log(
-                session_id,
-                f"Khởi chạy Chrome Profile {target_uid} · proxy={proxy or 'direct'}",
-                "warn",
-            )
+            logger.debug(f"[Scanner] Khởi chạy Chrome Profile {target_uid} · proxy={proxy or 'direct'}")
+            append_session_log(session_id, f"Đã mở trình duyệt bằng tài khoản {target_uid}.", "info")
         else:
-            append_session_log(session_id, f"Tái sử dụng Chrome profile {target_uid}", "info")
+            logger.debug(f"[Scanner] Tái sử dụng Chrome profile {target_uid}")
 
         # 4. Điều hướng tới Facebook Search Pages
         encoded_kw = quote_plus(clean_keyword)
@@ -975,7 +972,7 @@ def run_page_search_flow(
         time.sleep(3)
         append_session_log(
             session_id,
-            f"Từ khóa mục tiêu: {clean_keyword} · giới hạn {max_results} page",
+            f"Bắt đầu quét từ khóa «{clean_keyword}» (mục tiêu {max_results} Page).",
             "info",
         )
 
@@ -1026,9 +1023,12 @@ def run_page_search_flow(
             if new_cards:
                 save_batch_pages(session_id, owner_key, batch_no, new_cards, target_uid, "SEARCH")
                 for c in new_cards[:3]:
+                    fl_disp = c.get("follower_text") or (
+                        f"{int(c['follower_count']):,} người theo dõi" if c.get("follower_count") else "chưa rõ lượt theo dõi"
+                    )
                     append_session_log(
                         session_id,
-                        f"Quét thành công [{c.get('page_name')}] FL={c.get('follower_count') or c.get('follower_text') or '?'}",
+                        f"Đã lưu Page «{c.get('page_name')}» · {fl_disp}.",
                         "success",
                     )
 
@@ -1094,16 +1094,10 @@ def run_page_search_flow(
             # 2 batch liên tiếp scroll không hiệu lực → cuộn container kết quả
             if stagnant_scroll_streak >= 2 and not use_container_scroll:
                 use_container_scroll = True
-                append_session_log(
-                    session_id,
-                    "Scroll window đứng yên — chuyển cuộn container kết quả",
-                    "warn",
-                )
+                logger.debug(f"[Scanner] #{session_id} Scroll window đứng yên — chuyển cuộn container kết quả")
 
-            append_session_log(
-                session_id,
-                f"Batch {batch_no}: DOM={len(keys_batch)} mới={new_keys_count} unique={len(kho)} scrollY={scroll_y_after}",
-                "info",
+            logger.debug(
+                f"[Scanner] #{session_id} Batch {batch_no}: DOM={len(keys_batch)} mới={new_keys_count} unique={len(kho)} scrollY={scroll_y_after}"
             )
 
     except (Exception, ScanStopped) as exc:
@@ -1442,12 +1436,12 @@ def navigate_hashtag_via_search_box(
     query = f"#{tag}"
 
     if reset_home:
-        append_session_log(session_id, f"Về trang chủ rồi gõ ô Search «{query}»", "info")
+        logger.debug(f"[Scanner] #{session_id} Về trang chủ rồi gõ ô Search «{query}»")
         try:
             driver.get("https://www.facebook.com/")
             human_sleep(2.0, 3.0)
         except Exception as exc:
-            append_session_log(session_id, f"Không về được trang chủ: {exc}", "warn")
+            logger.debug(f"[Scanner] #{session_id} Không về được trang chủ: {exc}")
 
     typed = False
     try:
@@ -1460,15 +1454,15 @@ def navigate_hashtag_via_search_box(
             pass
         human_type(search_el, query)
         human_sleep(0.3, 0.6)
-        append_session_log(session_id, f"Đã gõ «{query}» vào ô Search — Enter", "success")
+        logger.debug(f"[Scanner] #{session_id} Đã gõ «{query}» vào ô Search — Enter")
         search_el.send_keys(Keys.ENTER)
         human_sleep(2.5, 3.5)
         typed = True
     except Exception as exc:
-        append_session_log(session_id, f"Không gõ được ô Search («{query}»): {exc}", "warn")
+        logger.debug(f"[Scanner] #{session_id} Không gõ được ô Search («{query}»): {exc}")
 
     if typed:
-        append_session_log(session_id, f"«{query}» — click tab Posts / Bài viết", "info")
+        logger.debug(f"[Scanner] #{session_id} «{query}» — click tab Posts / Bài viết")
         clicked = _click_posts_search_tab(driver, wait_and_find, human_sleep)
         if clicked:
             try:
@@ -1478,19 +1472,19 @@ def navigate_hashtag_via_search_box(
                     human_sleep(2.0, 3.0)
             except Exception:
                 pass
-            append_session_log(session_id, f"Đã vào kết quả Posts qua ô Search «{query}»", "success")
+            logger.debug(f"[Scanner] #{session_id} Đã vào kết quả Posts qua ô Search «{query}»")
             return "search_box"
 
         # Đã gõ nhưng không click được tab → URL search posts
         posts_url = f"https://www.facebook.com/search/posts/?q={quote_plus(query)}"
-        append_session_log(session_id, f"Không click được Posts — mở {posts_url}", "warn")
+        logger.debug(f"[Scanner] #{session_id} Không click được Posts — mở {posts_url}")
         driver.get(posts_url)
         human_sleep(2.5, 3.5)
         return "search_posts"
 
     # Không gõ được ô search → fallback URL
     posts_url = f"https://www.facebook.com/search/posts/?q={quote_plus(query)}"
-    append_session_log(session_id, f"Fallback search posts: {posts_url}", "warn")
+    logger.debug(f"[Scanner] #{session_id} Fallback search posts: {posts_url}")
     try:
         driver.get(posts_url)
         human_sleep(2.5, 3.5)
@@ -1500,7 +1494,7 @@ def navigate_hashtag_via_search_box(
         pass
 
     hashtag_url = f"https://www.facebook.com/hashtag/{quote_plus(tag)}"
-    append_session_log(session_id, f"Fallback cuối /hashtag/: {hashtag_url}", "warn")
+    logger.debug(f"[Scanner] #{session_id} Fallback cuối /hashtag/: {hashtag_url}")
     driver.get(hashtag_url)
     human_sleep(2.5, 3.5)
     return "hashtag_url"
@@ -3883,16 +3877,16 @@ def run_hashtag_search_flow(
         rotation.require_login = True
         can_rotate = bool(rotate_every and rotation.can_rotate)
 
+        tags_label = ", ".join(f"#{t}" for t in clean_tags)
         append_session_log(
             session_id,
             (
-                f"Hashtag · tags={clean_tags} · giới hạn an toàn={max_posts} bài/tag"
-                f" · min_fl>{min_followers} · target_pages={target_pages or '∞'}"
-                f" · idle={idle_timeout_s}s"
-                f"{f' · đổi acc sau {rotate_every} page (đang {rotation.count})' if can_rotate else ''}"
-                f" · {'mới' if created_new_driver else 'tái sử dụng'} Chrome {target_uid}"
+                f"Bắt đầu quét {tags_label}"
+                f"{f' (mục tiêu {target_pages} Page)' if target_pages else ''}"
+                f"{f' · tối thiểu {min_followers:,} người theo dõi' if min_followers else ''}"
+                f" · tài khoản {target_uid}."
             ),
-            "warn",
+            "info",
         )
 
         # 4. Quét từng hashtag
@@ -3910,7 +3904,7 @@ def run_hashtag_search_flow(
                 stop_reason = "NO_NEW_RESULTS"
                 append_session_log(
                     session_id,
-                    f"Idle {idle_timeout_s:.0f}s không có Page mới đạt lọc — dừng phiên",
+                    f"Quá {idle_timeout_s:.0f} giây không tìm thêm được Page mới phù hợp — dừng phiên.",
                     "warn",
                 )
                 break
@@ -3922,9 +3916,10 @@ def run_hashtag_search_flow(
                 session_id,
                 reset_home=True,
             )
+            logger.debug(f"[Scanner] #{session_id} #{current_tag} nav_channel={nav_channel}")
             append_session_log(
                 session_id,
-                f"#{current_tag} sẵn sàng quét (kênh={nav_channel})",
+                f"Đang tìm Page từ bài viết chứa #{current_tag}…",
                 "info",
             )
 
@@ -3962,7 +3957,7 @@ def run_hashtag_search_flow(
                     stop_reason = "NO_NEW_RESULTS"
                     append_session_log(
                         session_id,
-                        f"Idle {idle_timeout_s:.0f}s không có Page mới đạt lọc — dừng phiên",
+                        f"Quá {idle_timeout_s:.0f} giây không tìm thêm được Page mới phù hợp — dừng phiên.",
                         "warn",
                     )
                     break
@@ -3982,8 +3977,8 @@ def run_hashtag_search_flow(
                     append_session_log(
                         session_id,
                         (
-                            f"#{current_tag}: dừng do giới hạn an toàn {max_posts} bài/tag"
-                            f" (đạt {len(page_kho)}/{target_pages or '∞'} page)"
+                            f"Đã duyệt tới giới hạn an toàn {max_posts} bài cho #{current_tag}"
+                            f" (tìm được {len(page_kho)} Page)."
                         ),
                         "warn",
                     )
@@ -4026,12 +4021,12 @@ def run_hashtag_search_flow(
                     no_new_streak += 1
                     if no_new_streak >= NO_NEW_LIMIT:
                         stop_reason = "CYCLE_DETECTED" if seen_before else "NO_NEW_RESULTS"
+                        logger.debug(
+                            f"[Scanner] #{session_id} #{current_tag}: {stop_reason} sau {NO_NEW_LIMIT} batch (extract={len(posts)})"
+                        )
                         append_session_log(
                             session_id,
-                            (
-                                f"#{current_tag}: {stop_reason} sau {NO_NEW_LIMIT} batch"
-                                f" (extract={len(posts)}, chưa mở thêm tab)"
-                            ),
+                            f"Đã hết bài viết mới cho #{current_tag} — kết thúc tìm kiếm.",
                             "info",
                         )
                         break
@@ -4041,14 +4036,10 @@ def run_hashtag_search_flow(
                 batch_verified_pages: List[Dict[str, Any]] = []
                 batch_skip_nomatch = 0
 
-                append_session_log(
-                    session_id,
-                    (
-                        f"#{current_tag} batch#{batch_no}: extract={len(posts)}"
-                        f" · mới={new_posts_count}"
-                        f" · match={sum(1 for x in new_posts if x.get('exact_match'))}"
-                    ),
-                    "info",
+                logger.debug(
+                    f"[Scanner] #{session_id} #{current_tag} batch#{batch_no}: extract={len(posts)}"
+                    f" · mới={new_posts_count}"
+                    f" · match={sum(1 for x in new_posts if x.get('exact_match'))}"
                 )
 
                 # Dedupe verify trong cùng batch (kể cả soft-fail)
@@ -4072,10 +4063,7 @@ def run_hashtag_search_flow(
                         stop_reason = "NO_NEW_RESULTS"
                         append_session_log(
                             session_id,
-                            (
-                                f"Idle {idle_timeout_s:.0f}s không có Page mới đạt lọc"
-                                f" — dừng trong batch (không verify tiếp)"
-                            ),
+                            f"Quá {idle_timeout_s:.0f} giây không tìm thêm được Page mới phù hợp — dừng phiên.",
                             "warn",
                         )
                         break
@@ -4105,25 +4093,14 @@ def run_hashtag_search_flow(
 
                     # Chặn trước khi mở tab: media / l.php / ngoài FB / tên là URL
                     if author_name_looks_like_url(author_name):
-                        append_session_log(
-                            session_id,
-                            (
-                                f"skipped_non_author urlish_name: {author_name}"
-                                f" · raw={author_url!r} · không mở tab"
-                            ),
-                            "info",
+                        logger.debug(
+                            f"[Scanner] #{session_id} skipped_non_author urlish_name: {author_name} raw={author_url!r}"
                         )
                         continue
                     ok_author, _aq, skip_reason = is_valid_author_candidate_url(author_url)
                     if not ok_author:
-                        append_session_log(
-                            session_id,
-                            (
-                                f"skipped_non_author {skip_reason}: {author_name}"
-                                f" · raw={author_url!r} · cleaned={cleaned_author!r}"
-                                f" · không mở tab"
-                            ),
-                            "info",
+                        logger.debug(
+                            f"[Scanner] #{session_id} skipped_non_author {skip_reason}: {author_name} raw={author_url!r}"
                         )
                         continue
 
@@ -4162,14 +4139,7 @@ def run_hashtag_search_flow(
 
                     # Dedupe trong batch: đã thử (kể cả soft-fail) → không verify lại
                     if cleaned_author in batch_verify_attempted:
-                        append_session_log(
-                            session_id,
-                            (
-                                f"Verify skipped (batch attempted): {author_name}"
-                                f" · cleaned={cleaned_author!r}"
-                            ),
-                            "info",
-                        )
+                        logger.debug(f"[Scanner] #{session_id} Verify skipped (batch attempted): {author_name}")
                         continue
 
                     # Cache hit — chỉ PAGE / PROFILE cứng (không cache soft-fail)
@@ -4177,14 +4147,8 @@ def run_hashtag_search_flow(
                         author_verify_cache, cleaned_author
                     )
                     if cached is not None:
-                        append_session_log(
-                            session_id,
-                            (
-                                f"Verify cache hit: {author_name}"
-                                f" · key={author_verify_cache_key(author_url) or cleaned_author!r}"
-                                f" · reason={cached.get('reason') or cached.get('classify_reason')!r}"
-                            ),
-                            "info",
+                        logger.debug(
+                            f"[Scanner] #{session_id} Verify cache hit: {author_name} key={author_verify_cache_key(author_url) or cleaned_author!r}"
                         )
                         verified = dict(cached)
                         verified["_cache_hit"] = True
@@ -4202,10 +4166,8 @@ def run_hashtag_search_flow(
                             "verify_status": "PENDING",
                         }
 
-                        append_session_log(
-                            session_id,
-                            f"Verify mở tab: {author_name} · raw={author_url!r} · cleaned={cleaned_author!r}",
-                            "info",
+                        logger.debug(
+                            f"[Scanner] #{session_id} Verify mở tab: {author_name} · raw={author_url!r} · cleaned={cleaned_author!r}"
                         )
 
                         batch_verify_attempted.add(cleaned_author)
@@ -4224,11 +4186,7 @@ def run_hashtag_search_flow(
                             and verified.get("reason") == "tab_switch_failed"
                             and not stop_event.is_set()
                         ):
-                            append_session_log(
-                                session_id,
-                                f"Retry verify (tab_switch_failed): {author_name}",
-                                "warn",
-                            )
+                            logger.debug(f"[Scanner] #{session_id} Retry verify (tab_switch_failed): {author_name}")
                             verified = verify_and_extract_page_in_new_tab(
                                 driver,
                                 cleaned_author,
@@ -4259,16 +4217,13 @@ def run_hashtag_search_flow(
                         rejected_author_urls.add(cleaned_author)
                         candidates[cand_key]["verify_status"] = "REJECTED"
                         fdbg = verified.get("friend_button_debug") or {}
+                        logger.debug(
+                            f"[Scanner] #{session_id} PROFILE reject: {author_name}"
+                            f" reason={verified.get('reason')!r} friend_zone={fdbg.get('zone')!r}"
+                        )
                         append_session_log(
                             session_id,
-                            (
-                                f"Phân loại PROFILE — reject: {author_name}"
-                                f" · reason={verified.get('reason')!r}"
-                                f" · friend_zone={fdbg.get('zone')!r}"
-                                f" · friend_signal_source={fdbg.get('source')!r}"
-                                f" · buttons={verified.get('header_buttons')!r}"
-                                f" · header={verified.get('header_text')!r}"
-                            ),
+                            f"Bỏ qua «{author_name or cleaned_author}»: là trang cá nhân, không phải Fanpage.",
                             "info",
                         )
                         continue
@@ -4276,24 +4231,22 @@ def run_hashtag_search_flow(
                     if not verified or verified.get("_soft_fail") or not verified.get("page_key"):
                         candidates[cand_key]["verify_status"] = "PENDING"
                         soft = verified or {}
+                        soft_reason = str(soft.get("reason") or "empty")
+                        logger.debug(
+                            f"[Scanner] #{session_id} Soft-fail {soft_reason}: {author_name}"
+                            f" detail={soft.get('detail') or soft.get('classify_reason')!r}"
+                            f" header_valid={soft.get('header_valid')!r} current_url={soft.get('current_url')!r}"
+                        )
+                        reason_vi = {
+                            "tab_closed_by_user_or_error": "tab kiểm tra bị đóng giữa chừng",
+                            "tab_switch_failed": "không mở được tab mới để kiểm tra",
+                            "timeout": "tải trang quá chậm (hết thời gian chờ)",
+                            "load": "không đọc được đủ thông tin đầu trang",
+                            "wrong_url": "liên kết không phải trang Fanpage",
+                        }.get(soft_reason, "không tải được nội dung trang")
                         append_session_log(
                             session_id,
-                            (
-                                f"Soft-fail {soft.get('reason') or 'empty'}:"
-                                f" {author_name}"
-                                f" · detail={soft.get('detail') or soft.get('classify_reason')!r}"
-                                f" · header_valid={soft.get('header_valid')!r}"
-                                f" · header_invalid_reason={soft.get('header_invalid_reason') or soft.get('detail')!r}"
-                                f" · header_container_selector={soft.get('header_container_selector')!r}"
-                                f" · header={soft.get('header_text')!r}"
-                                f" · buttons={soft.get('header_buttons')!r}"
-                                f" · follower={soft.get('follower_text')!r}"
-                                f" · readyState={soft.get('readyState')!r}"
-                                f" · spinner={soft.get('spinner')!r}"
-                                f" · all_h1s={soft.get('all_h1s_log') or soft.get('all_h1s')!r}"
-                                f" · current_url={soft.get('current_url')!r}"
-                                f" · không reject · không cache"
-                            ),
+                            f"Không đọc được «{author_name or cleaned_author}»: {reason_vi}.",
                             "warn",
                         )
                         candidates.pop(cand_key, None)
@@ -4309,56 +4262,30 @@ def run_hashtag_search_flow(
                                     feed_gone = True
                             if feed_gone:
                                 stop_reason = "USER_STOPPED"
-                                error_message = "Tab feed/browser đã đóng — dừng phiên (USER_STOPPED)"
+                                error_message = "Trình duyệt đã bị đóng trong lúc quét"
                                 append_session_log(
                                     session_id,
-                                    "Tab feed không còn — dừng phiên USER_STOPPED (không ERROR)",
+                                    "Cửa sổ trình duyệt đã đóng — dừng phiên quét.",
                                     "warn",
                                 )
                                 break
-                            append_session_log(
-                                session_id,
-                                "Tab verify đóng — tiếp tục tác giả tiếp theo (feed còn sống)",
-                                "info",
-                            )
+                            logger.debug(f"[Scanner] #{session_id} Tab verify đóng — tiếp tục tác giả tiếp theo")
                         continue
 
                     reason = verified.get("classify_reason") or ""
-                    if reason == "fallback_page_no_friend_signal":
-                        append_session_log(
-                            session_id,
-                            (
-                                f"FALLBACK PAGE: {verified.get('page_name') or author_name}"
-                                f" · reason={reason}"
-                                f" · friend_zone={verified.get('friend_zone')!r}"
-                                f" · friend_signal_source={verified.get('friend_signal_source')!r}"
-                                f" · header={verified.get('header_text')!r}"
-                                f" · buttons={verified.get('header_buttons')!r}"
-                            ),
-                            "warn",
-                        )
-                    else:
-                        append_session_log(
-                            session_id,
-                            (
-                                f"Phân loại PAGE: {verified.get('page_name') or author_name}"
-                                f" · reason={reason!r}"
-                                f" · key={verified.get('page_key')}"
-                                f" · cache={bool(verified.get('_cache_hit'))}"
-                            ),
-                            "info",
-                        )
+                    logger.debug(
+                        f"[Scanner] #{session_id} Classified PAGE: {verified.get('page_name') or author_name}"
+                        f" reason={reason!r} key={verified.get('page_key')}"
+                    )
 
                     fl_count = verified.get("follower_count")
                     if fl_count is None or int(fl_count) <= min_followers:
                         total_pages_excluded_filter += 1
                         candidates[cand_key]["verify_status"] = "EXCLUDED_FOLLOWERS"
+                        fl_desc = f"{int(fl_count):,} người theo dõi" if fl_count is not None else "chưa rõ lượt theo dõi"
                         append_session_log(
                             session_id,
-                            (
-                                f"Excluded (follower): {verified.get('page_name') or author_name}"
-                                f" FL={fl_count} ≤ {min_followers}"
-                            ),
+                            f"Bỏ qua «{verified.get('page_name') or author_name}»: {fl_desc} (dưới mức tối thiểu {min_followers:,}).",
                             "info",
                         )
                         # Đã xác minh nhưng không đạt lọc — không mở lại cùng URL trong phiên
@@ -4417,9 +4344,12 @@ def run_hashtag_search_flow(
                     entry["relevance_status"] = status
                     entry["relevance_reasons"] = reasons
                     batch_verified_pages.append(entry)
+                    fl_ok = entry.get("follower_text") or (
+                        f"{int(entry['follower_count']):,} người theo dõi" if entry.get("follower_count") else "chưa rõ lượt theo dõi"
+                    )
                     append_session_log(
                         session_id,
-                        f"Xác minh Page OK: {entry.get('page_name')} FL={entry.get('follower_count')}",
+                        f"Đã lưu Page «{entry.get('page_name')}» · {fl_ok}.",
                         "success",
                     )
                     if is_new_qualified:
@@ -4514,12 +4444,10 @@ def run_hashtag_search_flow(
                             session_id,
                             reset_home=True,
                         )
+                        logger.debug(f"[Scanner] #{session_id} #{current_tag} nav_channel={nav_channel}")
                         append_session_log(
                             session_id,
-                            (
-                                f"#{current_tag} quét tiếp bằng {target_uid}"
-                                f" ({len(page_kho)}/{target_pages or '∞'} page, kênh={nav_channel})"
-                            ),
+                            f"Tiếp tục quét #{current_tag} bằng tài khoản {target_uid} (đã tìm được {len(page_kho)} Page).",
                             "info",
                         )
                         acc_seen_posts.clear()
@@ -4568,11 +4496,7 @@ def run_hashtag_search_flow(
                     stagnant_scroll_streak = 0
                 if stagnant_scroll_streak >= 2 and not use_container_scroll:
                     use_container_scroll = True
-                    append_session_log(
-                        session_id,
-                        "Hashtag scroll đứng yên — chuyển cuộn container",
-                        "warn",
-                    )
+                    logger.debug(f"[Scanner] #{session_id} Hashtag scroll đứng yên — chuyển cuộn container")
 
             if stop_reason in [
                 "USER_STOPPED",
@@ -4594,11 +4518,7 @@ def run_hashtag_search_flow(
             1 for c in candidates.values() if c.get("verify_status") == "PENDING"
         )
         if pending_verify_count:
-            append_session_log(
-                session_id,
-                f"{pending_verify_count} ứng viên còn PENDING_VERIFY — không tính kết quả hoàn chỉnh",
-                "warn",
-            )
+            logger.debug(f"[Scanner] #{session_id} {pending_verify_count} ứng viên còn PENDING_VERIFY")
 
     except (Exception, ScanStopped) as exc:
         if stop_event.is_set() or _is_tab_closed_exc(exc):
@@ -4606,11 +4526,11 @@ def run_hashtag_search_flow(
                 f"[Scanner] Cửa sổ đóng / dừng giữa phiên hashtag #{session_id}: {exc}"
             )
             stop_reason = "USER_STOPPED"
-            error_message = f"Browser/tab đóng: {exc}"
+            error_message = "Cửa sổ trình duyệt đã đóng trong lúc quét"
             try:
                 append_session_log(
                     session_id,
-                    "Tab/browser đóng — dừng USER_STOPPED (không ERROR)",
+                    "Cửa sổ trình duyệt đã đóng — dừng phiên quét.",
                     "warn",
                 )
             except Exception:
