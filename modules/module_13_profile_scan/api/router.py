@@ -296,15 +296,26 @@ def source_people(
     return models.source_people(_owner(), kind, id.strip(), search.strip(), page_size, (page - 1) * page_size)
 
 
+def _require_collection(key: str) -> None:
+    """Danh mục của người dùng hoặc nguồn quét (group:/page:/post:)."""
+    if key.split(":", 1)[0] in ("group", "page", "post") and len(key) > 5:
+        return
+    _require_category(key)
+
+
 @router.post("/members/move")
 def move_members(body: MoveIn):
-    _require_category(body.key)
+    _require_collection(body.key)
     _require_category(body.to_key)
-    models.move_profiles(_owner(), body.key, body.to_key, body.uids)
+    if body.key.startswith("category:"):
+        models.move_profiles(_owner(), body.key, body.to_key, body.uids)
+    else:
+        # Từ nguồn quét: giữ nguyên ở nguồn, thêm vào danh mục đích
+        models.copy_to_collection(_owner(), body.to_key, body.uids)
     return {"ok": True}
 
 
 @router.post("/members/delete")
 def delete_members(body: MembersIn):
-    _require_category(body.key)
+    _require_collection(body.key)
     return {"deleted": models.delete_members(_owner(), body.key, body.uids)}

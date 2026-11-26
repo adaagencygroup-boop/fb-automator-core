@@ -603,6 +603,24 @@ def add_to_category(owner: str, category_id: int, uids: List[str]) -> int:
     return added
 
 
+def copy_to_collection(owner: str, to_key: str, uids: List[str]) -> int:
+    """Thêm profile (đang nằm ở nguồn quét) vào danh mục; "Chưa có danh mục" chỉ nhận profile chưa thuộc danh mục nào."""
+    if to_key != UNCATEGORIZED:
+        return add_to_category(owner, int(to_key[len("category:"):]), uids)
+    with db.session() as cur:
+        cur.execute(
+            """
+            INSERT INTO profile_members (owner_key, collection_key, uid)
+            SELECT p.owner_key, %s, p.uid FROM scanned_profiles p
+            WHERE p.owner_key = %s AND p.uid = ANY(%s)
+              AND NOT EXISTS (SELECT 1 FROM profile_members m WHERE m.owner_key = p.owner_key AND m.uid = p.uid AND m.collection_key LIKE 'category:%%')
+            ON CONFLICT DO NOTHING RETURNING uid
+            """,
+            (UNCATEGORIZED, owner, uids),
+        )
+        return len(cur.fetchall())
+
+
 def move_profiles(owner: str, from_key: str, to_key: str, uids: List[str]) -> None:
     if from_key == to_key:
         return

@@ -5,6 +5,7 @@ import { ArrowDown, ArrowUp, ArrowUpDown, Copy, ExternalLink, MapPin } from "luc
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/lib/toast";
 import { Pager } from "@/modules/module_11_page_scanner/_shared";
+import useDragRowSelect from "@/modules/module_11_page_scanner/shared/useDragRowSelect";
 import ProfileAvatar from "../shared/ProfileAvatar";
 import { jobText } from "../shared/exportProfiles";
 import { fmtNum, shortFbUrl } from "../utils.mjs";
@@ -36,6 +37,23 @@ export default function ProfileTable({ rows: input, selected, onSelect, emptyTex
     list.forEach((r) => (on ? next.add(rowId(r)) : next.delete(rowId(r))));
     onSelect(next);
   };
+  // Kéo chuột chọn dải dòng (Ctrl giữ lựa chọn cũ) · Click dòng bật/tắt · Shift + click chọn dải — giống các danh sách khác
+  const drag = useDragRowSelect({
+    ids: shown.map(rowId),
+    isSelected: (id) => selected.has(id),
+    onSet: (ids) => {
+      const next = new Set(selected);
+      shown.forEach((r) => next.delete(rowId(r)));
+      ids.forEach((id) => next.add(id));
+      onSelect?.(next);
+    },
+    onToggle: (id) => {
+      const next = new Set(selected);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      onSelect?.(next);
+    },
+  });
   const copy = (url) =>
     navigator.clipboard
       ?.writeText(url)
@@ -45,7 +63,7 @@ export default function ProfileTable({ rows: input, selected, onSelect, emptyTex
   return (
     <div className="min-w-0 overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
       {/* Cuộn trong khung (dọc + ngang), tiêu đề cột đứng yên */}
-      <div className="max-h-[640px] overflow-auto custom-scrollbar">
+      <div ref={onSelect ? drag.setContainer : undefined} className={`max-h-[640px] overflow-auto custom-scrollbar ${onSelect ? "select-none" : ""}`}>
         <table className="w-full min-w-[1760px] text-left text-xs">
           <thead className="sticky top-0 z-10 border-b border-[#E2E8F0] bg-[#F8FAFC] text-[11px] uppercase tracking-[0.5px] text-[#475569] [&_th]:whitespace-nowrap [&_th]:px-3 [&_th]:py-3 [&_th]:font-bold">
             <tr>
@@ -69,7 +87,7 @@ export default function ProfileTable({ rows: input, selected, onSelect, emptyTex
               <tr><td colSpan={13} className="!py-12 text-center text-[#94A3B8]">{emptyText}</td></tr>
             )}
             {shown.map((r, i) => (
-              <tr key={rowId(r)} className="border-t border-[#F1F5F9] hover:bg-[#F8FAFC]">
+              <tr key={rowId(r)} {...(onSelect ? drag.rowProps(rowId(r)) : {})} className={`border-t border-[#F1F5F9] ${onSelect ? `cursor-pointer ${selected.has(rowId(r)) ? "bg-[#EFF6FF]" : "hover:bg-[#F8FAFC]"}` : "hover:bg-[#F8FAFC]"}`}>
                 {onSelect && <td><Checkbox aria-label={`Chọn ${r.name}`} checked={selected.has(rowId(r))} onCheckedChange={(c) => toggle([r], c)} /></td>}
                 <td className="font-mono text-[#94A3B8]">{String(start + i + 1).padStart(2, "0")}</td>
                 <td>
