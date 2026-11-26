@@ -3705,6 +3705,26 @@ def _hashtag_safety_cap(requested: Any) -> int:
     return max(HASHTAG_SAFETY_MAX_POSTS_PER_TAG, requested_n)
 
 
+def resolve_hashtag_final_status(
+    stop_reason: Optional[str],
+    found_count: int,
+    target_pages: Optional[int],
+) -> str:
+    """Chuẩn hóa trạng thái phiên hashtag: thiếu mục tiêu (vd 21/30) luôn đánh PARTIAL thay vì COMPLETED."""
+    reason = str(stop_reason or "").upper()
+    if reason == "ERROR":
+        return "FAILED"
+    if reason == "USER_STOPPED":
+        return "STOPPED"
+    if target_pages is not None and int(target_pages) > 0:
+        if reason == "TARGET_REACHED" or int(found_count or 0) >= int(target_pages):
+            return "COMPLETED"
+        return "PARTIAL"
+    if reason in ("TARGET_REACHED", "COMPLETED", "NO_NEW_RESULTS", "CYCLE_DETECTED", "END_MARKER"):
+        return "COMPLETED"
+    return "PARTIAL"
+
+
 def run_hashtag_search_flow(
     hashtags: List[str],
     context_keywords: Optional[List[str]] = None,
@@ -4545,17 +4565,7 @@ def run_hashtag_search_flow(
             _ACTIVE_PAUSE_EVENTS.pop(session_id, None)
 
         duration = int(time.time() - start_time)
-        # Idle NO_NEW_RESULTS: đã có Page đạt lọc → PARTIAL; không có → COMPLETED (quy ước cũ)
-        if stop_reason == "NO_NEW_RESULTS" and len(page_kho) > 0:
-            final_status = "PARTIAL"
-        elif stop_reason in ["TARGET_REACHED", "NO_NEW_RESULTS", "CYCLE_DETECTED", "END_MARKER"]:
-            final_status = "COMPLETED"
-        else:
-            final_status = "PARTIAL"
-        if stop_reason == "ERROR":
-            final_status = "FAILED"
-        elif stop_reason == "USER_STOPPED":
-            final_status = "STOPPED"
+        final_status = resolve_hashtag_final_status(stop_reason, len(page_kho), target_pages)
 
         # Trạng thái xoay acc thật để phiên kế tiếp trong đợt đếm tiếp đúng (UI đọc settings.rotation)
         try:

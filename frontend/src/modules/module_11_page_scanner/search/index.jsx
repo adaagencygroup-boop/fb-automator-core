@@ -186,6 +186,18 @@ const STOP_REASON_LABELS_VI = {
 };
 const statusLabelVi = (st) => STATUS_LABELS_VI[String(st || "").toUpperCase()] || st || "hoàn tất";
 const stopReasonLabelVi = (r) => STOP_REASON_LABELS_VI[String(r || "").toUpperCase()] || "hoàn tất";
+
+function phaseFromSession(session) {
+  if (!session) return "done";
+  const st = String(session.status || "").toUpperCase();
+  if (st === "FAILED") return "error";
+  if (st === "STOPPED") return "stopped";
+  if (st === "PARTIAL") return "partial";
+  const count = Number(session.pages_count ?? session.total_unique ?? 0);
+  const target = Number(session.max_results || 0);
+  if (target > 0 && count < target) return "partial";
+  return "done";
+}
 /* Đợt nhiều hashtag chạy tiếp khi rời trang → để ngoài component, vào lại trang vẫn dừng / theo dõi được */
 const campaignRef = {
   current: { paused: false, abort: false, active: false, queue: [], accIndex: 0, sessionIds: [] },
@@ -677,11 +689,33 @@ export default function PageScannerSearch() {
             if (curCamp.active && !curCamp.abort && !ownsCampaignRef.current) {
               watchDetachedCampaign(sid);
             } else if (!curCamp.active) {
-              setRunPhase("done");
-              pushLog(
-                `Phiên quét kết thúc (${statusLabelVi(session.status)})${session.error_message ? ` — ${session.error_message}` : ""}.`,
-                session.status === "FAILED" ? "error" : "info",
-              );
+              const endPhase = phaseFromSession(session);
+              const target = Number(session.max_results || 0);
+              const reasonVi = stopReasonLabelVi(session.stop_reason || session.status);
+              setRunPhase(endPhase);
+              if (endPhase === "error") {
+                pushLog(
+                  `Phiên quét gặp lỗi${session.error_message ? `: ${session.error_message}` : ""}.`,
+                  "error",
+                );
+                toast.error(session.error_message || "Phiên quét gặp lỗi.", { key: "m11-search-start" });
+              } else if (endPhase === "stopped") {
+                pushLog(
+                  `Phiên quét đã dừng (${target ? `${count}/${target} Page` : `${count} Page`}).`,
+                  "warn",
+                );
+              } else if (endPhase === "partial") {
+                const ratio = target ? `${count}/${target} Page` : `${count} Page`;
+                pushLog(
+                  `Kết thúc phiên (chưa đủ mục tiêu): chỉ đạt ${ratio} (${reasonVi}).`,
+                  "warn",
+                );
+                toast.warning(`Phiên quét kết thúc — chưa đủ mục tiêu (${ratio}).`, { key: "m11-search-start" });
+              } else {
+                const ratio = target ? `${count}/${target} Page` : `${count} Page`;
+                pushLog(`Hoàn tất phiên quét: đạt ${ratio}.`, "success");
+                toast.success(`Hoàn tất phiên quét (${ratio}).`, { key: "m11-search-start" });
+              }
             }
           }
         } catch (e) {
@@ -728,7 +762,11 @@ export default function PageScannerSearch() {
         ]),
       );
       setRunPhase(
-        topDone && !camp.active ? "done" : top?.status === "PAUSED" || (camp.active && camp.paused) ? "paused" : "running",
+        topDone && !camp.active
+          ? phaseFromSession(top)
+          : top?.status === "PAUSED" || (camp.active && camp.paused)
+            ? "paused"
+            : "running",
       );
 
       let settings = {};
@@ -1006,6 +1044,11 @@ export default function PageScannerSearch() {
 
     let accState = { cursor: 0, pagesOnAcc: 0 };
     const collectedIds = [];
+    let totalFound = 0;
+    let totalTarget = 0;
+    let partialJobs = 0;
+    let failedJobs = 0;
+    const shortReasons = new Set();
 
     for (let i = 0; i < jobs.length; i += 1) {
       while (camp.paused && !camp.abort) {
@@ -1095,11 +1138,6 @@ export default function PageScannerSearch() {
         const session = await waitForSession(sid);
         stopPolling();
         const count = session.pages_count || session.total_unique || 0;
-        setKeywordProgress((prev) =>
-          prev.map((row) =>
-            row.keyword === job.label ? { ...row, count, status: "done" } : row,
-          ),
-        );
         const stopReason = session.stop_reason || session.status || "";
         const targetHint =
           job.kind === "hashtag"
@@ -1107,17 +1145,38 @@ export default function PageScannerSearch() {
             keywordTargets[job.rootKeyword] ||
             keywordTargets[job.query] ||
             applyAllTarget
-            : null;
+            : keywordTargets[job.rootKeyword] || keywordTargets[job.query] || applyAllTarget;
+        const targetNum = Number(targetHint) || 0;
+        const jobFailed = session.status === "FAILED";
         const partialShort =
-          targetHint != null &&
-          count < Number(targetHint) &&
-          ["NO_NEW_RESULTS", "CYCLE_DETECTED", "PARTIAL", "COMPLETED"].includes(String(stopReason));
+          !jobFailed &&
+          (session.status === "PARTIAL" || (targetNum > 0 && count < targetNum));
         const reasonVi = stopReasonLabelVi(stopReason);
+
+        totalFound += count;
+        totalTarget += targetNum;
+        if (jobFailed) {
+          failedJobs += 1;
+          shortReasons.add(reasonVi);
+        } else if (partialShort) {
+          partialJobs += 1;
+          shortReasons.add(reasonVi);
+        }
+
+        setKeywordProgress((prev) =>
+          prev.map((row) =>
+            row.keyword === job.label
+              ? { ...row, count, status: jobFailed ? "error" : partialShort ? "partial" : "done" }
+              : row,
+          ),
+        );
         pushLog(
-          partialShort
-            ? `Xong ${job.label}: tìm được ${count}/${targetHint} Page (${reasonVi}).`
-            : `Xong ${job.label}: tìm được ${count} Page (${reasonVi}).`,
-          session.status === "FAILED" ? "error" : partialShort ? "warn" : "success",
+          partialShort && targetNum > 0
+            ? `Kết thúc ${job.label} (chưa đủ mục tiêu): chỉ đạt ${count}/${targetNum} Page (${reasonVi}).`
+            : jobFailed
+              ? `Lỗi ${job.label}: tìm được ${count}${targetNum ? `/${targetNum}` : ""} Page (${reasonVi}).`
+              : `Hoàn tất ${job.label}: đạt ${count}${targetNum ? `/${targetNum}` : ""} Page.`,
+          jobFailed ? "error" : partialShort ? "warn" : "success",
         );
 
         // Phiên hashtag tự đổi acc giữa chừng → lấy acc + số page thật từ BE, chỉ đổi thêm nếu acc đã đủ hạn mức
@@ -1159,6 +1218,8 @@ export default function PageScannerSearch() {
 
         await loadResults(sid, 1, [...collectedIds]);
       } catch (err) {
+        failedJobs += 1;
+        shortReasons.add(err.message || "gặp lỗi");
         setKeywordProgress((prev) =>
           prev.map((row) => (row.keyword === job.label ? { ...row, status: "error" } : row)),
         );
@@ -1171,12 +1232,34 @@ export default function PageScannerSearch() {
     if (campaignRef.current !== camp) return; // đã bắt đầu đợt khác sau khi dừng khẩn cấp
     ownsCampaignRef.current = false;
     stopPolling();
-    setRunPhase("done");
     if (camp.abort) {
+      setRunPhase("stopped");
       pushLog("Đã dừng khẩn cấp toàn bộ đợt quét.", "error");
     } else {
-      pushLog("Hoàn tất toàn bộ đợt quét — đang cập nhật bảng kết quả.", "success");
-      toast.success(`Hoàn thành đợt ${modeLabel}.`, { key: "m11-search-start" });
+      const ratioText = totalTarget > 0 ? `${totalFound}/${totalTarget} Page` : `${totalFound} Page`;
+      const reasonSummary = [...shortReasons].filter(Boolean).join("; ");
+      const isAllFailed = failedJobs >= jobs.length && totalFound === 0;
+      const isPartial = !isAllFailed && (partialJobs > 0 || failedJobs > 0 || (totalTarget > 0 && totalFound < totalTarget));
+
+      if (isAllFailed) {
+        setRunPhase("error");
+        pushLog(
+          `Đợt quét thất bại (0/${totalTarget || 0} Page)${reasonSummary ? ` — ${reasonSummary}` : ""}.`,
+          "error",
+        );
+        toast.error("Đợt quét thất bại — không thu thập được Page nào.", { key: "m11-search-start" });
+      } else if (isPartial) {
+        setRunPhase("partial");
+        pushLog(
+          `Kết thúc đợt quét (chưa đủ mục tiêu): chỉ đạt ${ratioText}${reasonSummary ? ` (${reasonSummary})` : ""} — đang cập nhật bảng kết quả.`,
+          "warn",
+        );
+        toast.warning(`Đợt quét kết thúc — chưa đủ mục tiêu (${ratioText}).`, { key: "m11-search-start" });
+      } else {
+        setRunPhase("done");
+        pushLog(`Hoàn tất toàn bộ đợt quét: đạt ${ratioText} — đang cập nhật bảng kết quả.`, "success");
+        toast.success(`Hoàn thành đợt ${modeLabel} (${ratioText}).`, { key: "m11-search-start" });
+      }
       if (collectedIds.length) {
         await loadResults(collectedIds[collectedIds.length - 1], 1, collectedIds);
       }
@@ -1339,7 +1422,7 @@ export default function PageScannerSearch() {
       pushLog(`Lỗi khi dừng phiên: ${err.message}`, "error");
     } finally {
       setShowEmergencyModal(false);
-      setRunPhase("done");
+      setRunPhase("stopped");
       toast.warning("Đã dừng khẩn cấp.", { key: "m11-search-stop" });
     }
   };
@@ -2072,11 +2155,14 @@ export default function PageScannerSearch() {
                     const target = row.target || keywordTargets[row.keyword] || applyAllTarget;
                     const count = Number(row.count) || 0;
                     const error = row.status === "error";
+                    const partial = row.status === "partial";
                     return (
                       <span
                         key={row.keyword}
-                        title={error ? "Hashtag quét lỗi" : undefined}
-                        className={`inline-flex items-center gap-1.5 ${error ? "text-rose-600" : "text-[#1D4ED8]"}`}
+                        title={error ? "Quét gặp lỗi" : partial ? "Chưa đạt đủ mục tiêu" : undefined}
+                        className={`inline-flex items-center gap-1.5 ${
+                          error ? "text-rose-600" : partial ? "text-amber-600" : "text-[#1D4ED8]"
+                        }`}
                       >
                         <span
                           className={`size-1 rounded-full bg-current ${row.status === "scanning" ? "animate-pulse" : ""}`}
