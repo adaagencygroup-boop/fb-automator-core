@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ExternalLink, FileText, Folder, Info, Loader2, Play, Square } from "lucide-react";
+import { ExternalLink, FileText, Folder, Info, Loader2, LogOut, Play, Square } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -9,9 +9,12 @@ import { LiveLogConsole, Pager } from "@/modules/module_11_page_scanner/_shared"
 import { useFarmAccounts } from "../hooks/useFarmAccounts";
 import {
   getTikTokAuth,
+  getTikTokConfig,
   getTikTokDownloadStatus,
+  logoutTikTok,
   openTikTokLogin,
   pickVideoFolder,
+  saveTikTokConfig,
   startTikTokDownload,
   stopTikTokDownload,
 } from "../service";
@@ -20,6 +23,7 @@ import { NumberInput, PageTitle, UidCopy, clampNumber, initials } from "./parts"
 
 const ROWS_PER_PAGE = 10;
 const POLL_MS = 2000;
+const SAVE_DELAY_MS = 600;
 const IDLE_JOB = { phase: "idle", total: 0, done: 0, failed: 0, videos: [], logs: [] };
 const CARD = "rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.05)]";
 const TH = "bg-[#F0F7FF] px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.3px] text-[#475569]";
@@ -129,6 +133,7 @@ function VideoRow({ video, index }) {
 export default function TikTokDownloadView() {
   const [auth, setAuth] = useState({ loading: true, connected: false });
   const [opening, setOpening] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [keywordText, setKeywordText] = useState("");
   const [folder, setFolder] = useState("");
   const [picking, setPicking] = useState(false);
@@ -139,6 +144,7 @@ export default function TikTokDownloadView() {
   const [busy, setBusy] = useState(false);
   const request = useRef(0);
   const restored = useRef(false);
+  const configLoaded = useRef(false);
   const running = job.phase === "running" || job.phase === "stopping";
 
   const { accounts, total, loading, loadingMore, loadError, moreError, hasMore, reload, loadMore } = useFarmAccounts();
@@ -168,6 +174,33 @@ export default function TikTokDownloadView() {
     return () => clearInterval(timer);
   }, [auth.connected, auth.error, refreshAuth]);
 
+  // Thư mục lưu + số video / từ khóa đã lưu lần trước
+  useEffect(() => {
+    let ignore = false;
+    getTikTokConfig()
+      .then((saved) => {
+        if (ignore || !saved) return;
+        if (saved.folder) setFolder((current) => current || saved.folder);
+        if (saved.per_keyword) setPerKeyword(String(saved.per_keyword));
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!ignore) configLoaded.current = true;
+      });
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  // Sửa số video → lưu sau khi ngừng gõ
+  useEffect(() => {
+    if (!configLoaded.current) return undefined;
+    const timer = setTimeout(() => {
+      saveTikTokConfig({ per_keyword: clampNumber(perKeyword, 1, 500) }).catch(() => {});
+    }, SAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [perKeyword]);
+
   const openLogin = async () => {
     setOpening(true);
     try {
@@ -182,11 +215,27 @@ export default function TikTokDownloadView() {
     }
   };
 
+  const logout = async () => {
+    setLoggingOut(true);
+    try {
+      await logoutTikTok();
+      toast.success("Đã đăng xuất TikTok.");
+      setAuth({ loading: false, connected: false, username: "", error: "" });
+    } catch (error) {
+      toast.error(error?.message || "Không đăng xuất được TikTok.");
+    } finally {
+      setLoggingOut(false);
+    }
+  };
+
   const chooseFolder = async () => {
     setPicking(true);
     try {
       const path = await pickVideoFolder();
-      if (path) setFolder(path);
+      if (path) {
+        setFolder(path);
+        saveTikTokConfig({ folder: path }).catch((error) => toast.error(error?.message || "Không lưu được thư mục."));
+      }
     } catch (error) {
       toast.error(error?.message || "Không mở được hộp chọn thư mục.");
     } finally {
@@ -294,20 +343,40 @@ export default function TikTokDownloadView() {
                 <strong className="font-semibold text-[#2563EB]">Khu vực đăng nhập TikTok:</strong> Đăng nhập ở bên ngoài trình duyệt để thực hiện quét và tải video và tiêu đề.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={openLogin}
-              disabled={opening || running}
-              className="mt-3 inline-flex h-8 items-center gap-2 rounded-lg bg-[#0B4FC4] px-4 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0A45AB] disabled:opacity-60"
-            >
-              {opening ? <Loader2 className="size-3.5 animate-spin" /> : <ExternalLink className="size-3.5" />}
-              Mở trình duyệt đăng nhập TikTok
-            </button>
-            <div className="mt-3 flex items-center justify-between gap-3 border-t border-[#DBEAFE] pt-2.5">
+            {auth.connected ? (
+              <button
+                type="button"
+                onClick={logout}
+                disabled={loggingOut || running}
+                title={running ? "Dừng phiên tải trước khi đăng xuất" : undefined}
+                className="mt-3 inline-flex h-8 items-center gap-2 rounded-lg border border-rose-200 bg-white px-4 text-xs font-semibold text-rose-600 shadow-sm transition hover:bg-rose-50 disabled:opacity-60"
+              >
+                {loggingOut ? <Loader2 className="size-3.5 animate-spin" /> : <LogOut className="size-3.5" />}
+                Đăng xuất TikTok
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={openLogin}
+                disabled={opening || running || auth.loading}
+                className="mt-3 inline-flex h-8 items-center gap-2 rounded-lg bg-[#0B4FC4] px-4 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0A45AB] disabled:opacity-60"
+              >
+                {opening ? <Loader2 className="size-3.5 animate-spin" /> : <ExternalLink className="size-3.5" />}
+                Mở trình duyệt đăng nhập TikTok
+              </button>
+            )}
+            {auth.connected && (
+              <div className="mt-3 flex items-center justify-between gap-3 border-t border-[#DBEAFE] pt-2.5">
+                <span className="text-xs text-[#64748B]">Tài khoản TikTok:</span>
+                <span className="truncate text-xs font-semibold text-[#0F172A]" title={auth.username || undefined}>
+                  {auth.username ? `@${auth.username}` : "Không lấy được tên tài khoản"}
+                </span>
+              </div>
+            )}
+            <div className={cn("flex items-center justify-between gap-3 pt-2.5", auth.connected ? "mt-2" : "mt-3 border-t border-[#DBEAFE]")}>
               <span className="text-xs text-[#64748B]">Trạng thái đăng nhập:</span>
               <StatusPill on={auth.connected}>
                 {auth.loading ? "Đang kiểm tra…" : auth.connected ? "Đã đăng nhập" : "Chưa đăng nhập"}
-                {auth.connected && auth.username ? ` (${auth.username})` : ""}
               </StatusPill>
             </div>
             {auth.error && (

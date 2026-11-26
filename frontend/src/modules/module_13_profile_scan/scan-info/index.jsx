@@ -124,9 +124,7 @@ export default function ProfileScanInfo() {
   const [delay, setDelay] = useState({ min: 5, max: 8 });
   const [rotateEvery, setRotateEvery] = useState(50);
   const [workers, setWorkers] = useState(2);
-  const [skipScanned, setSkipScanned] = useState(true);
   const [minFriends, setMinFriends] = useState(false);
-  const [directIp, setDirectIp] = useState(true);
 
   const [mode, setMode] = useState("source");
   const [sources, setSources] = useState({});
@@ -269,6 +267,8 @@ export default function ProfileScanInfo() {
   }, [sources]);
   const targets = mode === "source" ? sourceTargets : validRows;
   const sourceCount = mode === "source" ? Object.keys(sources).length : rows.length;
+  // Chỉ hiện xem trước khi đã chọn nguồn, hoặc đã bấm Xem trước (link) / Đọc tệp (file) ra được dòng
+  const hasPreview = sourceCount > 0;
 
   const previewLinks = () => {
     const parsed = parseProfileLines(linkText.split(/\r?\n/));
@@ -330,7 +330,6 @@ export default function ProfileScanInfo() {
         workers: Math.min(workers, uids.length),
         skip_scanned: skipScanned,
         min_friends: minFriends ? 500 : 0,
-        allow_direct_ip: directIp,
         mode,
         targets: targets.map((t) => ({ uid: t.uid || t.key, url: t.url, name: t.name, avatar: t.avatar, source_keys: t.source_keys || [] })),
         sources:
@@ -377,7 +376,7 @@ export default function ProfileScanInfo() {
   const control = async (action) => {
     setControlling(action);
     try {
-      await controlScan(sessionId, action, action === "resume" ? { allow_direct_ip: directIp } : {});
+      await controlScan(sessionId, action);
       const res = await getScanProgress(sessionId, lastLogRef.current);
       setSession(res.session);
     } catch (err) {
@@ -443,7 +442,7 @@ export default function ProfileScanInfo() {
           </button>
           <div className="mt-3 border-b border-[#E2E8F0] pb-3">
             {uids.length ? (
-              <span className="inline-flex items-center gap-2 rounded-full border border-[#A7F3D0] bg-[#ECFDF5] px-3 py-1 text-xs text-[#047857]"><CheckCircle2 className="size-3.5" /> <span>Đã chọn: <b>{uids.length}</b> tài khoản · chạy song song <b>{workerCount}</b> · dự phòng <b>{uids.length - workerCount}</b></span></span>
+              <span className="inline-flex items-center gap-2 rounded-full border border-[#A7F3D0] bg-[#ECFDF5] px-3 py-1 text-xs text-[#047857]"><CheckCircle2 className="size-3.5" /> <span>Đã chọn: <b>{uids.length}</b> tài khoản · chạy song song <b>{workerCount}</b></span></span>
             ) : (
               <span className="text-xs text-[#94A3B8]">{accountsLoading ? "Đang tải tài khoản…" : "Chưa chọn tài khoản"}</span>
             )}
@@ -464,9 +463,7 @@ export default function ProfileScanInfo() {
             <NumCtrl label="số tài khoản chạy song song" max={maxWorkers} value={workerCount} onChange={setWorkers} /> Chrome cùng lúc (tối đa {maxWorkers})
           </div>
           <div className="mt-5 space-y-2 text-xs text-[#334155]">
-            <label className="flex cursor-pointer items-center gap-2"><Checkbox checked={skipScanned} onCheckedChange={setSkipScanned} /> Bỏ qua người đã quét (dùng lại dữ liệu có sẵn)</label>
             <label className="flex cursor-pointer items-center gap-2"><Checkbox checked={minFriends} onCheckedChange={setMinFriends} /> Chỉ lấy người có từ 500 bạn bè (ẩn số bạn bè vẫn lấy)</label>
-            <label className="flex cursor-pointer items-center gap-2"><Checkbox checked={directIp} onCheckedChange={setDirectIp} /> Proxy lỗi thì tự chuyển sang IP của máy (có ghi log; bỏ tick để dừng tài khoản đó)</label>
           </div>
         </div>
 
@@ -558,6 +555,7 @@ export default function ProfileScanInfo() {
         )}
       </section>
 
+      {hasPreview && (
       <section className={`${CARD} overflow-hidden`}>
         <div className="flex items-center gap-3 border-b border-[#E2E8F0] px-5 py-5">
           <span className="flex h-10 w-8 shrink-0 items-center justify-center rounded-lg border border-[#DBEAFE] bg-[#EFF6FF] text-[#1877F2]"><ListChecks className="size-4" /></span>
@@ -588,6 +586,7 @@ export default function ProfileScanInfo() {
           </span>
         </div>
       </section>
+      )}
 
       <ScanActionButtons
         live={live}

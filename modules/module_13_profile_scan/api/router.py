@@ -51,13 +51,8 @@ class StartIn(BaseModel):
     workers: int = Field(2, ge=1, le=5)
     skip_scanned: bool = True
     min_friends: int = Field(0, ge=0, le=5000)
-    allow_direct_ip: bool = True
     targets: List[TargetIn] = Field(..., min_length=1, max_length=MAX_TARGETS)
     sources: List[SourceIn] = Field(default_factory=list)
-
-
-class ResumeIn(BaseModel):
-    allow_direct_ip: Optional[bool] = None
 
 
 class CategoryIn(BaseModel):
@@ -156,14 +151,12 @@ def pause(session_id: int):
 
 
 @router.post("/sessions/{session_id}/resume")
-def resume(session_id: int, body: ResumeIn = ResumeIn()):
+def resume(session_id: int):
     row = _session_or_404(session_id)
     run = engine.get_run(session_id)
     if run:
         if run.stop_event.is_set():
             raise HTTPException(409, "Phiên đang dừng, vui lòng đợi vài giây")
-        if body.allow_direct_ip is not None:
-            run.settings["allow_direct_ip"] = body.allow_direct_ip
         models.set_status(session_id, "RUNNING", None, only_from=("PAUSED",))
         run.pause_event.clear()
         run.log("Chạy tiếp")
@@ -171,7 +164,7 @@ def resume(session_id: int, body: ResumeIn = ResumeIn()):
     if models.pending_count(session_id) == 0:
         raise HTTPException(409, "Phiên không còn profile chưa quét")
     try:
-        engine.resume(_owner(), row, body.allow_direct_ip)
+        engine.resume(_owner(), row)
     except psycopg2.errors.UniqueViolation:
         raise HTTPException(409, "Đang có phiên quét profile khác chạy")
     except ValueError as exc:

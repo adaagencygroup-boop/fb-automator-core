@@ -139,6 +139,7 @@ def download_stream_to_file(
   user_agent: Optional[str] = None,
   referer: str = "https://www.tiktok.com/",
   stop_check: Optional[Callable[[], bool]] = None,
+  on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> bool:
   if not download_url:
     return False
@@ -179,6 +180,8 @@ def download_stream_to_file(
       with resp_ctx as r:
         content_type = (r.headers.get("Content-Type") or "").lower()
         if r.status_code in (200, 206) and not content_type.startswith(("text/", "application/json")):
+          total = int(r.headers.get("Content-Length") or 0)
+          got = 0
           with open(save_path, "wb") as f:
             iterator = r.iter_content(chunk_size=256 * 1024)
             for chunk in iterator:
@@ -192,6 +195,9 @@ def download_stream_to_file(
                 return False
               if chunk:
                 f.write(chunk)
+                got += len(chunk)
+                if on_progress:
+                  on_progress(got, total)
           if _is_valid_video_file(save_path):
             return True
     except Exception:
@@ -263,6 +269,8 @@ def download_tiktok_video(
   driver=None,
   stop_check: Optional[Callable[[], bool]] = None,
   prefetched_meta: Optional[Dict[str, Any]] = None,
+  on_progress: Optional[Callable[[int, int], None]] = None,
+  on_stage: Optional[Callable[[str], None]] = None,
 ) -> Tuple[bool, Dict[str, Any]]:
   if _should_stop(stop_check):
     return False, {}
@@ -285,8 +293,11 @@ def download_tiktok_video(
         cookies=pre_cookies,
         user_agent=pre_ua,
         stop_check=stop_check,
+        on_progress=on_progress,
       ):
         return True, prefetched_meta
+  if on_stage:
+    on_stage("page")
   meta = resolve_tiktok_video_detail(video_url_or_id, driver=driver, stop_check=stop_check)
   if _should_stop(stop_check):
     return False, meta
@@ -307,10 +318,13 @@ def download_tiktok_video(
       cookies=cookies,
       user_agent=user_agent,
       stop_check=stop_check,
+      on_progress=on_progress,
     ):
       return True, meta
   if _should_stop(stop_check):
     return False, meta
+  if on_stage:
+    on_stage("ytdlp")
   ok, ydl_title = download_tiktok_video_ytdlp(
     canonical_url,
     save_path,

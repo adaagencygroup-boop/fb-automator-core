@@ -97,7 +97,7 @@ class Run:
                 self._open[uid] = owner
             driver = open_browser(
                 uid=uid, owner=owner, proxy=acc.get("proxy"), scope="profile_scan", verify_egress=False,
-                allow_direct_fallback=bool(self.settings.get("allow_direct_ip")),
+                allow_direct_fallback=True,
                 on_log=lambda level, message: self.log(message, "warn" if level == "warning" else level),
             )
             try:
@@ -386,10 +386,8 @@ def start(owner: str, mode: str, settings: Dict[str, Any], targets: List[Dict[st
     return session_id
 
 
-def resume(owner: str, session: Dict[str, Any], allow_direct_ip: Optional[bool] = None) -> None:
+def resume(owner: str, session: Dict[str, Any]) -> None:
     settings = json.loads(session["settings"])
-    if allow_direct_ip is not None:
-        settings["allow_direct_ip"] = allow_direct_ip
     accounts = resolve_scan_accounts(settings["account_uids"], owner_key=owner)
     if not models.set_status(session["id"], "RUNNING", None, only_from=("SUSPENDED", "STOPPED", "FAILED")):
         raise ValueError("Phiên không ở trạng thái chạy tiếp được")
