@@ -6,13 +6,16 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
-# account_uid -> {session_id, job_type}
+# account_uid -> {session_id, job_type, acquired_at}
 _ACCOUNT_JOB_LOCK = threading.Lock()
 _ACCOUNT_ACTIVE_JOBS: Dict[str, Dict[str, Any]] = {}
+# Thời gian ân hạn sau khi giữ slot trước khi coi là mồ côi do chưa thấy worker thread (tránh race trước Thread.start())
+_LOCK_STARTUP_GRACE_SEC = 5.0
 
 # Phiên có heartbeat_at: quá 120s không heartbeat (engine ghi mỗi 30s) → mồ côi.
 STALE_HEARTBEAT_SECONDS = 120
@@ -34,7 +37,7 @@ class AccountBusyError(RuntimeError):
         )
 
 
-def _is_job_stale_or_stopped(session_id: int) -> bool:
+def _is_job_stale_or_stopped(session_id: int, acquired_at: Optional[float] = None) -> bool:
     """Kiểm tra phiên đang giữ khóa có bị dừng, lỗi, hoàn tất hoặc không còn chạy."""
     if not session_id:
         return True
@@ -57,6 +60,10 @@ def _is_job_stale_or_stopped(session_id: int) -> bool:
                 return True
     except Exception:
         pass
+
+    # Tránh race: slot vừa được giữ ngay trước khi worker_thread.start() chạy xong
+    if acquired_at is not None and (time.monotonic() - float(acquired_at)) < _LOCK_STARTUP_GRACE_SEC:
+        return False
 
     # Kiểm tra xem có thread worker nào thực sự còn đang chạy không
     try:
@@ -93,7 +100,7 @@ def try_acquire_account_job(
         cur = _ACCOUNT_ACTIVE_JOBS.get(uid)
         if cur and int(cur.get("session_id") or 0) != sid:
             old_sid = int(cur.get("session_id") or 0)
-            if old_sid and _is_job_stale_or_stopped(old_sid):
+            if old_sid and _is_job_stale_or_stopped(old_sid, cur.get("acquired_at")):
                 logger.info(
                     f"[Module 11] Tự động giải phóng khóa phiên cũ #{old_sid} (đã dừng) cho acc {uid} để phiên #{sid} nhận khóa"
                 )
@@ -107,6 +114,7 @@ def try_acquire_account_job(
         _ACCOUNT_ACTIVE_JOBS[uid] = {
             "session_id": sid,
             "job_type": str(job_type or ""),
+            "acquired_at": time.monotonic(),
         }
 
 
@@ -130,12 +138,24 @@ def get_active_job_for_account(account_uid: str) -> Optional[Dict[str, Any]]:
         cur = _ACCOUNT_ACTIVE_JOBS.get(uid)
         if cur:
             sid = int(cur.get("session_id") or 0)
-            if sid and _is_job_stale_or_stopped(sid):
+            if sid and _is_job_stale_or_stopped(sid, cur.get("acquired_at")):
                 logger.info(f"[Module 11] Gỡ khóa mồ côi/đã dừng của acc {uid} (phiên #{sid})")
                 _ACCOUNT_ACTIVE_JOBS.pop(uid, None)
                 return None
             return dict(cur)
         return None
+
+
+def get_uids_for_sessions(session_ids: Iterable[int]) -> Set[str]:
+    """Trả về tất cả account_uid (kể cả acc đã xoay vòng) đang giữ khóa thuộc các session_ids."""
+    target = {int(s) for s in session_ids if s is not None}
+    if not target:
+        return set()
+    with _ACCOUNT_JOB_LOCK:
+        return {
+            uid for uid, job in _ACCOUNT_ACTIVE_JOBS.items()
+            if int(job.get("session_id") or 0) in target
+        }
 
 
 def get_busy_account_uids() -> Set[str]:
@@ -207,13 +227,13 @@ def stop_owner_page_scanner_jobs(owner_key: str) -> Dict[str, Any]:
             uid for uid, job in _ACCOUNT_ACTIVE_JOBS.items()
             if int(job.get("session_id") or 0) in stopped_ids
         }
-    # Chrome page_scanner của owner còn mở
+    # Chrome page_scanner của owner còn mở (chuẩn hóa "system" / None về cùng owner)
     accounts_owner = accounts_owner_for(owner_key)
     with _active_drivers_lock:
         uids |= {
             str(info["uid"]) for info in _active_drivers.values()
             if info.get("scope") == "page_scanner"
-            and (str(info.get("owner") or "").strip() or None) == accounts_owner
+            and accounts_owner_for(info.get("owner")) == accounts_owner
         }
 
     closed: List[str] = []

@@ -161,6 +161,31 @@ const SOURCE_MODES = [
 ];
 
 const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
+const STATUS_LABELS_VI = {
+  RUNNING: "đang chạy",
+  PAUSED: "tạm dừng",
+  COMPLETED: "hoàn thành",
+  PARTIAL: "hoàn thành một phần",
+  STOPPED: "đã dừng",
+  FAILED: "gặp lỗi",
+};
+const STOP_REASON_LABELS_VI = {
+  TARGET_REACHED: "đạt đủ mục tiêu",
+  NO_NEW_RESULTS: "không còn kết quả mới",
+  CYCLE_DETECTED: "đã hết danh sách mới",
+  END_MARKER: "đã tới cuối danh sách",
+  TIMEOUT: "hết thời gian chờ",
+  MAX_SCROLLS: "đạt giới hạn cuộn",
+  SAFETY_LIMIT: "đạt giới hạn bài an toàn",
+  CHECKPOINT: "tài khoản bị checkpoint hoặc mất đăng nhập",
+  USER_STOPPED: "đã dừng theo yêu cầu",
+  ERROR: "gặp lỗi hệ thống",
+  COMPLETED: "hoàn thành",
+  PARTIAL: "hoàn thành một phần",
+  BUSY_LOCKED: "tài khoản đang bận chạy phiên khác",
+};
+const statusLabelVi = (st) => STATUS_LABELS_VI[String(st || "").toUpperCase()] || st || "hoàn tất";
+const stopReasonLabelVi = (r) => STOP_REASON_LABELS_VI[String(r || "").toUpperCase()] || "hoàn tất";
 /* Đợt nhiều hashtag chạy tiếp khi rời trang → để ngoài component, vào lại trang vẫn dừng / theo dõi được */
 const campaignRef = {
   current: { paused: false, abort: false, active: false, queue: [], accIndex: 0, sessionIds: [] },
@@ -238,7 +263,13 @@ export default function PageScannerSearch() {
   const [uploadFilterTab, setUploadFilterTab] = useState(draft.uploadFilterTab || "ALL");
   const fileInputRef = useRef(null);
 
+  const draftMountedRef = useRef(false);
+
   useEffect(() => {
+    if (!draftMountedRef.current) {
+      draftMountedRef.current = true;
+      return;
+    }
     saveInputDraft(getSessionUserId(), {
       sourceMode,
       pasteContent,
@@ -557,12 +588,22 @@ export default function PageScannerSearch() {
   );
 
   const startPoll = useCallback(
-    (sid) => {
+    (sid, onDone = null) => {
       stopPolling();
       lastLoadedRef.current = 0;
-      pollRef.current = setInterval(async () => {
+      let finished = false;
+      const tick = async () => {
+        if (finished) return;
+        const camp = campaignRef.current;
+        if (onDone && camp.abort) {
+          finished = true;
+          stopPolling();
+          onDone({ status: "STOPPED", stop_reason: "USER_STOPPED" });
+          return;
+        }
         try {
           const session = await getScanSessionDetail(sid);
+          if (finished) return;
           const count = session.pages_count || session.total_unique || 0;
           if (session.status === "PAUSED") setRunPhase("paused");
           else if (session.status === "RUNNING") setRunPhase((p) => (p === "paused" ? "running" : p));
@@ -616,22 +657,29 @@ export default function PageScannerSearch() {
             });
           }
 
+          const ids = sessionIdsRef.current.length ? sessionIdsRef.current : [sid];
           if (count > lastLoadedRef.current) {
             lastLoadedRef.current = count;
-            const ids = sessionIdsRef.current.length ? sessionIdsRef.current : [sid];
-            loadResults(sid, 1, ids);
+            loadResults(sid, currentPageRef.current, ids);
           }
           if (DONE_STATUSES.includes(session.status)) {
+            finished = true;
             stopPolling();
+            // Luôn tải kết quả lần cuối khi phiên kết thúc để không sót page cuối cùng
+            await loadResults(sid, currentPageRef.current, ids);
+            if (onDone) {
+              onDone(session);
+              return;
+            }
             // Đợt khôi phục sau reload không có vòng runMixedCampaign → tự kết thúc UI,
             // kể cả khi backend đánh FAILED phiên mồ côi (app đã tắt giữa chừng).
-            const camp = campaignRef.current;
-            if (camp.active && !camp.abort && !ownsCampaignRef.current) {
+            const curCamp = campaignRef.current;
+            if (curCamp.active && !curCamp.abort && !ownsCampaignRef.current) {
               watchDetachedCampaign(sid);
-            } else if (!camp.active) {
+            } else if (!curCamp.active) {
               setRunPhase("done");
               pushLog(
-                `Phiên #${sid} đã kết thúc · ${session.status}${session.error_message ? ` · ${session.error_message}` : ""}`,
+                `Phiên quét kết thúc (${statusLabelVi(session.status)})${session.error_message ? ` — ${session.error_message}` : ""}.`,
                 session.status === "FAILED" ? "error" : "info",
               );
             }
@@ -639,7 +687,8 @@ export default function PageScannerSearch() {
         } catch (e) {
           console.error(e);
         }
-      }, 1500);
+      };
+      pollRef.current = setInterval(tick, 1500);
     },
     [loadResults, stopPolling, pushLog, watchDetachedCampaign],
   );
@@ -766,7 +815,7 @@ export default function PageScannerSearch() {
       if (allLogs.length) setLogs(allLogs.slice(-500));
 
       if (top) {
-        pushLog(`Khôi phục đợt ${campId || `#${top.id}`} · ${sessions.length} phiên · ${top.status}`, "warn");
+        pushLog(`Đang theo dõi lại phiên quét (${statusLabelVi(top.status)}).`, "info");
       }
       if (!camp.active && ids.length) saveScanState("search", { sessionIds: ids, campaignId: campId });
       lastLoadedRef.current = 0;
@@ -828,6 +877,7 @@ export default function PageScannerSearch() {
     loadSeqRef.current += 1;
     stopPolling();
     clearScanState("search");
+    saveInputDraft(getSessionUserId(), null);
     setRunPhase("idle");
     setSessionId(null);
     setCampaignId(null);
@@ -845,36 +895,10 @@ export default function PageScannerSearch() {
     filteredAllRef.current = [];
   };
 
-  const waitForSession = (sid, camp) =>
+  /** Dùng chung 1 vòng poll duy nhất với startPoll (tránh gọi trùng getScanSessionDetail). */
+  const waitForSession = (sid) =>
     new Promise((resolve) => {
-      const tick = async () => {
-        if (camp.abort) {
-          resolve({ status: "STOPPED", stop_reason: "USER_STOPPED" });
-          return;
-        }
-        try {
-          const session = await getScanSessionDetail(sid);
-          const count = session.pages_count || session.total_unique || 0;
-          if (count > lastLoadedRef.current) {
-            lastLoadedRef.current = count;
-            loadResults(sid, currentPageRef.current);
-          }
-          setKeywordProgress((prev) =>
-            prev.map((row, idx) => {
-              const isActive = prev.findIndex((r) => r.status === "scanning") === idx;
-              return isActive ? { ...row, count } : row;
-            }),
-          );
-          if (DONE_STATUSES.includes(session.status)) {
-            resolve(session);
-            return;
-          }
-        } catch {
-          /* retry */
-        }
-        setTimeout(tick, 1500);
-      };
-      tick();
+      startPoll(sid, resolve);
     });
 
   /**
@@ -976,8 +1000,8 @@ export default function PageScannerSearch() {
       top_n: topN === "" ? null : Number(topN),
     };
     pushLog(
-      `Đợt ${campId} [${modeLabel}] · ${jobs.length} phiên · KW: ${plainKeywords.join(", ") || "—"} · Tag: ${derivedHashtags.join(", ") || "—"}`,
-      "warn",
+      `Bắt đầu đợt quét ${jobs.length} mục tiêu: ${jobs.map((j) => j.label).join(", ")}.`,
+      "info",
     );
 
     let accState = { cursor: 0, pagesOnAcc: 0 };
@@ -1000,7 +1024,7 @@ export default function PageScannerSearch() {
         prev.map((row) => (row.keyword === job.label ? { ...row, status: "scanning" } : row)),
       );
       pushLog(
-        `[${job.channel}] ${job.label} · acc ${uid || "auto"} · pages/acc ${accState.pagesOnAcc}/${rotateEvery}`,
+        `Đang quét ${job.label}${uid ? ` · tài khoản ${uid}` : ""}.`,
         "info",
       );
 
@@ -1068,8 +1092,7 @@ export default function PageScannerSearch() {
         camp.sessionIds = [...collectedIds];
         if (campaignRef.current === camp) saveScanState("search", { sessionIds: camp.sessionIds, campaignId: campId });
         setActiveSessionIds([...collectedIds]);
-        startPoll(sid);
-        const session = await waitForSession(sid, camp);
+        const session = await waitForSession(sid);
         stopPolling();
         const count = session.pages_count || session.total_unique || 0;
         setKeywordProgress((prev) =>
@@ -1089,10 +1112,11 @@ export default function PageScannerSearch() {
           targetHint != null &&
           count < Number(targetHint) &&
           ["NO_NEW_RESULTS", "CYCLE_DETECTED", "PARTIAL", "COMPLETED"].includes(String(stopReason));
+        const reasonVi = stopReasonLabelVi(stopReason);
         pushLog(
           partialShort
-            ? `Xong ${job.label}: ${count}/${targetHint} page · ${stopReason} (thiếu hạn mức)`
-            : `Xong ${job.label}: +${count} · ${stopReason}`,
+            ? `Xong ${job.label}: tìm được ${count}/${targetHint} Page (${reasonVi}).`
+            : `Xong ${job.label}: tìm được ${count} Page (${reasonVi}).`,
           session.status === "FAILED" ? "error" : partialShort ? "warn" : "success",
         );
 
@@ -1114,20 +1138,23 @@ export default function PageScannerSearch() {
         // Chỉ báo đổi acc khi còn job phía sau
         if (nextAcc.rotated && i < jobs.length - 1) {
           pushLog(
-            `Đủ ${nextAcc.prevPages} page / tài khoản → job sau dùng ${selectedUids[nextAcc.cursor] || "?"}`,
+            `Đã quét đủ ${nextAcc.prevPages} Page trên tài khoản hiện tại — chuyển sang tài khoản ${selectedUids[nextAcc.cursor] || "kế tiếp"}.`,
             "warn",
           );
         }
         accState = { cursor: nextAcc.cursor, pagesOnAcc: nextAcc.pagesOnAcc };
         camp.accIndex = accState.cursor;
 
-        // Nghỉ theo cấu hình giữa các job (hashtag/kênh)
+        // Nghỉ theo cấu hình giữa các job (hashtag/kênh) — có thể ngắt ngay khi bấm Dừng khẩn cấp
         if (i < jobs.length - 1 && !camp.abort) {
           const lo = Math.min(delayMin, delayMax);
           const hi = Math.max(delayMin, delayMax);
           const gapSec = lo + Math.random() * Math.max(0, hi - lo);
           pushLog(`Nghỉ ${gapSec.toFixed(1)}s trước phiên tiếp theo...`, "info");
-          await new Promise((r) => setTimeout(r, gapSec * 1000));
+          const endAt = Date.now() + gapSec * 1000;
+          while (!camp.abort && Date.now() < endAt) {
+            await new Promise((r) => setTimeout(r, Math.min(250, Math.max(0, endAt - Date.now()))));
+          }
         }
 
         await loadResults(sid, 1, [...collectedIds]);
@@ -1148,7 +1175,7 @@ export default function PageScannerSearch() {
     if (camp.abort) {
       pushLog("Đã dừng khẩn cấp toàn bộ đợt quét.", "error");
     } else {
-      pushLog(`Đợt [${modeLabel}] hoàn tất — đang xếp hạng pool chung.`, "success");
+      pushLog("Hoàn tất toàn bộ đợt quét — đang cập nhật bảng kết quả.", "success");
       toast.success(`Hoàn thành đợt ${modeLabel}.`, { key: "m11-search-start" });
       if (collectedIds.length) {
         await loadResults(collectedIds[collectedIds.length - 1], 1, collectedIds);
@@ -1171,7 +1198,9 @@ export default function PageScannerSearch() {
     filteredAllRef.current = [];
 
     if (sourceMode === "keyword") {
-      return runMixedCampaign();
+      // Chạy campaign nền — không giữ isStarting suốt nhiều phút (tránh khóa nút QUÉT MỚI sau Dừng khẩn cấp)
+      void runMixedCampaign();
+      return;
     }
     if (sourceMode === "paste" || sourceMode === "upload") {
       return runDetailScan();
@@ -1189,7 +1218,7 @@ export default function PageScannerSearch() {
     setRunPhase("running");
     campaignRef.current = { paused: false, abort: false, queue: [], accIndex: 0, active: false, sessionIds: [] };
     ownsCampaignRef.current = false;
-    pushLog(isUpload ? `Đang đọc file "${fileName || "file"}"…` : "Đang chuẩn hoá danh sách link…", "info");
+    pushLog("Đang kiểm tra danh sách Page đầu vào…", "info");
     try {
       let parsed = isUpload ? uploadResult : null;
       if (isUpload && !parsed?.pages) {
@@ -1202,9 +1231,12 @@ export default function PageScannerSearch() {
       }
       const targets = (parsed?.pages || []).filter((p) => p.page_key);
       if (!targets.length) throw new Error("Không có link Page hợp lệ để quét.");
+      const extraInfo = [
+        parsed.dedup_count ? `bỏ ${parsed.dedup_count} trùng lặp` : "",
+        parsed.invalid_count ? `${parsed.invalid_count} link không hợp lệ` : "",
+      ].filter(Boolean);
       pushLog(
-        `Hợp lệ ${targets.length} page · trùng ${parsed.dedup_count || 0} · lỗi ${parsed.invalid_count || 0}` +
-        (parsed.already_existing_count ? ` · ${parsed.already_existing_count} page đã có trong kho (sẽ cập nhật)` : ""),
+        `Nhận diện ${targets.length} Page hợp lệ${extraInfo.length ? ` (${extraInfo.join(", ")})` : ""}.`,
         "info",
       );
 
@@ -1249,12 +1281,12 @@ export default function PageScannerSearch() {
       setSessionId(sid);
       setActiveSessionIds([sid]);
       setKeywordProgress([{ keyword: label, count: 0, status: "scanning", target }]);
-      pushLog(res.message || `Đã khởi động phiên #${sid}`, "success");
+      pushLog(`Đã khởi động quét thông tin ${target} Page.`, "success");
       toast.success(`Bắt đầu quét thông tin ${target} page.`, { key: "m11-search-start" });
       startPoll(sid);
     } catch (err) {
       setRunPhase("idle");
-      pushLog(err.message || "Lỗi khởi động phiên", "error");
+      pushLog(err.message || "Không thể khởi động phiên quét.", "error");
       toast.error(err.message || "Lỗi khởi động phiên", { key: "m11-search-start" });
     }
   };
@@ -1268,10 +1300,10 @@ export default function PageScannerSearch() {
         try {
           await resumeScanSession(sessionId);
         } catch (err) {
-          pushLog(`Resume lỗi: ${err.message}`, "error");
+          pushLog(`Không thể tiếp tục phiên: ${err.message}`, "error");
         }
       }
-      pushLog("Tiếp tục phiên đang tạm dừng.", "success");
+      pushLog("Đã tiếp tục phiên đang tạm dừng.", "success");
       toast.info("Đã tiếp tục.", { key: "m11-search-pause" });
       return;
     }
@@ -1281,10 +1313,10 @@ export default function PageScannerSearch() {
       try {
         await pauseScanSession(sessionId);
       } catch (err) {
-        pushLog(`Pause lỗi: ${err.message}`, "error");
+        pushLog(`Không thể tạm dừng phiên: ${err.message}`, "error");
       }
     }
-    pushLog("Tạm dừng phiên tại điểm an toàn.", "warn");
+    pushLog("Đã tạm dừng phiên quét.", "warn");
     toast.info("Đã tạm dừng.", { key: "m11-search-pause" });
   };
 
@@ -1299,12 +1331,12 @@ export default function PageScannerSearch() {
     try {
       if (sessionId) {
         await stopScanSession(sessionId).catch(() => {});
-        pushLog(`Đã gửi dừng khẩn cấp phiên #${sessionId}.`, "error");
+        pushLog("Đã gửi yêu cầu dừng khẩn cấp phiên hiện tại.", "error");
       }
       await emergencyStopAll().catch(() => {});
-      pushLog("Đã dọn dẹp và giải phóng toàn bộ trình duyệt quét Fanpage.", "warn");
+      pushLog("Đã đóng trình duyệt và giải phóng tài khoản.", "warn");
     } catch (err) {
-      pushLog(`Lỗi dừng: ${err.message}`, "error");
+      pushLog(`Lỗi khi dừng phiên: ${err.message}`, "error");
     } finally {
       setShowEmergencyModal(false);
       setRunPhase("done");
@@ -1722,12 +1754,15 @@ export default function PageScannerSearch() {
               {uploadPreviewRows.length > 0 && (() => {
                 const validRows = uploadPreviewRows.filter((r) => r.status === "valid");
                 const dupRows = uploadPreviewRows.filter((r) => r.status === "duplicate");
+                const invalidRows = uploadPreviewRows.filter((r) => r.status === "invalid");
                 const displayRows =
                   uploadFilterTab === "VALID"
                     ? validRows
                     : uploadFilterTab === "DUP"
                       ? dupRows
-                      : uploadPreviewRows;
+                      : uploadFilterTab === "INVALID"
+                        ? invalidRows
+                        : uploadPreviewRows;
                 return (
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1765,6 +1800,18 @@ export default function PageScannerSearch() {
                         >
                           Trùng lặp ({dupRows.length})
                         </button>
+                        {invalidRows.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setUploadFilterTab("INVALID")}
+                            className={`rounded-full px-2.5 py-0.5 font-bold ${uploadFilterTab === "INVALID"
+                              ? "bg-[#FEE2E2] text-[#DC2626]"
+                              : "bg-[#FEE2E2]/60 text-[#DC2626]"
+                              }`}
+                          >
+                            Lỗi ({invalidRows.length})
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -1775,7 +1822,7 @@ export default function PageScannerSearch() {
                             <tr className="border-b border-[#E2E8F0]">
                               <th className="w-14 px-3 py-2">Dòng</th>
                               <th className="px-3 py-2">Dữ liệu tệp</th>
-                              <th className="w-24 px-3 py-2 text-center">Trạng thái</th>
+                              <th className="w-28 px-3 py-2 text-center">Trạng thái</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-[#F1F5F9]">
@@ -1792,9 +1839,13 @@ export default function PageScannerSearch() {
                                     <span className="rounded-full bg-[#ECFDF5] px-2.5 py-0.5 text-[10px] font-bold text-[#059669]">
                                       Hợp lệ
                                     </span>
-                                  ) : (
+                                  ) : r.status === "duplicate" ? (
                                     <span className="rounded-full bg-[#FEF3C7] px-2.5 py-0.5 text-[10px] font-bold text-[#D97706]">
                                       Trùng lặp
+                                    </span>
+                                  ) : (
+                                    <span className="rounded-full bg-[#FEE2E2] px-2.5 py-0.5 text-[10px] font-bold text-[#DC2626]">
+                                      Không hợp lệ
                                     </span>
                                   )}
                                 </td>
@@ -1804,7 +1855,7 @@ export default function PageScannerSearch() {
                         </table>
                       </div>
                       <div className="border-t border-[#F1F5F9] bg-[#F8FAFC] px-3 py-1.5 text-right text-[11px] text-[#94A3B8]">
-                        Hiển thị {Math.min(5, displayRows.length)} trên {uploadPreviewRows.length} dòng được phân tích
+                        Hiển thị {displayRows.length} trên {uploadPreviewRows.length} dòng được phân tích
                       </div>
                     </div>
                   </div>
@@ -2090,8 +2141,16 @@ export default function PageScannerSearch() {
                   <tr>
                     <th className="w-10 px-4 py-2.5">
                       <Checkbox
-                        checked={pages.length > 0 && selectedPageKeys.length === pages.length}
-                        onCheckedChange={(c) => setSelectedPageKeys(c ? pages.map((p) => p.page_key) : [])}
+                        checked={pages.length > 0 && pages.every((p) => selectedPageKeys.includes(p.page_key))}
+                        onCheckedChange={(c) => {
+                          const pageKeyList = pages.map((p) => p.page_key);
+                          const pageKeySet = new Set(pageKeyList);
+                          setSelectedPageKeys((prev) =>
+                            c
+                              ? Array.from(new Set([...prev, ...pageKeyList]))
+                              : prev.filter((k) => !pageKeySet.has(k)),
+                          );
+                        }}
                       />
                     </th>
                     <th className="w-14 px-2 py-2.5">STT</th>

@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useCallback } from "react";
-import { ChevronLeft, ChevronRight, Copy } from "lucide-react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowDown, ChevronLeft, ChevronRight, Copy } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { toast } from "@/lib/toast";
 import { askConfirm } from "./shared/askConfirm";
@@ -36,9 +36,8 @@ export function formatLogsForCopy(logs = []) {
   return logs
     .map((log) => {
       const ts = log.timestamp || log.ts || log.time || "";
-      const thread = log.thread != null && log.thread !== "" ? ` [${log.thread}]` : "";
       const msg = log.message || log.text || "";
-      return ts ? `[${ts}]${thread} ${msg}` : `${thread} ${msg}`.trim();
+      return ts ? `[${ts}] ${msg}` : msg.trim();
     })
     .join("\n");
 }
@@ -58,22 +57,78 @@ export async function copyLogsToClipboard(logs = []) {
   }
 }
 
+const AUTO_SCROLL_THRESHOLD_PX = 28;
+
+function isNearBottom(el) {
+  if (!el) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= AUTO_SCROLL_THRESHOLD_PX;
+}
+
 /**
  * Khung log theo thiết kế: "Live Automation Log Console [Thread-01 - <tác vụ>]", chip trạng thái,
  * nút copy dạng icon, nền tối, timestamp + [Thread-01] trước mỗi dòng.
+ * Smart auto-scroll: mặc định tự cuộn tới dòng mới nhất; khi người dùng kéo lên đọc log cũ
+ * sẽ tạm dừng auto-scroll và hiện nút "Mới nhất" để nhảy về cuối.
  */
-export function LiveLogConsole({ title, task, thread = "Thread-01", logs, phase }) {
-  const label = phase === "paused" ? "PAUSED" : phase === "running" ? "RUNNING" : phase === "done" ? "DONE" : "IDLE";
+export function LiveLogConsole({ title, task, logs, phase }) {
+  const list = Array.isArray(logs) ? logs : [];
+  const lastLogId = list.length ? list[list.length - 1]?.id ?? list[list.length - 1]?.message : null;
+  const label =
+    phase === "paused"
+      ? "TẠM DỪNG"
+      : phase === "running"
+        ? "ĐANG CHẠY"
+        : phase === "done"
+          ? "HOÀN TẤT"
+          : "CHỜ CHẠY";
   const color =
     phase === "paused"
       ? "border-amber-500/30 bg-amber-500/10 text-amber-400"
       : phase === "running"
         ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
         : "border-slate-500/30 bg-slate-500/10 text-slate-400";
-  const heading = title || `Live Automation Log Console [${thread}${task ? ` - ${task}` : ""}]`;
+  const heading = title || (task ? `Nhật ký quét — ${task}` : "Nhật ký quét");
 
   const [isCopying, guardCopy] = useActionLock();
-  const handleCopy = useCallback(() => guardCopy(() => copyLogsToClipboard(logs)), [guardCopy, logs]);
+  const handleCopy = useCallback(() => guardCopy(() => copyLogsToClipboard(list)), [guardCopy, list]);
+
+  const scrollRef = useRef(null);
+  const stickToBottomRef = useRef(true);
+  const [showJumpLatest, setShowJumpLatest] = useState(false);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const atBottom = isNearBottom(el);
+    stickToBottomRef.current = atBottom;
+    setShowJumpLatest(!atBottom && list.length > 0);
+  }, [list.length]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (list.length === 0) {
+      stickToBottomRef.current = true;
+      setShowJumpLatest(false);
+      return;
+    }
+    if (stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+      setShowJumpLatest(false);
+    }
+  }, [list.length, lastLogId]);
+
+  const handleJumpLatest = useCallback(() => {
+    const el = scrollRef.current;
+    stickToBottomRef.current = true;
+    setShowJumpLatest(false);
+    if (!el) return;
+    if (typeof el.scrollTo === "function") {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, []);
 
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-800 bg-[#0B1220] shadow-md">
@@ -94,7 +149,7 @@ export function LiveLogConsole({ title, task, thread = "Thread-01", logs, phase 
           <button
             type="button"
             onClick={handleCopy}
-            disabled={!logs?.length || isCopying}
+            disabled={!list.length || isCopying}
             className="rounded-md p-1 text-slate-400 transition hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
             title="Sao chép toàn bộ log"
             aria-label="Sao chép toàn bộ log"
@@ -103,29 +158,45 @@ export function LiveLogConsole({ title, task, thread = "Thread-01", logs, phase 
           </button>
         </div>
       </div>
-      <div className="max-h-64 space-y-2 overflow-y-auto px-4 py-4 font-mono text-[11px] leading-relaxed">
-        {logs.length === 0 ? (
-          <p className="text-slate-500">Chờ log phiên…</p>
-        ) : (
-          logs.map((log) => (
-            <div key={log.id} className="flex items-start gap-2 text-slate-300">
-              <span className="shrink-0 text-slate-500">[{log.timestamp}]</span>
-              <span className="shrink-0 text-[#60A5FA]">[{log.thread || thread}]</span>
-              <span
-                className={
-                  log.type === "success"
-                    ? "text-emerald-400"
-                    : log.type === "warn"
-                      ? "text-amber-300"
-                      : log.type === "error"
-                        ? "text-rose-400"
-                        : "text-slate-200"
-                }
-              >
-                {log.message}
-              </span>
-            </div>
-          ))
+      <div className="relative">
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="max-h-64 space-y-2 overflow-y-auto px-4 py-4 font-mono text-[11px] leading-relaxed"
+        >
+          {list.length === 0 ? (
+            <p className="text-slate-500">Chờ tiến trình quét…</p>
+          ) : (
+            list.map((log) => (
+              <div key={log.id} className="flex items-start gap-2 text-slate-300">
+                <span className="shrink-0 text-slate-500">[{log.timestamp}]</span>
+                <span
+                  className={
+                    log.type === "success"
+                      ? "text-emerald-400"
+                      : log.type === "warn"
+                        ? "text-amber-300"
+                        : log.type === "error"
+                          ? "text-rose-400"
+                          : "text-slate-200"
+                  }
+                >
+                  {log.message}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+        {showJumpLatest && (
+          <button
+            type="button"
+            onClick={handleJumpLatest}
+            className="absolute bottom-3 right-4 inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900/95 px-2.5 py-1 font-mono text-[10px] font-semibold text-sky-300 shadow-lg backdrop-blur transition hover:border-sky-500/60 hover:bg-slate-800 hover:text-white"
+            aria-label="Cuộn tới log mới nhất"
+          >
+            <ArrowDown className="size-3" />
+            Mới nhất
+          </button>
         )}
       </div>
     </div>

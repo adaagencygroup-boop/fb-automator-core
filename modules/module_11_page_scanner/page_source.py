@@ -450,9 +450,9 @@ def parse_follower_count(text: Optional[str]) -> Tuple[Optional[int], str]:
         elif unit_str in ("nghìn", "ngàn", "n", "k"):
             val *= 1_000
 
-        return (int(val), clean_text)
+        return (int(val), clean_text[:100])
     except (ValueError, TypeError):
-        return (None, clean_text)
+        return (None, clean_text[:100])
 
 
 def parse_compact_count(text: Optional[str]) -> Optional[int]:
@@ -647,40 +647,67 @@ def parse_page_file_content(
             "already_existing_count": 0,
         }
 
+    _HEADER_COL_NAMES = {
+        "page_url", "page url", "link", "url", "fanpage", "link fanpage", "link page",
+        "url page", "đường dẫn", "link fb", "fb link", "facebook", "facebook_url", "facebook url",
+    }
+
+    def _is_header_cell(cell: str) -> bool:
+        c = (cell or "").strip().strip('"').strip("'").lower()
+        if not c or "http://" in c or "https://" in c or "facebook.com" in c or "fb.com" in c:
+            return False
+        return c in _HEADER_COL_NAMES
+
     lines = [line.strip() for line in content.splitlines()]
     non_empty = [l for l in lines if l and not l.startswith("#")]
-    # File 1 cột có dòng tiêu đề (vd "page_url") → bỏ tiêu đề, không tính là dòng lỗi
-    if non_empty and non_empty[0].strip().strip('"').lower() in ("page_url", "link", "url", "fanpage"):
-        non_empty = non_empty[1:]
-    total_lines = len(non_empty)
 
     raw_candidates: List[str] = []
 
-    # Kiểm tra xem có phải định dạng CSV có header không
+    # Kiểm tra xem có phải định dạng CSV nhiều cột có header (không phân biệt hoa/thường)
     is_csv = False
+    csv_delim = ","
     if non_empty:
-        header_candidate = non_empty[0].lower()
-        if "," in header_candidate and any(col in header_candidate for col in ["page_url", "link", "url", "fanpage"]):
-            is_csv = True
+        first_line = non_empty[0]
+        for delim in (",", ";", "\t"):
+            if delim in first_line:
+                first_cells = next(csv.reader([first_line], delimiter=delim), [])
+                if len(first_cells) > 1 and any(_is_header_cell(c) for c in first_cells):
+                    is_csv = True
+                    csv_delim = delim
+                    break
 
     if is_csv:
-        reader = csv.DictReader(io.StringIO("\n".join(non_empty)))
+        reader = csv.DictReader(io.StringIO("\n".join(non_empty)), delimiter=csv_delim)
         for row in reader:
-            val = (
-                row.get("page_url")
-                or row.get("link")
-                or row.get("url")
-                or row.get("fanpage")
-                or ""
-            )
-            if val and val.strip():
-                raw_candidates.append(val.strip())
+            norm_row = {
+                str(k or "").strip().strip('"').strip("'").lower(): (v or "").strip()
+                for k, v in row.items()
+                if k is not None
+            }
+            val = ""
+            for col in (
+                "page_url", "page url", "link fanpage", "link page", "url page",
+                "facebook_url", "facebook url", "link fb", "fb link", "link", "url",
+                "fanpage", "đường dẫn", "facebook",
+            ):
+                if norm_row.get(col):
+                    val = norm_row[col]
+                    break
+            if val:
+                raw_candidates.append(val)
+        total_lines = len(raw_candidates)
     else:
+        # File 1 cột có dòng tiêu đề (vd "page_url", "URL", "Link Fanpage") → bỏ tiêu đề, không tính là dòng lỗi
+        if non_empty and _is_header_cell(non_empty[0]):
+            non_empty = non_empty[1:]
+        total_lines = len(non_empty)
         for line in non_empty:
-            # Tách dòng nếu có phẩy hoặc tab
-            parts = re.split(r"[\t,]", line)
-            if parts and parts[0].strip():
-                raw_candidates.append(parts[0].strip())
+            # Tách dòng nếu có phẩy hoặc tab; nếu nhiều cột không có header thì ưu tiên ô chứa link/domain
+            parts = [p.strip().strip('"') for p in re.split(r"[\t,]", line) if p.strip().strip('"')]
+            if not parts:
+                continue
+            picked = next((p for p in parts if "facebook.com" in p.lower() or "fb.com" in p.lower() or p.lower().startswith("http")), parts[0])
+            raw_candidates.append(picked)
 
     seen_keys: Set[str] = set()
     pages: List[Dict[str, Any]] = []
