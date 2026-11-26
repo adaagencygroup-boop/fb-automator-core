@@ -413,6 +413,32 @@ export default function AccountManagerModule() {
     }
   };
 
+  const handleCopyAllUids = async () => {
+    if (!accounts.length) return false;
+    const text = accounts.map((a) => a.uid).join("\n");
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand("copy");
+        document.body.removeChild(textarea);
+        if (!copied) throw new Error("Clipboard unavailable");
+      }
+      toast.success(`Đã copy ${accounts.length} UID vào clipboard.`, "COPY UID");
+      return true;
+    } catch (error) {
+      toast.error(`Không thể copy UID: ${error?.message || String(error)}`, "LỖI COPY");
+      return false;
+    }
+  };
+
   const handleCheckStatus = async () => {
     if (!selectedUids.length || isCheckingStatus) return;
     setIsCheckingStatus(true);
@@ -578,6 +604,7 @@ export default function AccountManagerModule() {
         onDeleteAccount={handleDeleteSingle}
         onOpenBrowser={handleOpenBrowser}
         onBulkDelete={handleBulkDelete}
+        onCopyAllUids={handleCopyAllUids}
         onRefresh={handleCheckStatus}
         isCheckingStatus={isCheckingStatus}
         accountProgress={realtime.progress}

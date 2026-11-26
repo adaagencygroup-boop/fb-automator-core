@@ -156,6 +156,7 @@ export default function AccountTable({
   onDeleteAccount,
   onOpenBrowser,
   onBulkDelete,
+  onCopyAllUids,
   onRefresh,
   isCheckingStatus = false,
   accountProgress = {},
@@ -168,6 +169,9 @@ export default function AccountTable({
   const [expandedUids, setExpandedUids] = useState(new Set());
   const [closingUids, setClosingUids] = useState(new Set());
   const [copiedUid, setCopiedUid] = useState(null);
+  const [copiedAllUids, setCopiedAllUids] = useState(false);
+  const copyAllTimerRef = useRef(null);
+  useEffect(() => () => clearTimeout(copyAllTimerRef.current), []);
   const [now, setNow] = useState(null);
   useEffect(() => {
     const update = () => setNow(Date.now());
@@ -316,8 +320,35 @@ export default function AccountTable({
           </div>
         </div>
 
-        {/* Toolbar Action Buttons (Check trạng thái & Xóa) */}
+        {/* Toolbar Action Buttons (Copy UID, Chuyển mục, Check trạng thái & Xóa) */}
         <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={async () => {
+              if (!onCopyAllUids) return;
+              const ok = await onCopyAllUids();
+              if (ok) {
+                setCopiedAllUids(true);
+                clearTimeout(copyAllTimerRef.current);
+                copyAllTimerRef.current = setTimeout(() => setCopiedAllUids(false), 1500);
+              }
+            }}
+            disabled={isLoading || filteredAccounts.length === 0}
+            title={`Copy toàn bộ ${filteredAccounts.length} UID đang hiển thị (mỗi UID 1 dòng)`}
+            className="flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+          >
+            {copiedAllUids ? (
+              <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+            ) : (
+              <Copy className="h-3.5 w-3.5 shrink-0" />
+            )}
+            <span>
+              {copiedAllUids ? "Đã copy UID" : "Copy UID"}
+              {filteredAccounts.length > 0 && (
+                <span className="tabular-nums"> ({filteredAccounts.length})</span>
+              )}
+            </span>
+          </button>
           <button type="button" onClick={onMoveCategory}
             disabled={isLoading || categoryUnavailable || selectedUids.length === 0}
             title={`Chuyển mục cho ${selectedUids.length} tài khoản đã chọn`}
