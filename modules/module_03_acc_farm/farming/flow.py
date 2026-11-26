@@ -1034,7 +1034,7 @@ const inViewer = path.startsWith('/stories/') && !path.startsWith('/stories/crea
 const labels = Array.from(document.querySelectorAll('[role="button"][aria-label], [role="link"][aria-label]'))
   .filter(vis).map((b) => b.getAttribute('aria-label').trim());
 const reacts = labels.filter((l) => /^(Like|Love|Care|Haha|Wow|Sad|Angry|Thích|Yêu thích|Thương thương|Buồn|Phẫn nộ)$/.test(l)).length;
-const end = !inViewer || labels.includes('Create story');
+const end = !inViewer || labels.includes('Create story') || labels.includes('Tạo tin');
 const vw = innerWidth;
 let media = null, area = 0;
 for (const m of document.querySelectorAll('img, video')) {
@@ -2067,11 +2067,20 @@ def run_add_friends_from_links(driver, ctl: FarmControl, links: list, target: in
 
 LEAVE_SCROLL_ROUNDS = 6  # Cuộn danh sách nhóm giữa trang để tải đủ thẻ (thẻ tải dần khi cuộn)
 
-# Nhóm đã tham gia trên groups/joins (đã kiểm 2026-10-22): thẻ giữa trang "<Tên> | You last visited | <thời gian>"
-# + nút More (1 nhóm vẽ nhiều bản, gom theo link); cột trái "Groups you manage" (admin) rồi "Groups you've joined",
-# mỗi dòng "Last active <thời gian>". Tên nhóm có thể trùng nhau nên gom theo link /groups/<id|tên>.
+# Nhóm đã tham gia trên groups/joins (kiểm EN 2026-10-22, VI 2026-11-26): thẻ giữa trang "<Tên> | You last visited |
+# <thời gian>" (VI: "Lần truy cập gần đây nhất:") + nút More (VI: "Xem thêm"); 1 nhóm vẽ nhiều bản, gom theo link.
+# Cột trái "Groups you manage" (admin) rồi "Groups you've joined" (VI: "Nhóm bạn đã tham gia"), mỗi dòng
+# "Last active <thời gian>" (VI: "Lần hoạt động gần nhất: <thời gian>"). Tên nhóm trùng nhau → gom theo link.
+# AN TOÀN ADMIN: nhãn VI của mục nhóm quản lý chưa thấy (nick test không làm admin) → mọi nhóm ở cột trái nằm TRƯỚC
+# tiêu đề "nhóm đã tham gia" đều coi là admin (giữ lại), không phụ thuộc chữ của tiêu đề mục admin.
 _JOINED_GROUPS_JS = r"""
 const RESERVED = ['joins', 'discover', 'feed', 'create', 'search', 'notifications'];
+const MORE = ['More', 'Xem thêm'];
+const VISITED = /^(You last visited|Lần truy cập gần đây nhất):?\s*(.*)$/i;
+const ACTIVE = /(?:Last active|Lần hoạt động gần nhất):?\s+([^\n]+)/;
+const MANAGE = ['Groups you manage', 'Nhóm do bạn quản lý', 'Nhóm bạn quản lý'];
+const JOINED = ["Groups you've joined", 'Groups you’ve joined', 'Nhóm bạn đã tham gia'];
+const isMore = (b) => MORE.includes(b.getAttribute('aria-label'));
 const idOf = (a) => {
   const m = (a.getAttribute('href') || '').match(/\/groups\/([^/?#]+)/);
   return m && !RESERVED.includes(m[1]) ? m[1] : null;
@@ -2086,34 +2095,38 @@ for (const a of (main ? main.querySelectorAll('a[href*="/groups/"]') : [])) {
   let node = a, card = null;
   for (let i = 0; i < 12 && node; i++, node = node.parentElement) {
     if (groupIds(node).size > 1) break;
-    if (node.querySelector('[role="button"][aria-label="More"]')) { card = node; break; }
+    if (Array.from(node.querySelectorAll('[role="button"][aria-label]')).some(isMore)) { card = node; break; }
   }
   if (!card) continue;
   const lines = (card.innerText || '').split('\n').map((s) => s.trim()).filter(Boolean);
-  const at = lines.findIndex((l) => /^You last visited$/i.test(l));
+  const at = lines.findIndex((l) => VISITED.test(l));
   const g = get(id, lines[0]);
   g.card = true;
-  g.visited = at >= 0 ? (lines[at + 1] || null) : null;
+  if (at >= 0) {
+    const same = lines[at].match(VISITED)[2];  // "Lần truy cập gần đây nhất: 6 ngày trước" cùng 1 dòng
+    g.visited = same || lines[at + 1] || null;
+  }
 }
 for (const nav of document.querySelectorAll('[role="navigation"]')) {
-  let section = null;
+  // Trước tiêu đề "nhóm đã tham gia" = mục nhóm quản lý (an toàn: coi là admin kể cả khi không đọc được tiêu đề)
+  let section = 'manage';
   for (const el of nav.querySelectorAll('*')) {
     if (!el.children.length) {
       const t = (el.textContent || '').trim();
-      if (t === 'Groups you manage') section = 'manage';
-      else if (t === "Groups you've joined") section = 'joined';
+      if (MANAGE.includes(t)) section = 'manage';
+      else if (JOINED.includes(t)) section = 'joined';
     }
-    if (el.tagName !== 'A' || !section) continue;
+    if (el.tagName !== 'A') continue;
     const id = idOf(el);
     if (!id) continue;
     let node = el, text = '';
     for (let i = 0; i < 4 && node; i++, node = node.parentElement) {
       if (groupIds(node).size > 1) break;
       text = node.innerText || '';
-      if (/Last active/.test(text)) break;
+      if (ACTIVE.test(text)) break;
     }
     const g = get(id, (el.innerText || '').split('\n')[0].trim());
-    const m = text.match(/Last active\s+([^\n]+)/);
+    const m = text.match(ACTIVE);
     if (m) g.active = m[1].trim();
     if (section === 'manage') g.admin = true;
   }
@@ -2132,7 +2145,8 @@ for (const a of (main ? main.querySelectorAll('a[href*="/groups/"]') : [])) {
   let node = a;
   for (let i = 0; i < 12 && node; i++, node = node.parentElement) {
     if (new Set(Array.from(node.querySelectorAll('a[href*="/groups/"]'), idOf).filter(Boolean)).size > 1) break;
-    const more = Array.from(node.querySelectorAll('[role="button"][aria-label="More"]')).find((b) => b.getClientRects().length);
+    const more = Array.from(node.querySelectorAll('[role="button"][aria-label]'))
+      .find((b) => ['More', 'Xem thêm'].includes(b.getAttribute('aria-label')) && b.getClientRects().length);
     if (more) return more;
   }
 }
@@ -2141,15 +2155,23 @@ return null;
 
 _AGO_UNITS = {"second": 1 / 86400, "minute": 1 / 1440, "hour": 1 / 24, "day": 1, "week": 7, "month": 30, "year": 365}
 _AGO_RE = re.compile(r"^(?:about |over |almost )?(a few|a|an|one|\d+) (second|minute|hour|day|week|month|year)s? ago$")
+# Tiếng Việt (kiểm 2026-11-26): "vài giây trước", "khoảng 1 phút trước", "3 phút trước", "13 giờ trước", "6 ngày trước"
+_AGO_UNITS_VI = {"giây": "second", "phút": "minute", "giờ": "hour", "ngày": "day", "tuần": "week", "tháng": "month",
+                 "năm": "year"}
+_AGO_RE_VI = re.compile(r"^(?:khoảng |hơn |gần )?(vài|một|\d+) (giây|phút|giờ|ngày|tuần|tháng|năm) trước$")
 
 
 def parse_ago_days(text: Optional[str]) -> Optional[float]:
-    """'5 days ago' -> 5; 'about an hour ago' -> 0.04; 'a week ago' -> 7. Không nhận ra dạng chữ thì None."""
+    """'5 days ago' / '5 ngày trước' -> 5; 'about an hour ago' -> 0.04; 'a week ago' -> 7. Không nhận ra thì None."""
     value = re.sub(r"\s+", " ", (text or "").strip().lower())
-    if value == "just now":
+    if value in ("just now", "vừa xong"):
         return 0.0
-    if value == "yesterday":
+    if value in ("yesterday", "hôm qua"):
         return 1.0
+    vi = _AGO_RE_VI.match(value)
+    if vi:
+        count = {"vài": 3, "một": 1}.get(vi.group(1))
+        return (count if count is not None else int(vi.group(1))) * _AGO_UNITS[_AGO_UNITS_VI[vi.group(2)]]
     m = _AGO_RE.match(value)
     if not m:
         return None
@@ -2196,7 +2218,7 @@ def _leave_group(driver, ctl: FarmControl, group_id: str) -> str:
     dialog = dialogs[-1]
     try:
         text = dialog.text or ""
-        if re.search(r"Delete group|Xóa nhóm", text):
+        if re.search(r"Delete group|X[oó]a nhóm|Xoá nhóm", text, re.IGNORECASE):
             # Nick là admin cuối: rời là xóa luôn nhóm, không bao giờ làm
             cancel = dialog.find_elements(By.XPATH, FARM_LEAVE["dialog_cancel"])
             if not (cancel and _human_click(driver, cancel[0])):
