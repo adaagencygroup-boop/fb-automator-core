@@ -320,7 +320,11 @@ export default function PostTargetSection({
           <button
             type="button"
             aria-haspopup="dialog"
-            onClick={() => !isRunning && setIsFetchOpen(true)}
+            onClick={() => {
+              if (isRunning) return;
+              toast.info("Đang mở danh sách bài viết…", "THÔNG BÁO");
+              window.setTimeout(() => setIsFetchOpen(true), 250);
+            }}
             disabled={isRunning}
             title={isRunning ? "Đang chạy seeding, không thể lấy bài viết từ page" : undefined}
             className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3.5 py-2 text-left text-xs font-semibold text-blue-700 shadow-sm hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
@@ -334,7 +338,6 @@ export default function PostTargetSection({
       {/* Popup lấy bài: luôn mount để lượt lấy bài chạy nền vẫn được theo dõi khi đóng popup */}
       <PostFetchModal open={isFetchOpen} onClose={() => setIsFetchOpen(false)}>
         <PostSourceFetcher
-          open={isFetchOpen}
           accounts={accounts}
           selectedUids={selectedUids}
           disabled={isRunning}

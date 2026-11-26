@@ -7,6 +7,7 @@
  */
 import { useEffect, useId, useRef } from "react";
 import { X } from "lucide-react";
+import Toaster from "@/components/Toaster";
 
 export default function PostFetchModal({ open, onClose, title = "Lấy bài viết từ page/ trang cá nhân", children }) {
   const dialog = useRef(null);
@@ -45,6 +46,7 @@ export default function PostFetchModal({ open, onClose, title = "Lấy bài vi�
           <X className="size-5" aria-hidden="true" />
         </button>
       </header>
+      <Toaster />
       {children}
     </dialog>
   );

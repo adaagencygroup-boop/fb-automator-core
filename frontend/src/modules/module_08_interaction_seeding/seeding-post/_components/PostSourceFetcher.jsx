@@ -89,7 +89,6 @@ function splitContent(content) {
 }
 
 export default function PostSourceFetcher({
-  open = false,
   accounts = [],
   selectedUids = [],
   disabled = false,
@@ -122,7 +121,6 @@ export default function PostSourceFetcher({
   const dragSelectRef = useRef({ active: false, moved: false, startId: null });
   const terminalToastJobsRef = useRef(new Set());
   const rotationJobsRef = useRef(new Set());
-  const wasOpenRef = useRef(open);
   const sourceKey = job?.source_key || "";
   const running = isActive(job);
   const fetchBusy = running || starting;
@@ -148,13 +146,6 @@ export default function PostSourceFetcher({
   const accountUid = scanAccount?.uid || "";
   const accountLabel = scanAccount ? scanAccount.profile_name || scanAccount.name || scanAccount.uid : "";
 
-  useEffect(() => {
-    if (open && !wasOpenRef.current && list.total > 0 && list.available) {
-      setSourceUrl("");
-    }
-    wasOpenRef.current = open;
-  }, [open, list.total, list.available]);
-
   // Khôi phục lượt lấy bài đang chạy / gần nhất khi mở lại màn
   useEffect(() => {
     let alive = true;
@@ -167,6 +158,7 @@ export default function PostSourceFetcher({
           return;
         }
         setJob(res.job);
+        setSourceUrl((current) => current || res.job.source_url || "");
         if (!res.job.source_key) setRestoringSource(false);
       })
       .catch(() => {
@@ -187,7 +179,7 @@ export default function PostSourceFetcher({
     return () => clearTimeout(t);
   }, [qInput]);
 
-  // Đổi nguồn / từ khoá → tải lại từ đầu và bỏ lựa chọn ("tất cả kết quả lọc" gắn với từ khoá lúc chọn)
+  // Đổi nguồn → tải lại danh sách; đổi từ khóa chỉ lọc cục bộ và bỏ lựa chọn cũ.
   useEffect(() => {
     listGeneration.current += 1;
     listSeq.current += 1;
@@ -196,7 +188,11 @@ export default function PostSourceFetcher({
     listItemsRef.current = [];
     setList({ items: [], total: 0, available: true });
     setSel(emptySelection());
-  }, [sourceKey, q]);
+  }, [sourceKey]);
+
+  useEffect(() => {
+    setSel(emptySelection());
+  }, [q]);
 
   const loadList = useCallback(async (allPages = true) => {
     const generation = listGeneration.current;
@@ -219,7 +215,6 @@ export default function PostSourceFetcher({
       const firstPage = allPages ? 1 : Math.floor(existingItems.length / PAGE_SIZE) + 1;
       const res = await postFetchApi.listPosts({
         source_key: sourceKey,
-        q: q || undefined,
         type: "all",
         page: firstPage,
         page_size: PAGE_SIZE,
@@ -241,7 +236,6 @@ export default function PostSourceFetcher({
       while (pageNumber <= Math.ceil(total / PAGE_SIZE) && items.length < total) {
         const pageRes = await postFetchApi.listPosts({
           source_key: sourceKey,
-          q: q || undefined,
           type: "all",
           page: pageNumber,
           page_size: PAGE_SIZE,
@@ -268,7 +262,7 @@ export default function PostSourceFetcher({
         }
       }
     }
-  }, [sourceKey, q]);
+  }, [sourceKey]);
 
   useEffect(() => {
     loadListRef.current = loadList;
@@ -371,7 +365,15 @@ export default function PostSourceFetcher({
     };
   }, [running, job?.id, loadList, selectedUids, accounts, sourceUrl]);
 
-  const chosen = selectedCount(sel, list.total);
+  const visibleItems = useMemo(() => {
+    const needle = q.trim().toLocaleLowerCase();
+    if (!needle) return list.items;
+    return list.items.filter((item) =>
+      `${item.content || ""}\n${item.post_url || ""}`.toLocaleLowerCase().includes(needle),
+    );
+  }, [list.items, q]);
+  const visibleCount = visibleItems.length;
+  const chosen = selectedCount(sel, visibleCount);
   const pickN = Number(firstN);
   const pickValid = Number.isInteger(pickN) && pickN >= 1 && pickN <= 5000;
 
@@ -450,7 +452,7 @@ export default function PostSourceFetcher({
   };
 
   const handlePickFirst = async () => {
-    if (!pickValid) return;
+    if (!pickValid || fetchBusy || busy) return;
     const n = Math.min(5000, pickN);
     try {
       const res = await postFetchApi.firstPostIds({ source_key: sourceKey, q: q || undefined, type: "all", limit: n });
@@ -569,7 +571,7 @@ export default function PostSourceFetcher({
                       Làm mới
                     </button>
                   )}
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-gray-600">{fmt(list.total)} kết quả</span>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-gray-600">{fmt(visibleCount)} kết quả</span>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -588,6 +590,7 @@ export default function PostSourceFetcher({
                     inputMode="numeric"
                     pattern="[0-9]*"
                     value={firstN}
+                    disabled={busy || fetchBusy}
                     onChange={(e) => {
                       const value = e.target.value;
                       if (value === "") {
@@ -607,7 +610,7 @@ export default function PostSourceFetcher({
                 <button
                   type="button"
                   onClick={handlePickFirst}
-                  disabled={busy || !list.total || !pickValid}
+                  disabled={busy || fetchBusy || !visibleCount || !pickValid}
                   className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs text-gray-700 hover:bg-slate-200 disabled:opacity-50"
                 >
                   Chọn {pickValid ? fmt(pickN) : "N"} bài
@@ -620,13 +623,13 @@ export default function PostSourceFetcher({
                     className={CHECKBOX}
                     checked={sel.mode === "all"}
                     onChange={(e) => setSel(e.target.checked ? selectAllMatching() : emptySelection())}
-                    disabled={busy || !list.total}
+                    disabled={busy || fetchBusy || !visibleCount}
                   />
                   Chọn tất cả kết quả lọc
                 </label>
                 <button
                   type="button"
-                  disabled={busy || !chosen}
+                  disabled={busy || fetchBusy || !chosen}
                   onClick={() => setSel(emptySelection())}
                   className="shrink-0 px-2 py-1 text-gray-500 hover:text-blue-700 disabled:opacity-50"
                 >
@@ -636,11 +639,11 @@ export default function PostSourceFetcher({
             </div>
 
             <div className="max-h-[52vh] space-y-2 overflow-y-auto overscroll-contain pr-1">
-              {loadingList && !list.items.length ? (
+              {loadingList && !visibleItems.length ? (
                 <p className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 p-4 text-xs text-gray-500">
                   <Loader2 className="size-4 animate-spin text-blue-600" aria-hidden="true" /> Đang tải bài viết...
                 </p>
-              ) : !list.items.length ? (
+              ) : !visibleItems.length ? (
                 <p className="rounded-xl border border-slate-200 p-4 text-center text-xs text-gray-500">
                   {running
                     ? "Đang chờ bài đầu tiên..."
@@ -649,7 +652,7 @@ export default function PostSourceFetcher({
                       : "Không tìm thấy bài viết có thể đọc từ nguồn này."}
                 </p>
               ) : (
-                list.items.map((p) => {
+                visibleItems.map((p) => {
                   const checked = p.added || isSelected(sel, p.id);
                   const contentPreview = splitContent(p.content);
                   const date = formatDateOnly(p.published_text) || formatDateOnly(p.published_at) || "\u0043\u0068\u01b0\u0061\u0020\u0111\u1ecdc\u0020\u0111\u01b0\u1ee3c\u0020ng\u00e0y\u0020\u0111\u0103ng";
@@ -657,11 +660,15 @@ export default function PostSourceFetcher({
                     <label
                       key={p.id}
                       onMouseDown={(event) => {
-                        if (event.button !== 0 || busy || p.added) return;
+                        if (event.button !== 0 || busy || fetchBusy || p.added) return;
                         dragSelectRef.current = { active: true, moved: false, startId: p.id };
                       }}
                       onMouseEnter={() => {
                         const drag = dragSelectRef.current;
+                        if (busy || fetchBusy) {
+                          drag.active = false;
+                          return;
+                        }
                         if (!drag.active) return;
                         if (p.id !== drag.startId) drag.moved = true;
                         if (!drag.moved) return;
@@ -674,7 +681,7 @@ export default function PostSourceFetcher({
                       }}
                       className={`flex items-center gap-3 rounded-xl border p-3 ${
                         checked && !p.added ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white"
-                      } ${!p.added && !busy ? "cursor-pointer select-none hover:border-blue-300" : ""}`}
+                      } ${!p.added && !busy && !fetchBusy ? "cursor-pointer select-none hover:border-blue-300" : ""}`}
                     >
                       <input
                         type="checkbox"
@@ -684,7 +691,7 @@ export default function PostSourceFetcher({
                           if (dragSelectRef.current.moved) return;
                           setSel((s) => toggleOne(s, p.id));
                         }}
-                        disabled={busy || p.added}
+                        disabled={busy || fetchBusy || p.added}
                       />
                       <span className="min-w-0 space-y-1">
                         <span className="line-clamp-2 break-words text-xs font-bold text-gray-900">{contentPreview}</span>
