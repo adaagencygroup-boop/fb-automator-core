@@ -238,7 +238,13 @@ export default function PageScannerSearch() {
   const [uploadFilterTab, setUploadFilterTab] = useState(draft.uploadFilterTab || "ALL");
   const fileInputRef = useRef(null);
 
+  const draftMountedRef = useRef(false);
+
   useEffect(() => {
+    if (!draftMountedRef.current) {
+      draftMountedRef.current = true;
+      return;
+    }
     saveInputDraft(getSessionUserId(), {
       sourceMode,
       pasteContent,
@@ -557,12 +563,22 @@ export default function PageScannerSearch() {
   );
 
   const startPoll = useCallback(
-    (sid) => {
+    (sid, onDone = null) => {
       stopPolling();
       lastLoadedRef.current = 0;
-      pollRef.current = setInterval(async () => {
+      let finished = false;
+      const tick = async () => {
+        if (finished) return;
+        const camp = campaignRef.current;
+        if (onDone && camp.abort) {
+          finished = true;
+          stopPolling();
+          onDone({ status: "STOPPED", stop_reason: "USER_STOPPED" });
+          return;
+        }
         try {
           const session = await getScanSessionDetail(sid);
+          if (finished) return;
           const count = session.pages_count || session.total_unique || 0;
           if (session.status === "PAUSED") setRunPhase("paused");
           else if (session.status === "RUNNING") setRunPhase((p) => (p === "paused" ? "running" : p));
@@ -616,19 +632,26 @@ export default function PageScannerSearch() {
             });
           }
 
+          const ids = sessionIdsRef.current.length ? sessionIdsRef.current : [sid];
           if (count > lastLoadedRef.current) {
             lastLoadedRef.current = count;
-            const ids = sessionIdsRef.current.length ? sessionIdsRef.current : [sid];
-            loadResults(sid, 1, ids);
+            loadResults(sid, currentPageRef.current, ids);
           }
           if (DONE_STATUSES.includes(session.status)) {
+            finished = true;
             stopPolling();
+            // Luôn tải kết quả lần cuối khi phiên kết thúc để không sót page cuối cùng
+            await loadResults(sid, currentPageRef.current, ids);
+            if (onDone) {
+              onDone(session);
+              return;
+            }
             // Đợt khôi phục sau reload không có vòng runMixedCampaign → tự kết thúc UI,
             // kể cả khi backend đánh FAILED phiên mồ côi (app đã tắt giữa chừng).
-            const camp = campaignRef.current;
-            if (camp.active && !camp.abort && !ownsCampaignRef.current) {
+            const curCamp = campaignRef.current;
+            if (curCamp.active && !curCamp.abort && !ownsCampaignRef.current) {
               watchDetachedCampaign(sid);
-            } else if (!camp.active) {
+            } else if (!curCamp.active) {
               setRunPhase("done");
               pushLog(
                 `Phiên #${sid} đã kết thúc · ${session.status}${session.error_message ? ` · ${session.error_message}` : ""}`,
@@ -639,7 +662,8 @@ export default function PageScannerSearch() {
         } catch (e) {
           console.error(e);
         }
-      }, 1500);
+      };
+      pollRef.current = setInterval(tick, 1500);
     },
     [loadResults, stopPolling, pushLog, watchDetachedCampaign],
   );
@@ -828,6 +852,7 @@ export default function PageScannerSearch() {
     loadSeqRef.current += 1;
     stopPolling();
     clearScanState("search");
+    saveInputDraft(getSessionUserId(), null);
     setRunPhase("idle");
     setSessionId(null);
     setCampaignId(null);
@@ -845,36 +870,10 @@ export default function PageScannerSearch() {
     filteredAllRef.current = [];
   };
 
-  const waitForSession = (sid, camp) =>
+  /** Dùng chung 1 vòng poll duy nhất với startPoll (tránh gọi trùng getScanSessionDetail). */
+  const waitForSession = (sid) =>
     new Promise((resolve) => {
-      const tick = async () => {
-        if (camp.abort) {
-          resolve({ status: "STOPPED", stop_reason: "USER_STOPPED" });
-          return;
-        }
-        try {
-          const session = await getScanSessionDetail(sid);
-          const count = session.pages_count || session.total_unique || 0;
-          if (count > lastLoadedRef.current) {
-            lastLoadedRef.current = count;
-            loadResults(sid, currentPageRef.current);
-          }
-          setKeywordProgress((prev) =>
-            prev.map((row, idx) => {
-              const isActive = prev.findIndex((r) => r.status === "scanning") === idx;
-              return isActive ? { ...row, count } : row;
-            }),
-          );
-          if (DONE_STATUSES.includes(session.status)) {
-            resolve(session);
-            return;
-          }
-        } catch {
-          /* retry */
-        }
-        setTimeout(tick, 1500);
-      };
-      tick();
+      startPoll(sid, resolve);
     });
 
   /**
@@ -1068,8 +1067,7 @@ export default function PageScannerSearch() {
         camp.sessionIds = [...collectedIds];
         if (campaignRef.current === camp) saveScanState("search", { sessionIds: camp.sessionIds, campaignId: campId });
         setActiveSessionIds([...collectedIds]);
-        startPoll(sid);
-        const session = await waitForSession(sid, camp);
+        const session = await waitForSession(sid);
         stopPolling();
         const count = session.pages_count || session.total_unique || 0;
         setKeywordProgress((prev) =>
@@ -1121,13 +1119,16 @@ export default function PageScannerSearch() {
         accState = { cursor: nextAcc.cursor, pagesOnAcc: nextAcc.pagesOnAcc };
         camp.accIndex = accState.cursor;
 
-        // Nghỉ theo cấu hình giữa các job (hashtag/kênh)
+        // Nghỉ theo cấu hình giữa các job (hashtag/kênh) — có thể ngắt ngay khi bấm Dừng khẩn cấp
         if (i < jobs.length - 1 && !camp.abort) {
           const lo = Math.min(delayMin, delayMax);
           const hi = Math.max(delayMin, delayMax);
           const gapSec = lo + Math.random() * Math.max(0, hi - lo);
           pushLog(`Nghỉ ${gapSec.toFixed(1)}s trước phiên tiếp theo...`, "info");
-          await new Promise((r) => setTimeout(r, gapSec * 1000));
+          const endAt = Date.now() + gapSec * 1000;
+          while (!camp.abort && Date.now() < endAt) {
+            await new Promise((r) => setTimeout(r, Math.min(250, Math.max(0, endAt - Date.now()))));
+          }
         }
 
         await loadResults(sid, 1, [...collectedIds]);
@@ -1171,7 +1172,9 @@ export default function PageScannerSearch() {
     filteredAllRef.current = [];
 
     if (sourceMode === "keyword") {
-      return runMixedCampaign();
+      // Chạy campaign nền — không giữ isStarting suốt nhiều phút (tránh khóa nút QUÉT MỚI sau Dừng khẩn cấp)
+      void runMixedCampaign();
+      return;
     }
     if (sourceMode === "paste" || sourceMode === "upload") {
       return runDetailScan();
@@ -1722,12 +1725,15 @@ export default function PageScannerSearch() {
               {uploadPreviewRows.length > 0 && (() => {
                 const validRows = uploadPreviewRows.filter((r) => r.status === "valid");
                 const dupRows = uploadPreviewRows.filter((r) => r.status === "duplicate");
+                const invalidRows = uploadPreviewRows.filter((r) => r.status === "invalid");
                 const displayRows =
                   uploadFilterTab === "VALID"
                     ? validRows
                     : uploadFilterTab === "DUP"
                       ? dupRows
-                      : uploadPreviewRows;
+                      : uploadFilterTab === "INVALID"
+                        ? invalidRows
+                        : uploadPreviewRows;
                 return (
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1765,6 +1771,18 @@ export default function PageScannerSearch() {
                         >
                           Trùng lặp ({dupRows.length})
                         </button>
+                        {invalidRows.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setUploadFilterTab("INVALID")}
+                            className={`rounded-full px-2.5 py-0.5 font-bold ${uploadFilterTab === "INVALID"
+                              ? "bg-[#FEE2E2] text-[#DC2626]"
+                              : "bg-[#FEE2E2]/60 text-[#DC2626]"
+                              }`}
+                          >
+                            Lỗi ({invalidRows.length})
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -1775,7 +1793,7 @@ export default function PageScannerSearch() {
                             <tr className="border-b border-[#E2E8F0]">
                               <th className="w-14 px-3 py-2">Dòng</th>
                               <th className="px-3 py-2">Dữ liệu tệp</th>
-                              <th className="w-24 px-3 py-2 text-center">Trạng thái</th>
+                              <th className="w-28 px-3 py-2 text-center">Trạng thái</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-[#F1F5F9]">
@@ -1792,9 +1810,13 @@ export default function PageScannerSearch() {
                                     <span className="rounded-full bg-[#ECFDF5] px-2.5 py-0.5 text-[10px] font-bold text-[#059669]">
                                       Hợp lệ
                                     </span>
-                                  ) : (
+                                  ) : r.status === "duplicate" ? (
                                     <span className="rounded-full bg-[#FEF3C7] px-2.5 py-0.5 text-[10px] font-bold text-[#D97706]">
                                       Trùng lặp
+                                    </span>
+                                  ) : (
+                                    <span className="rounded-full bg-[#FEE2E2] px-2.5 py-0.5 text-[10px] font-bold text-[#DC2626]">
+                                      Không hợp lệ
                                     </span>
                                   )}
                                 </td>
@@ -1804,7 +1826,7 @@ export default function PageScannerSearch() {
                         </table>
                       </div>
                       <div className="border-t border-[#F1F5F9] bg-[#F8FAFC] px-3 py-1.5 text-right text-[11px] text-[#94A3B8]">
-                        Hiển thị {Math.min(5, displayRows.length)} trên {uploadPreviewRows.length} dòng được phân tích
+                        Hiển thị {displayRows.length} trên {uploadPreviewRows.length} dòng được phân tích
                       </div>
                     </div>
                   </div>
@@ -2090,8 +2112,16 @@ export default function PageScannerSearch() {
                   <tr>
                     <th className="w-10 px-4 py-2.5">
                       <Checkbox
-                        checked={pages.length > 0 && selectedPageKeys.length === pages.length}
-                        onCheckedChange={(c) => setSelectedPageKeys(c ? pages.map((p) => p.page_key) : [])}
+                        checked={pages.length > 0 && pages.every((p) => selectedPageKeys.includes(p.page_key))}
+                        onCheckedChange={(c) => {
+                          const pageKeyList = pages.map((p) => p.page_key);
+                          const pageKeySet = new Set(pageKeyList);
+                          setSelectedPageKeys((prev) =>
+                            c
+                              ? Array.from(new Set([...prev, ...pageKeyList]))
+                              : prev.filter((k) => !pageKeySet.has(k)),
+                          );
+                        }}
                       />
                     </th>
                     <th className="w-14 px-2 py-2.5">STT</th>
