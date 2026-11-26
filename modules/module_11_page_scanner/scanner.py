@@ -585,7 +585,7 @@ def save_batch_pages(
         SET page_name = COALESCE(EXCLUDED.page_name, scanned_pages.page_name),
             page_url = EXCLUDED.page_url,
             avatar_url = COALESCE(EXCLUDED.avatar_url, scanned_pages.avatar_url),
-            category = COALESCE(EXCLUDED.category, scanned_pages.category),
+            category = COALESCE(NULLIF(EXCLUDED.category, ''), scanned_pages.category),
             phone = COALESCE(EXCLUDED.phone, scanned_pages.phone),
             email = COALESCE(EXCLUDED.email, scanned_pages.email),
             website = COALESCE(EXCLUDED.website, scanned_pages.website),
@@ -622,10 +622,10 @@ def save_batch_pages(
                     page.get("page_name"),
                     page.get("page_url"),
                     page.get("avatar_url"),
-                    page.get("category"),
-                    page.get("phone"),
+                    (page.get("category") or "").strip()[:255] or None,
+                    (page.get("phone") or "").strip()[:100] or None,
                     page.get("follower_count"),
-                    page.get("follower_text"),
+                    (page.get("follower_text") or "").strip()[:100] or None,
                     is_verified,
                     is_sponsored,
                     page.get("identifier_quality", "high"),
@@ -637,7 +637,7 @@ def save_batch_pages(
                     source_type,
                     session_id,
                     raw_data_str,
-                    page.get("email") or None,
+                    (page.get("email") or "").strip()[:255] or None,
                     page.get("website") or None,
                     page.get("address") or None,
                     page.get("description") or None,
@@ -647,8 +647,8 @@ def save_batch_pages(
                 ),
             )
             is_new = bool(res and res.get("is_new"))
-        except Exception:
-            # Fallback nếu DB không hỗ trợ xmax
+        except Exception as exc:
+            logger.warning(f"[Scanner] upsert scanned_pages failed for {page_key}: {exc}")
             is_new = True
 
         if is_new:
@@ -779,10 +779,15 @@ def extract_page_cards_from_driver(driver) -> List[Dict[str, Any]]:
             }
 
             // Kiểm tra tích xanh (Verified)
-            let isVerified = null;
+            let isVerified = card ? false : null;
             if (card) {
-                const verifiedEl = card.querySelector('svg[aria-label*="xác minh"], svg[aria-label*="Verified"], div[aria-label*="Đã xác minh"]');
-                if (verifiedEl) isVerified = true;
+                const verifiedEl = card.querySelector(
+                    'svg[aria-label*="xác minh"], svg[aria-label*="Verified"], div[aria-label*="Đã xác minh"], ' +
+                    '[title*="Verified"], [title*="verified"], [title*="xác minh"], [title*="Xác minh"]'
+                );
+                if (verifiedEl || Array.from(card.querySelectorAll('svg title')).some((el) => /verified|xác minh/i.test(el.textContent || ''))) {
+                    isVerified = true;
+                }
             }
 
             // Kiểm tra Được tài trợ (Sponsored)
@@ -824,7 +829,7 @@ def extract_page_cards_from_driver(driver) -> List[Dict[str, Any]]:
             follower_count, follower_text = parse_follower_count(raw_text)
 
             # Phân tích category (dòng thứ 2 hoặc dòng chứa Trang / Page / Dịch vụ...)
-            category = ""
+            category = None
             for l in text_lines[1:4]:
                 if any(k in l.lower() for k in ["trang", "page", "dịch vụ", "công ty", "bán lẻ", "thương mại"]):
                     category = l
@@ -2190,8 +2195,14 @@ if (headerRoot && chosenEl) {
 }
 
 const mainSample = ((mainRoot && mainRoot.innerText) || '').slice(0, 3500);
-let isVerified = null;
-if (headerRoot && headerRoot.querySelector('[aria-label*="Verified"], [aria-label*="Đã xác minh"], [aria-label*="Xác minh"]')) {
+let isVerified = headerRoot ? false : null;
+if (headerRoot && (
+  headerRoot.querySelector(
+    '[aria-label*="Verified"], [aria-label*="verified"], [aria-label*="Đã xác minh"], [aria-label*="Xác minh"], [aria-label*="xác minh"], ' +
+    '[title*="Verified"], [title*="verified"], [title*="xác minh"], [title*="Xác minh"]'
+  ) ||
+  Array.from(headerRoot.querySelectorAll('svg title')).some((el) => /verified|xác minh/i.test(el.textContent || ''))
+)) {
   isVerified = true;
 }
 const avatarUrl = _pickAvatar(headerRoot);
@@ -3052,7 +3063,7 @@ def verify_and_extract_page_in_new_tab(
                 "header_tabs": list(info.get("header_tabs") or []),
                 "follower_text": (info.get("follower_text") or "").strip(),
                 "page_name": (info.get("page_name") or "").strip(),
-                "category": info.get("category") or "",
+                "category": (info.get("category") or "").strip() or None,
                 "phone": info.get("phone") or None,
                 "current_url": curr_url,
                 "readyState": info.get("readyState"),
@@ -3395,7 +3406,7 @@ def verify_and_extract_page_in_new_tab(
             "page_name": page_name,
             "page_url": page_url,
             "avatar_url": info.get("avatar_url"),
-            "category": info.get("category") or "",
+            "category": (info.get("category") or "").strip() or None,
             "phone": panel.get("phone") or bio_phone or info.get("phone") or None,
             "email": panel.get("email"),
             "website": panel.get("website"),
@@ -4776,7 +4787,28 @@ def start_hashtag_search_background(
         raise AccountBusyError(
             target_uid, int(busy["session_id"]), str(busy.get("job_type") or "")
         )
-    try_acquire_account_job(target_uid, session_id, "HASHTAG")
+    try:
+        try_acquire_account_job(target_uid, session_id, "HASHTAG")
+    except AccountBusyError as busy_err:
+        try:
+            finalize_scan_session(
+                session_id,
+                "FAILED",
+                "ERROR",
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                f"BUSY race — acc vừa bị chiếm bởi phiên #{busy_err.active_session_id} ({busy_err.job_type})",
+            )
+        except Exception:
+            pass
+        with _ACTIVE_SESSIONS_LOCK:
+            _ACTIVE_STOP_EVENTS.pop(session_id, None)
+            _ACTIVE_PAUSE_EVENTS.pop(session_id, None)
+        raise
 
     # 3. Kích hoạt worker trong daemon thread
     def _hashtag_runner(**kwargs):

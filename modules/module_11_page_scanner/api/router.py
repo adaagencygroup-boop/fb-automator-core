@@ -1115,23 +1115,18 @@ async def emergency_stop_all_sessions():
     }
 
 
-@router.post("/sessions/{session_id}/stop")
-async def stop_scan_session(session_id: int):
-    """
-    POST /api/page-scanner/sessions/{session_id}/stop
-    Dừng khẩn cấp một phiên quét đang diễn ra.
-    """
-    owner = _get_owner()
+def _stop_scan_session_sync(session_id: int, owner: str) -> Dict[str, Any]:
+    """Thực thi dừng phiên đồng bộ trong worker thread để không chặn FastAPI event loop."""
     session = db.fetch_one(
         "SELECT id, status, campaign_id, account_uid FROM page_scan_sessions WHERE id = %s AND owner_key = %s",
         (session_id, owner),
     )
     if not session:
-        raise HTTPException(status_code=404, detail="Không tìm thấy phiên quét")
+        return {"not_found": True}
 
     stopped = request_stop_session(session_id)
     stopped_ids = {int(session_id)}
-    stopped_uids = {session.get("account_uid")}
+    stopped_uids = {str(session.get("account_uid") or "").strip()} - {""}
     # Dừng cả các phiên cùng campaign còn RUNNING/PAUSED
     campaign_id = session.get("campaign_id")
     if campaign_id:
@@ -1145,7 +1140,9 @@ async def stop_scan_session(session_id: int):
         for row in siblings or []:
             sid = int(row["id"])
             stopped_ids.add(sid)
-            stopped_uids.add(row.get("account_uid"))
+            uid = str(row.get("account_uid") or "").strip()
+            if uid:
+                stopped_uids.add(uid)
             request_stop_session(sid)
             db.execute(
                 """
@@ -1161,6 +1158,10 @@ async def stop_scan_session(session_id: int):
             (session_id,),
         )
 
+    # Gom thêm các acc đã xoay vòng đang giữ khóa thuộc các phiên bị dừng
+    from ..browser_session import get_uids_for_sessions, release_account_job
+    stopped_uids |= get_uids_for_sessions(stopped_ids)
+
     # Dừng khẩn cấp → đóng Chrome page_scanner của acc thuộc các phiên bị dừng
     # (kể cả đang keep_browser giữa các job); không đụng job của acc khác.
     try:
@@ -1168,17 +1169,7 @@ async def stop_scan_session(session_id: int):
     except Exception as exc:
         logger.warning(f"[Module 11 API] Đóng Chrome khi dừng phiên #{session_id}: {exc}")
 
-    # Giải phóng khóa acc trong bộ nhớ ngay lập tức
-    from ..browser_session import release_account_job
-    for uid in stopped_uids:
-        if uid:
-            for sid in stopped_ids:
-                try:
-                    release_account_job(uid, sid)
-                except Exception:
-                    pass
-
-    # Chờ nhẹ các worker thread liên quan thoát hoàn toàn (timeout ngắn 1.5s)
+    # Chờ worker thread liên quan thoát trước khi nhả khóa acc (tránh acc bị nhận job mới khi worker cũ đang dọn)
     try:
         import threading
         worker_prefixes = (
@@ -1195,12 +1186,33 @@ async def stop_scan_session(session_id: int):
     except Exception as exc:
         logger.warning(f"[Module 11 API] Chờ worker thread kết thúc: {exc}")
 
+    # Giải phóng khóa acc sau khi worker đã thoát (hoặc hết timeout chờ)
+    for uid in stopped_uids:
+        for sid in stopped_ids:
+            try:
+                release_account_job(uid, sid)
+            except Exception:
+                pass
+
     return {
         "session_id": session_id,
         "stopped": True,
         "active_worker_signaled": stopped,
         "message": f"Đã gửi tín hiệu dừng cho phiên #{session_id}",
     }
+
+
+@router.post("/sessions/{session_id}/stop")
+async def stop_scan_session(session_id: int):
+    """
+    POST /api/page-scanner/sessions/{session_id}/stop
+    Dừng khẩn cấp một phiên quét đang diễn ra.
+    """
+    owner = _get_owner()
+    res = await asyncio.to_thread(_stop_scan_session_sync, session_id, owner)
+    if res.get("not_found"):
+        raise HTTPException(status_code=404, detail="Không tìm thấy phiên quét")
+    return res
 
 
 # ==================== FOLLOWERS (job_type=FOLLOW) — UI + DB, chưa Selenium ====================
