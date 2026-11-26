@@ -64,6 +64,9 @@ function statusLine(job) {
     return { tone: "ok", text: `Đã quét xong ${n} bài` };
   }
   if (job.status === "STOPPED") return { tone: "warn", text: `Đã dừng lấy bài: quét được ${n} bài viết${name}.` };
+  if (job.status === "FAILED" && job.stop_reason === "INCOMPLETE_POST_DATA" && job.found_count > 0) {
+    return { tone: "ok", text: `Đã quét được ${n} bài` };
+  }
   return {
     tone: "err",
     text: `Lấy bài thất bại${n !== "0" ? ` (đã quét được ${n} bài)` : ""}: ${job.error_message || job.stop_reason || "lỗi không rõ"}`,
@@ -290,8 +293,9 @@ export default function PostSourceFetcher({
             if (!terminalToastJobsRef.current.has(terminalKey)) {
               terminalToastJobsRef.current.add(terminalKey);
               loadList(true);
-              if (next.status === "STOPPED") toast.warning(statusLine(next).text, "ĐÃ DỪNG");
-              else if (next.status !== "COMPLETED") toast.error(statusLine(next).text, "LẤY BÀI THẤT BẠI");
+              const status = statusLine(next);
+              if (next.status === "STOPPED") toast.warning(status.text, "ĐÃ DỪNG");
+              else if (status.tone === "err") toast.error(status.text, "LẤY BÀI THẤT BẠI");
             }
           } else if (next.found_count !== lastFound.current) {
             lastFound.current = next.found_count;
