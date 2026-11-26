@@ -29,13 +29,17 @@ from modules.module_11_page_scanner.page_detail_scan import (
     extract_contact_info,
     intro_text,
     merge_contacts,
+    resolve_detail_final_status,
     trim_about_noise,
 )
 from modules.module_11_page_scanner.page_source import (
     parse_follower_count,
     parse_page_file_content,
 )
-from modules.module_11_page_scanner.scanner import accounts_owner_for
+from modules.module_11_page_scanner.scanner import (
+    accounts_owner_for,
+    resolve_hashtag_final_status,
+)
 
 
 class TestGroupAParsing(unittest.TestCase):
@@ -225,6 +229,24 @@ class TestGroupBLocksAndOwners(unittest.TestCase):
         self.assertIsNone(accounts_owner_for(""))
         self.assertIsNone(accounts_owner_for(None))
         self.assertEqual(accounts_owner_for("user@example.com"), "user@example.com")
+
+    def test_partial_final_status_when_below_target(self):
+        # Hashtag: 21/30 Page phải đánh PARTIAL dù dừng vì NO_NEW_RESULTS / CYCLE_DETECTED / END_MARKER / SAFETY_LIMIT
+        for reason in ("NO_NEW_RESULTS", "CYCLE_DETECTED", "END_MARKER", "SAFETY_LIMIT", "TIMEOUT", "CHECKPOINT"):
+            with self.subTest(reason=reason):
+                self.assertEqual(resolve_hashtag_final_status(reason, 21, 30), "PARTIAL")
+        self.assertEqual(resolve_hashtag_final_status("TARGET_REACHED", 30, 30), "COMPLETED")
+        self.assertEqual(resolve_hashtag_final_status("NO_NEW_RESULTS", 30, 30), "COMPLETED")
+        self.assertEqual(resolve_hashtag_final_status("USER_STOPPED", 21, 30), "STOPPED")
+        self.assertEqual(resolve_hashtag_final_status("ERROR", 0, 30), "FAILED")
+
+        # Detail (Nhập link / Tải tệp): lưu thiếu mục tiêu → PARTIAL
+        self.assertEqual(resolve_detail_final_status("COMPLETED", 21, 30), "PARTIAL")
+        self.assertEqual(resolve_detail_final_status("NO_NEW_RESULTS", 0, 30), "PARTIAL")
+        self.assertEqual(resolve_detail_final_status("TARGET_REACHED", 30, 30), "COMPLETED")
+        self.assertEqual(resolve_detail_final_status("CHECKPOINT", 15, 30), "PARTIAL")
+        self.assertEqual(resolve_detail_final_status("USER_STOPPED", 10, 30), "STOPPED")
+        self.assertEqual(resolve_detail_final_status("ERROR", 0, 30), "FAILED")
 
 
 if __name__ == "__main__":

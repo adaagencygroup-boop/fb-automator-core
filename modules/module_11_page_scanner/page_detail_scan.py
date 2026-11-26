@@ -1577,6 +1577,24 @@ def _format_detail_stop_reason_vi(reason: Optional[str]) -> str:
     }.get(str(reason or "").upper(), "hoàn tất")
 
 
+def resolve_detail_final_status(
+    stop_reason: Optional[str],
+    saved: int,
+    target: int,
+) -> str:
+    """Chuẩn hóa trạng thái phiên DETAIL: chỉ COMPLETED khi lưu đủ mục tiêu."""
+    reason = str(stop_reason or "").upper()
+    if reason == "USER_STOPPED":
+        return "STOPPED"
+    if reason == "ERROR":
+        return "FAILED"
+    if reason in ("CHECKPOINT", "TIMEOUT"):
+        return "PARTIAL"
+    if target > 0 and int(saved or 0) < int(target):
+        return "PARTIAL"
+    return "COMPLETED"
+
+
 def run_page_detail_flow(
     pages: List[Dict[str, Any]],
     owner_key: str,
@@ -1787,22 +1805,29 @@ def run_page_detail_flow(
     finally:
         # Nhả trước khi ghi DB để DB lỗi không làm kẹt khóa profile
         rotation.release(stop_reason, keep_browser)
-        final_status = {
-            "USER_STOPPED": "STOPPED",
-            "CHECKPOINT": "PARTIAL",
-            "TIMEOUT": "PARTIAL",
-            "ERROR": "FAILED",
-        }.get(stop_reason, "COMPLETED")
+        final_status = resolve_detail_final_status(stop_reason, saved, target)
         try:
             finalize_scan_session(
                 session_id, final_status, stop_reason, processed, saved, skipped, 0,
                 processed, int(time.time() - start), error_message,
             )
-            log(
-                f"Kết thúc phiên ({_format_detail_stop_reason_vi(stop_reason)}):"
-                f" đã lưu {saved} Page · bỏ qua {skipped} · lỗi {failed}.",
-                "success" if final_status == "COMPLETED" else "warn",
-            )
+            reason_vi = _format_detail_stop_reason_vi(stop_reason)
+            if final_status == "COMPLETED":
+                end_msg = f"Hoàn tất phiên (đạt đủ mục tiêu): đã lưu {saved}/{target} Page."
+                end_lvl = "success"
+            elif final_status == "PARTIAL":
+                end_msg = (
+                    f"Kết thúc phiên (chưa đủ mục tiêu): đạt {saved}/{target} Page"
+                    f" · bỏ qua {skipped} · lỗi {failed} ({reason_vi})."
+                )
+                end_lvl = "warn"
+            else:
+                end_msg = (
+                    f"Kết thúc phiên ({reason_vi}): đã lưu {saved}/{target} Page"
+                    f" · bỏ qua {skipped} · lỗi {failed}."
+                )
+                end_lvl = "error" if final_status == "FAILED" else "warn"
+            log(end_msg, end_lvl)
         finally:
             with _ACTIVE_SESSIONS_LOCK:
                 _ACTIVE_STOP_EVENTS.pop(session_id, None)

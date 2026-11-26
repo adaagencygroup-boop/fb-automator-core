@@ -80,20 +80,16 @@ export function threadColor(label) {
 export function LiveLogConsole({ title, task, thread = "Thread-01", logs, phase }) {
   const list = Array.isArray(logs) ? logs : [];
   const lastLogId = list.length ? list[list.length - 1]?.id ?? list[list.length - 1]?.message : null;
-  const label =
-    phase === "paused"
-      ? "TẠM DỪNG"
-      : phase === "running"
-        ? "ĐANG CHẠY"
-        : phase === "done"
-          ? "HOÀN TẤT"
-          : "CHỜ CHẠY";
-  const color =
-    phase === "paused"
-      ? "border-amber-500/30 bg-amber-500/10 text-amber-400"
-      : phase === "running"
-        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
-        : "border-slate-500/30 bg-slate-500/10 text-slate-400";
+  const PHASE_BADGE = {
+    running: { label: "ĐANG CHẠY", cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400", dot: "animate-pulse bg-emerald-400" },
+    paused:  { label: "TẠM DỪNG",  cls: "border-amber-500/30 bg-amber-500/10 text-amber-400",     dot: "bg-amber-400" },
+    done:    { label: "HOÀN TẤT",  cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300", dot: "bg-emerald-400" },
+    partial: { label: "MỘT PHẦN",  cls: "border-amber-500/30 bg-amber-500/10 text-amber-300",     dot: "bg-amber-400" },
+    stopped: { label: "ĐÃ DỪNG",   cls: "border-slate-500/30 bg-slate-500/10 text-slate-300",     dot: "bg-slate-400" },
+    error:   { label: "LỖI",       cls: "border-rose-500/30 bg-rose-500/10 text-rose-400",        dot: "bg-rose-400" },
+    idle:    { label: "CHỜ CHẠY",  cls: "border-slate-500/30 bg-slate-500/10 text-slate-400",     dot: "bg-slate-400" },
+  };
+  const badge = PHASE_BADGE[phase] || PHASE_BADGE.idle;
   const heading = title || (task ? `Nhật ký quét — ${task}` : "Nhật ký quét");
 
   const [isCopying, guardCopy] = useActionLock();
@@ -149,9 +145,9 @@ export function LiveLogConsole({ title, task, thread = "Thread-01", logs, phase 
           <span className="truncate font-mono text-xs font-semibold text-slate-300">{heading}</span>
         </div>
         <div className="flex shrink-0 items-center gap-2.5">
-          <span className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-0.5 font-mono text-[10px] font-bold ${color}`}>
-            <span className={`size-1.5 rounded-full ${phase === "running" ? "animate-pulse bg-emerald-400" : phase === "paused" ? "bg-amber-400" : "bg-slate-400"}`} />
-            {label}
+          <span className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-0.5 font-mono text-[10px] font-bold ${badge.cls}`}>
+            <span className={`size-1.5 rounded-full ${badge.dot}`} />
+            {badge.label}
           </span>
           <button
             type="button"
