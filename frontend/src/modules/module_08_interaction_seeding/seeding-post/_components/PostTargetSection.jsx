@@ -334,6 +334,7 @@ export default function PostTargetSection({
       {/* Popup lấy bài: luôn mount để lượt lấy bài chạy nền vẫn được theo dõi khi đóng popup */}
       <PostFetchModal open={isFetchOpen} onClose={() => setIsFetchOpen(false)}>
         <PostSourceFetcher
+          open={isFetchOpen}
           accounts={accounts}
           selectedUids={selectedUids}
           disabled={isRunning}

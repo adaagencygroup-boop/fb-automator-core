@@ -89,6 +89,7 @@ function splitContent(content) {
 }
 
 export default function PostSourceFetcher({
+  open = false,
   accounts = [],
   selectedUids = [],
   disabled = false,
@@ -99,6 +100,7 @@ export default function PostSourceFetcher({
 }) {
   const [sourceUrl, setSourceUrl] = useState("");
   const [job, setJob] = useState(null);
+  const [restoringSource, setRestoringSource] = useState(true);
   const [fetchAccountCursor, setFetchAccountCursor] = useState(0);
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -120,6 +122,7 @@ export default function PostSourceFetcher({
   const dragSelectRef = useRef({ active: false, moved: false, startId: null });
   const terminalToastJobsRef = useRef(new Set());
   const rotationJobsRef = useRef(new Set());
+  const wasOpenRef = useRef(open);
   const sourceKey = job?.source_key || "";
   const running = isActive(job);
   const fetchBusy = running || starting;
@@ -145,17 +148,30 @@ export default function PostSourceFetcher({
   const accountUid = scanAccount?.uid || "";
   const accountLabel = scanAccount ? scanAccount.profile_name || scanAccount.name || scanAccount.uid : "";
 
+  useEffect(() => {
+    if (open && !wasOpenRef.current && list.total > 0 && list.available) {
+      setSourceUrl("");
+    }
+    wasOpenRef.current = open;
+  }, [open, list.total, list.available]);
+
   // Khôi phục lượt lấy bài đang chạy / gần nhất khi mở lại màn
   useEffect(() => {
     let alive = true;
     postFetchApi
       .getActiveJob()
       .then((res) => {
-        if (!alive || !res?.job) return;
+        if (!alive) return;
+        if (!res?.job) {
+          setRestoringSource(false);
+          return;
+        }
         setJob(res.job);
-        setSourceUrl((cur) => cur || res.job.source_url || "");
+        if (!res.job.source_key) setRestoringSource(false);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (alive) setRestoringSource(false);
+      });
     return () => {
       alive = false;
     };
@@ -243,6 +259,7 @@ export default function PostSourceFetcher({
       if (seq === listSeq.current) {
         loadingListRef.current = false;
         setLoadingList(false);
+        setRestoringSource(false);
         if (generation === listGeneration.current && listRefreshPendingRef.current) {
           listRefreshPendingRef.current = false;
           window.setTimeout(() => {
@@ -463,7 +480,7 @@ export default function PostSourceFetcher({
   };
 
   const line = statusLine(job);
-  const lockInputs = disabled || running || starting;
+  const lockInputs = disabled || running || starting || restoringSource;
   const busy = disabled || adding;
 
   return (
@@ -499,8 +516,8 @@ export default function PostSourceFetcher({
             </button>
           ) : (
             <button type="submit" disabled={lockInputs || !accountUid} className={`${PRIMARY} w-full`}>
-              {starting ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Search className="size-4" aria-hidden="true" />}
-              {starting ? "Đang bắt đầu…" : "Lấy danh sách bài viết"}
+              {starting || restoringSource ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Search className="size-4" aria-hidden="true" />}
+              {restoringSource ? "Đang tải lại dữ liệu quét trước đó…" : starting ? "Đang bắt đầu…" : "Lấy danh sách bài viết"}
             </button>
           )}
         </form>
