@@ -1364,6 +1364,9 @@ def _run_fetch_job(
             log("success", f"Đã lấy hết bài: {total} bài ({new_total:,} bài mới).".replace(",", "."))
         elif status == "STOPPED":
             log("warning", f"Đã dừng lấy bài: {total} bài.")
+        elif reason == "INCOMPLETE_POST_DATA":
+            # The scan completed; keep unresolved permalink details out of the progress log.
+            log("info", f"Đã quét được {total} bài.")
         else:
             log("error", f"Lấy bài thất bại sau {total} bài — {error or reason}.")
         try:
