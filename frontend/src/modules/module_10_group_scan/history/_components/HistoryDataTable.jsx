@@ -323,7 +323,7 @@ export default function HistoryDataTable({
       {/* Table Content */}
       <div className="overflow-x-auto flex-1 flex flex-col">
         <table className="w-full text-left text-xs border-collapse">
-          <thead className="border-b border-slate-200/80 text-[11px] font-bold uppercase tracking-wider text-slate-500 bg-[#F8FAFC]">
+          <thead className="border-b border-slate-200/80 text-xs font-semibold uppercase tracking-[0.3px] [&_th]:font-semibold text-slate-500 bg-[#F8FAFC]">
             <tr className="h-11">
               <th className="pl-6 pr-3 py-3 w-16 text-center">STT</th>
               <th className="px-4 py-3 w-[18%] min-w-[160px]">LOẠI TÁC VỤ</th>

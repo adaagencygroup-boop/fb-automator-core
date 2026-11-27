@@ -8,6 +8,7 @@ import json
 import re
 import threading
 import time
+import unicodedata
 from typing import Any, Optional
 
 from core.database.connection import db
@@ -1657,7 +1658,8 @@ def list_scanned_group_members(
         params.extend([owner, target_name])
 
     if search and str(search).strip():
-        term = f"%{str(search).strip().lower()}%"
+        # NFC: chữ Việt gõ kiểu tổ hợp (NFD) vẫn khớp tên đã lưu; lower() 2 phía → không phân biệt hoa/thường
+        term = f"%{unicodedata.normalize('NFC', str(search).strip()).lower()}%"
         where_clauses.append("(lower(m.member_name) LIKE ? OR lower(m.member_uid) LIKE ? OR lower(m.group_name) LIKE ?)")
         params.extend([term, term, term])
 

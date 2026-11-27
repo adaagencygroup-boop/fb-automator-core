@@ -8,7 +8,7 @@ export default function GroupStatsOverview({ stats }) {
         <span className="text-xs font-medium text-[#64748B]">
           Tổng số nhóm
         </span>
-        <span className="text-2xl font-bold text-[#0F172A] leading-8">
+        <span className="text-xl font-bold text-[#0F172A] leading-7">
           {stats.totalGroups}
         </span>
       </div>
@@ -18,7 +18,7 @@ export default function GroupStatsOverview({ stats }) {
         <span className="text-xs font-medium text-[#64748B]">
           Tổng thành viên
         </span>
-        <span className="text-2xl font-bold text-[#2563EB] leading-8">
+        <span className="text-xl font-bold text-[#2563EB] leading-7">
           {stats.totalMembersFormatted}
         </span>
       </div>
@@ -28,7 +28,7 @@ export default function GroupStatsOverview({ stats }) {
         <span className="text-xs font-medium text-[#64748B]">
           TB thành viên / nhóm
         </span>
-        <span className="text-2xl font-bold text-[#0F172A] leading-8">
+        <span className="text-xl font-bold text-[#0F172A] leading-7">
           {stats.averageMembersFormatted}
         </span>
       </div>
@@ -38,7 +38,7 @@ export default function GroupStatsOverview({ stats }) {
         <span className="text-xs font-medium text-[#64748B]">
           Nhóm lớn nhất (TV)
         </span>
-        <span className="text-2xl font-bold text-[#0F172A] leading-8">
+        <span className="text-xl font-bold text-[#0F172A] leading-7">
           {stats.largestGroupFormatted}
         </span>
       </div>

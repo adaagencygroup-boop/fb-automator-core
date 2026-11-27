@@ -52,7 +52,7 @@ export default function GroupTableToolbar({
       {/* Detail Title & Action */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <h2 className="text-xl font-bold tracking-tight text-[#0F172A]">
+          <h2 className="font-heading text-base font-semibold text-[#0F172A]">
             {activeCategory.name}
           </h2>
           {loading && (

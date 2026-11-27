@@ -11,6 +11,7 @@ export default function MemberTableToolbar({
   onExportGroup,
   onExportSelected,
   onBulkDelete,
+  canExportGroup = false,
 }) {
   return (
     <>
@@ -19,7 +20,7 @@ export default function MemberTableToolbar({
         <div className="flex flex-col gap-0.5">
           <div className="flex items-center gap-2">
             <span className="size-2 rounded-full bg-[#10B981] shrink-0" />
-            <h3 className="text-xl font-bold tracking-tight text-[#0F172A]">
+            <h3 className="font-heading text-base font-semibold text-[#0F172A]">
               {currentCategory ? (currentCategory.fullName || currentCategory.name) : "Chưa chọn danh mục"}
             </h3>
           </div>
@@ -31,7 +32,9 @@ export default function MemberTableToolbar({
         <button
           type="button"
           onClick={onExportGroup}
-          className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-3 text-xs font-semibold text-[#1D4ED8] hover:bg-blue-100 transition-colors"
+          disabled={!canExportGroup}
+          title={canExportGroup ? undefined : "Danh sách thành viên đang rỗng — chưa có dữ liệu để xuất"}
+          className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-3 text-xs font-semibold text-[#1D4ED8] hover:bg-blue-100 transition-colors disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-[#EFF6FF]"
         >
           <Download className="size-3 text-[#1D4ED8]" />
           <span>Xuất nhóm</span>

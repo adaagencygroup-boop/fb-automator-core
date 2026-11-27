@@ -39,7 +39,7 @@ export default function MemberDataTable({
       {/* Member Data Table */}
       <div ref={onSelectRows ? setContainer : undefined} className="w-full border border-[#E2E8F0] rounded-lg overflow-x-auto">
         <table className="w-full min-w-[650px] text-left text-xs">
-          <thead className="bg-[#F8FAFC]/80 text-[11px] font-bold uppercase text-[#475569] border-b border-[#E2E8F0]">
+          <thead className="bg-[#F8FAFC]/80 text-xs font-semibold uppercase tracking-[0.3px] [&_th]:font-semibold text-[#475569] border-b border-[#E2E8F0]">
             <tr>
               <th className="py-2.5 px-3 text-center w-10">
                 <input

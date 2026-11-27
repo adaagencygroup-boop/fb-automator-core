@@ -466,6 +466,8 @@ export default function GroupScanInfoPage() {
   }, [fileData, lookupKnownLinks]);
 
   const [checkingLinks, setCheckingLinks] = useState(false);
+  // Link đã qua "Kiểm tra & Lọc trùng lặp" — link mới thêm/sửa phải kiểm tra lại mới được Bắt đầu thực thi.
+  const [checkedLinkUrls, setCheckedLinkUrls] = useState(() => new Set());
   const handleCheckAndDeduplicateLinks = async () => {
     const first = applyLinkText(linkText);
     if (!first.rows.length) {
@@ -486,6 +488,7 @@ export default function GroupScanInfoPage() {
     } finally {
       setCheckingLinks(false);
     }
+    setCheckedLinkUrls((cur) => new Set([...cur, ...urls]));
     const { list, rows } = applyLinkText(linkText);
     const sum = knownSummary(list);
     const dupCount = rows.length - list.length;
@@ -1105,6 +1108,17 @@ export default function GroupScanInfoPage() {
     return mergeKeywords(keywords, typed).filter((word) => !isKeywordChecked(keywordStats[word]));
   }, [method, keywords, keywordInput, keywordStats]);
   const needCheckFirst = runState === "idle" && uncheckedKeywords.length > 0;
+  // Theo link: phải bấm "Kiểm tra & Lọc trùng lặp" (bỏ link trùng / đã quét) rồi mới cho Bắt đầu thực thi.
+  const needLinkCheck =
+    runState === "idle" &&
+    method === "link" &&
+    parsedLinks.some((l) => l.url && l.status !== "invalid" && !checkedLinkUrls.has(l.url));
+  // Theo tệp: lọc trùng + tra link đã quét chạy tự động khi tải tệp; nếu bước tra lỗi (Engine chưa sẵn sàng)
+  // thì chưa cho Bắt đầu thực thi — tải lại tệp để kiểm tra.
+  const needFileCheck =
+    runState === "idle" &&
+    method === "file" &&
+    (fileData?.rows || []).some((r) => r.status === "valid" && r.url && !(r.url in knownLinksRef.current));
 
   const handlePrimaryAction = async () => {
     if (runState === "paused" && checkJobId) {
@@ -1300,12 +1314,16 @@ export default function GroupScanInfoPage() {
           <button
             type="button"
             onClick={handlePrimaryAction}
-            disabled={runState === "running" || pausing || aborting || resuming || checkingKeywords || needCheckFirst}
+            disabled={runState === "running" || pausing || aborting || resuming || checkingKeywords || needCheckFirst || needLinkCheck || needFileCheck || checkingLinks}
             title={
               checkingKeywords
                 ? "Đang kiểm tra từ khóa — chờ xong hoặc dừng kiểm tra trước"
                 : needCheckFirst
                 ? "Bấm Kiểm tra trước để biết mỗi từ khóa quét được bao nhiêu nhóm"
+                : needLinkCheck
+                ? "Bấm Kiểm tra & Lọc trùng lặp trước khi bắt đầu quét"
+                : needFileCheck
+                ? "Chưa kiểm tra được link trong tệp — tải lại tệp"
                 : undefined
             }
             className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#2563EB] text-sm font-bold tracking-wide text-white hover:bg-blue-600 disabled:opacity-60"
@@ -1330,6 +1348,16 @@ export default function GroupScanInfoPage() {
               {uncheckedKeywords.length > 3 ? "…" : ""}.
             </p>
           )}
+          {needLinkCheck && !checkingLinks && (
+            <p className="text-center text-xs text-amber-700">
+              Bấm <b>Kiểm tra &amp; Lọc trùng lặp</b> trước để bỏ link trùng và link đã quét, rồi mới bắt đầu thực thi.
+            </p>
+          )}
+          {needFileCheck && (
+            <p className="text-center text-xs text-amber-700">
+              Chưa kiểm tra được link đã quét trong tệp (mất kết nối Engine) — hãy <b>tải lại tệp</b> để kiểm tra &amp; lọc trùng rồi mới bắt đầu thực thi.
+            </p>
+          )}
           {/* Tạm dừng / Dừng khẩn cấp chỉ hiện khi đã bấm Bắt đầu thực thi (đang chạy hoặc tạm dừng). */}
           {(running || pausing || aborting || resuming) && (
           <div className="grid gap-3 sm:grid-cols-2">
@@ -1337,18 +1365,18 @@ export default function GroupScanInfoPage() {
               type="button"
               disabled={runState !== "running" || pausing || aborting}
               onClick={pauseRun}
-              className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-[#FECACA] bg-white text-sm font-bold tracking-wide text-[#DC2626] disabled:opacity-40"
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-[#be123c] bg-[#f8f9ff] text-[#881337] hover:bg-rose-50/60 text-sm font-bold tracking-wide shadow-2xs transition-colors disabled:opacity-40"
             >
-              {pausing ? <Loader2 className="size-4 animate-spin text-[#DC2626]" /> : <IconPause color="#DC2626" />}
+              {pausing ? <Loader2 className="size-4 animate-spin text-[#881337]" /> : <IconPause color="#881337" />}
               {pausing ? "ĐANG TẠM DỪNG…" : "TẠM DỪNG"}
             </button>
             <button
               type="button"
               disabled={(runState !== "running" && runState !== "paused") || aborting || pausing}
               onClick={abortRun}
-              className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#EF4444] text-sm font-bold tracking-wide text-white disabled:opacity-40"
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#fcdcdc] text-[#881337] hover:bg-rose-200 text-sm font-bold tracking-wide shadow-2xs transition-colors disabled:opacity-40"
             >
-              {aborting ? <Loader2 className="size-4 animate-spin text-white" /> : <IconStop color="#fff" />}
+              {aborting ? <Loader2 className="size-4 animate-spin text-[#881337]" /> : <IconStop color="#881337" />}
               {aborting ? "ĐANG DỪNG KHẨN CẤP…" : "DỪNG KHẨN CẤP"}
             </button>
           </div>

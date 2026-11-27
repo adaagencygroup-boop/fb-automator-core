@@ -326,8 +326,8 @@ export default function GroupScanMembersPage() {
         toast.warning("Số lượng nhóm mục tiêu trong một phiên quét không được vượt quá 20 nhóm để bảo đảm an toàn tài khoản!");
         return;
       }
-      // Delay nhập ngược (Min > Max) → tự hoán đổi; ép trong 3–3600 giây (nhanh hơn 3s dễ bị Facebook chặn).
-      const delay = normalizeDelayRange(minDelay, maxDelay, { ceil: 3600 });
+      // Delay nhập ngược (Min > Max) → tự hoán đổi; tối thiểu 3s, Min tối đa 60s, Max tối đa 120s (khớp backend).
+      const delay = normalizeDelayRange(minDelay, maxDelay);
       if (delay.min !== minDelay) setMinDelay(delay.min);
       if (delay.max !== maxDelay) setMaxDelay(delay.max);
 
@@ -560,30 +560,39 @@ export default function GroupScanMembersPage() {
               type="button"
               onClick={handlePauseResume}
               disabled={isStopping || controlBusy || !activeJobId}
-              className="inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl bg-[#F59E0B] text-sm font-bold tracking-wide text-white shadow-sm transition-colors hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl border border-[#be123c] bg-[#f8f9ff] text-[#881337] hover:bg-rose-50/60 text-sm font-bold tracking-wide shadow-2xs transition-colors disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {isPaused ? <Play className="size-4 fill-white" /> : <Pause className="size-4 fill-white" />}
+              {isPaused ? <Play className="size-4 fill-current" /> : <Pause className="size-4 fill-current" />}
               <span>{isPaused ? "TIẾP TỤC QUÉT" : "TẠM DỪNG"}</span>
             </button>
             <button
               type="button"
               onClick={handleStop}
               disabled={isStopping || controlBusy}
-              className="inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl bg-[#DC2626] text-sm font-bold tracking-wide text-white shadow-sm transition-colors hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl bg-[#fcdcdc] text-[#881337] hover:bg-rose-200 text-sm font-bold tracking-wide shadow-2xs transition-colors disabled:cursor-not-allowed disabled:opacity-60"
             >
-              <Square className="size-4 fill-white" />
+              <Square className="size-4 fill-current" />
               <span>{isStopping ? "ĐANG DỪNG..." : "DỪNG THỰC THI QUÉT"}</span>
             </button>
           </div>
         ) : (
-          <button
-            type="button"
-            onClick={handleToggleExecution}
-            className="inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl bg-[#2563EB] text-sm font-bold tracking-wide text-white shadow-sm transition-colors hover:bg-blue-600"
-          >
-            <Play className="size-4 fill-white" />
-            <span>BẮT ĐẦU THỰC THI</span>
-          </button>
+          <div className="space-y-1.5">
+            <button
+              type="button"
+              onClick={handleToggleExecution}
+              disabled={selectedGroups.length === 0}
+              title={selectedGroups.length === 0 ? "Chọn ít nhất một nhóm để bắt đầu quét" : undefined}
+              className="inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl bg-[#2563EB] text-sm font-bold tracking-wide text-white shadow-sm transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:hover:bg-slate-300"
+            >
+              <Play className="size-4 fill-white" />
+              <span>BẮT ĐẦU THỰC THI</span>
+            </button>
+            {selectedGroups.length === 0 && (
+              <p className="text-center text-xs text-[#B45309]">
+                Chưa chọn nhóm nào — hãy chọn ít nhất một nhóm để bắt đầu quét.
+              </p>
+            )}
+          </div>
         )}
 
         {/* SECTION 4: Kết quả quét thành viên (Master-Detail 2 cột) */}
@@ -597,6 +606,7 @@ export default function GroupScanMembersPage() {
           memberSearch={memberSearch}
           onMemberSearchChange={setMemberSearch}
           onExportAll={handleExportAll}
+          canExport={filteredMembers.length > 0}
           onExportGroup={handleExportGroup}
           members={paginatedMembers}
           allFilteredSelected={allFilteredSelected}

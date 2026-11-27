@@ -66,25 +66,25 @@ export default function GroupDataTable({
                   className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer accent-[#2563EB]"
                 />
               </th>
-              <th className="w-12 px-2 py-2 text-center text-[11px] font-bold uppercase text-[#475569]">
+              <th className="w-12 px-2 py-2 text-center text-xs font-semibold uppercase tracking-[0.3px] text-[#475569]">
                 STT
               </th>
-              <th className="px-3 py-2 text-[11px] font-bold uppercase text-[#475569]">
+              <th className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.3px] text-[#475569]">
                 TỪ KHÓA
               </th>
-              <th className="px-3 py-2 text-[11px] font-bold uppercase text-[#475569]">
+              <th className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.3px] text-[#475569]">
                 TÊN NHÓM
               </th>
-              <th className="px-3 py-2 text-[11px] font-bold uppercase text-[#475569]">
+              <th className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.3px] text-[#475569]">
                 LOẠI NHÓM
               </th>
-              <th className="px-3 py-2 text-[11px] font-bold uppercase text-[#475569] text-right">
+              <th className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.3px] text-[#475569] text-right">
                 THÀNH VIÊN
               </th>
-              <th className="px-3 py-2 text-[11px] font-bold uppercase text-[#475569]">
+              <th className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.3px] text-[#475569]">
                 LIÊN KẾT / URL NHÓM
               </th>
-              <th className="w-20 px-3 py-2 text-center text-[11px] font-bold uppercase text-[#475569]">
+              <th className="w-20 px-3 py-2 text-center text-xs font-semibold uppercase tracking-[0.3px] text-[#475569]">
                 THAO TÁC
               </th>
             </tr>

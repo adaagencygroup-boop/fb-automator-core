@@ -309,7 +309,7 @@ export default function AccountSelectModal({
         <div ref={setTableBox} className="min-h-0 flex-1 overflow-x-auto overflow-y-auto px-6 py-1">
           <table className="w-full min-w-[860px] text-left text-xs sm:text-sm">
             <thead className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_#F1F5F9]">
-              <tr className="border-b border-slate-100 text-[11px] font-bold uppercase tracking-wider text-slate-400 bg-white">
+              <tr className="border-b border-slate-100 text-xs font-semibold uppercase tracking-[0.3px] [&_th]:font-semibold text-slate-400 bg-white">
                 <th className="w-12 py-3 pl-2 pr-3 bg-white">
                   <Checkbox
                     checked={allReadyChecked}

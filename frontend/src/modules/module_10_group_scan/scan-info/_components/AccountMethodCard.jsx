@@ -127,10 +127,10 @@ export default function AccountMethodCard({
   return (
     <section className="flex flex-col h-full rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex items-center gap-2.5 pb-3 mb-4 border-b border-[#F1F5F9]">
-        <span className="flex size-6 items-center justify-center rounded-full bg-[#2563EB] text-[11px] font-bold text-white shrink-0">
+        <span className="flex size-6 items-center justify-center rounded-full bg-[#2563EB] text-xs font-bold text-white shrink-0">
           1
         </span>
-        <h2 className="text-sm font-bold text-[#0B1C30]">
+        <h2 className="font-heading text-base font-semibold text-[#0F172A]">
           Chọn tài khoản & Thiết lập phiên quét
         </h2>
       </div>
@@ -282,7 +282,7 @@ export default function AccountMethodCard({
           {/* Bảng Từ khóa */}
           <div className="flex-1 min-h-[140px] max-h-[260px] overflow-y-auto rounded-lg border border-[#E2E8F0] shadow-2xs">
             <table className="w-full text-left text-xs border-collapse">
-              <thead className="sticky top-0 z-10 bg-[#F8FAFC] border-b border-[#E2E8F0] text-[10px] font-bold uppercase tracking-wide text-[#64748B]">
+              <thead className="sticky top-0 z-10 bg-[#F8FAFC] border-b border-[#E2E8F0] text-xs font-semibold uppercase tracking-[0.3px] [&_th]:font-semibold text-[#64748B]">
                 <tr>
                   <th className="px-3 py-2.5 bg-[#F8FAFC]">Từ khóa</th>
                   <th className="px-3 py-2.5 bg-[#F8FAFC]">Số nhóm quét được</th>
@@ -402,7 +402,7 @@ export default function AccountMethodCard({
 
             <div className="max-h-[220px] overflow-y-auto rounded-lg border border-[#E2E8F0] bg-white shadow-2xs">
               <table className="w-full text-left text-xs border-collapse">
-                <thead className="sticky top-0 z-10 bg-[#F8FAFC] border-b border-[#E2E8F0] text-[10px] font-bold uppercase tracking-wide text-[#64748B]">
+                <thead className="sticky top-0 z-10 bg-[#F8FAFC] border-b border-[#E2E8F0] text-xs font-semibold uppercase tracking-[0.3px] [&_th]:font-semibold text-[#64748B]">
                   <tr>
                     <th className="w-14 px-3 py-2.5 text-center bg-[#F8FAFC]">STT</th>
                     <th className="px-3 py-2.5 bg-[#F8FAFC]">Đường dẫn Group Facebook</th>
@@ -565,7 +565,7 @@ export default function AccountMethodCard({
 
               <div className="max-h-[220px] overflow-y-auto rounded-lg border border-[#E2E8F0] bg-white shadow-2xs">
                 <table className="w-full text-left text-xs border-collapse">
-                  <thead className="sticky top-0 z-10 bg-[#F8FAFC] border-b border-[#E2E8F0] text-[10px] font-bold uppercase tracking-wide text-[#64748B]">
+                  <thead className="sticky top-0 z-10 bg-[#F8FAFC] border-b border-[#E2E8F0] text-xs font-semibold uppercase tracking-[0.3px] [&_th]:font-semibold text-[#64748B]">
                     <tr>
                       <th className="w-16 px-4 py-2.5 text-center bg-[#F8FAFC]">Dòng</th>
                       <th className="px-3 py-2.5 bg-[#F8FAFC]">Đường dẫn Group Facebook</th>

@@ -17,6 +17,7 @@ import MemberDataTable from "./_components/MemberDataTable";
 import CreateCategoryModal from "./_components/CreateCategoryModal";
 import { downloadTable, memberExportTable, safeFileName } from "../utils/exportTable";
 import ModulePageHeader from "../components/ModulePageHeader";
+import ConfirmDialog from "@/components/ui/confirm-dialog";
 
 
 export default function GroupScanMemberListPage() {
@@ -38,6 +39,7 @@ export default function GroupScanMemberListPage() {
     const t = setTimeout(() => setDebouncedSearch(memberSearch.trim()), 350);
     return () => clearTimeout(t);
   }, [memberSearch]);
+  const [ownerTotal, setOwnerTotal] = useState(0); // tổng thành viên đã quét (mọi danh mục) → bật/tắt nút Xuất toàn bộ file
   const requestSeq = useRef(0); // chỉ áp kết quả của lần gọi mới nhất
   const [selectedMemberIds, setSelectedMemberIds] = useState(new Set());
   const [currentPage, setCurrentPage] = useState(1);
@@ -91,6 +93,9 @@ export default function GroupScanMemberListPage() {
           }))
         );
         setTotalCount(res.total || 0);
+        getMembersSummary()
+          .then((s) => setOwnerTotal(Math.max(Number(s?.total_members) || 0, Number(res.total) || 0)))
+          .catch(() => setOwnerTotal(Number(res.total) || 0));
       } else {
         setMembers([]);
         setTotalCount(0);
@@ -150,33 +155,43 @@ export default function GroupScanMemberListPage() {
     });
   };
 
-  // Remove Single Member
-  const handleRemoveMember = async (id) => {
-    try {
-      await deleteScannedMember(id);
-      toast.success("Đã xóa thành viên khỏi danh sách!");
-      setSelectedMemberIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-      loadMembers();
-    } catch {
-      toast.error("Không thể xóa thành viên!");
-    }
+  // Xóa thành viên: luôn hỏi xác nhận trước (xóa 1 người hoặc xóa các người đã tick)
+  const [deletePrompt, setDeletePrompt] = useState(null); // { ids: [], name?: string }
+  const [deleting, setDeleting] = useState(false);
+
+  const handleRemoveMember = (id) => {
+    const m = members.find((x) => x.id === id);
+    setDeletePrompt({ ids: [id], name: m?.name || m?.member_name || m?.uid || "" });
   };
 
-  // Bulk Delete
-  const handleBulkDelete = async () => {
+  const handleBulkDelete = () => {
     if (selectedMemberIds.size === 0) return;
+    setDeletePrompt({ ids: Array.from(selectedMemberIds) });
+  };
+
+  const confirmDeleteMembers = async () => {
+    if (!deletePrompt || deleting) return;
+    const { ids } = deletePrompt;
+    setDeleting(true);
     try {
-      const ids = Array.from(selectedMemberIds);
-      const res = await deleteScannedMembersBulk(ids);
-      toast.success(`Đã xóa ${res?.deleted_count || ids.length} thành viên được chọn!`);
-      setSelectedMemberIds(new Set());
+      if (ids.length === 1) {
+        await deleteScannedMember(ids[0]);
+        toast.success("Đã xóa thành viên khỏi danh sách!");
+      } else {
+        const res = await deleteScannedMembersBulk(ids);
+        toast.success(`Đã xóa ${res?.deleted_count || ids.length} thành viên được chọn!`);
+      }
+      setSelectedMemberIds((prev) => {
+        const next = new Set(prev);
+        ids.forEach((id) => next.delete(id));
+        return next;
+      });
+      setDeletePrompt(null);
       loadMembers();
     } catch {
-      toast.error("Không thể xóa các thành viên đã chọn!");
+      toast.error(ids.length === 1 ? "Không thể xóa thành viên!" : "Không thể xóa các thành viên đã chọn!");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -263,7 +278,7 @@ export default function GroupScanMemberListPage() {
         {/* Card Header Bar */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] px-5 py-4 bg-[#F8FAFC]/50">
           <div className="flex items-center gap-2.5">
-            <h2 className="text-base font-bold text-[#0B1C30]">
+            <h2 className="font-heading text-base font-semibold text-[#0F172A]">
               DANH SÁCH THÀNH VIÊN ĐÃ QUÉT
             </h2>
             <span className="rounded-full bg-[#EFF6FF] border border-[#BFDBFE] px-2.5 py-0.5 text-[11px] font-semibold text-[#1D4ED8]">
@@ -284,7 +299,9 @@ export default function GroupScanMemberListPage() {
             <button
               type="button"
               onClick={handleExportAll}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#CBD5E1] bg-white px-3 text-xs font-semibold text-[#334155] shadow-xs hover:bg-slate-50 transition-colors"
+              disabled={ownerTotal === 0}
+              title={ownerTotal === 0 ? "Danh sách thành viên đang rỗng — chưa có dữ liệu để xuất" : undefined}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#CBD5E1] bg-white px-3 text-xs font-semibold text-[#334155] shadow-xs hover:bg-slate-50 transition-colors disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
             >
               <Download className="size-3.5 text-[#64748B]" />
               <span>Xuất toàn bộ file</span>
@@ -320,6 +337,7 @@ export default function GroupScanMemberListPage() {
               onExportGroup={handleExportGroup}
               onExportSelected={handleExportSelected}
               onBulkDelete={handleBulkDelete}
+              canExportGroup={totalCount > 0 && !loading}
             />
 
             <MemberDataTable
@@ -341,6 +359,23 @@ export default function GroupScanMemberListPage() {
           </div>
         </div>
       </section>
+
+      {/* Xác nhận trước khi xóa thành viên */}
+      <ConfirmDialog
+        isOpen={Boolean(deletePrompt)}
+        onClose={() => { if (!deleting) setDeletePrompt(null); }}
+        onConfirm={confirmDeleteMembers}
+        loading={deleting}
+        variant="danger"
+        title="Xóa thành viên"
+        description={
+          deletePrompt?.ids.length === 1
+            ? `Bạn có chắc muốn xóa thành viên${deletePrompt.name ? ` «${deletePrompt.name}»` : ""} khỏi danh sách? Thao tác này không thể hoàn tác.`
+            : `Bạn có chắc muốn xóa ${deletePrompt?.ids.length || 0} thành viên đã chọn khỏi danh sách? Thao tác này không thể hoàn tác.`
+        }
+        confirmText="Xóa"
+        cancelText="Hủy"
+      />
 
       {/* Modal Thêm Mới Danh Mục Nhóm */}
       <CreateCategoryModal

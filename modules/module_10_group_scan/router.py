@@ -1,6 +1,11 @@
 """API Module 10 — Quét thông tin nhóm. Tài khoản lấy từ Module 2."""
 from __future__ import annotations
 
+import base64
+import binascii
+import os
+import re
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -662,6 +667,58 @@ def post_member_scan_control(body: MemberJobControlRequest):
     if not ok:
         raise HTTPException(400, f"Không thể gửi lệnh '{body.action}' tới phiên quét")
     return {"ok": True, "action": body.action}
+
+
+class ExportFileBody(BaseModel):
+    file_name: str = Field(..., min_length=1, max_length=200)
+    content_base64: str = Field(..., min_length=1)
+
+
+_EXPORT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+\.(xlsx|csv|txt)$")
+
+
+def _export_dir() -> Path:
+    """Thư mục Tải về của người dùng (engine chạy ngay trên máy người dùng)."""
+    folder = Path.home() / "Downloads"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+@router.post("/export-file", dependencies=[Depends(scoped_owner)])
+def save_export_file(body: ExportFileBody):
+    """Ghi file xuất (Excel/CSV) vào thư mục Tải về.
+
+    Tải qua trình duyệt không báo lỗi về app khi ghi file thất bại (vd. file đích đang mở
+    trong Excel) → người dùng không biết. Ghi ở đây để trả lỗi rõ ràng cho giao diện báo Toast.
+    """
+    name = os.path.basename(body.file_name.strip())
+    if not _EXPORT_NAME_RE.match(name):
+        raise HTTPException(400, "Tên file xuất không hợp lệ.")
+    try:
+        data = base64.b64decode(body.content_base64, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(400, "Dữ liệu file xuất không hợp lệ.")
+
+    try:
+        folder = _export_dir()
+    except OSError as exc:
+        raise HTTPException(500, f"Không truy cập được thư mục Tải về: {exc}")
+    target = folder / name
+    tmp = folder / f".{name}.{os.getpid()}.tmp"
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, target)
+    except PermissionError:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(
+            409,
+            f"Không thể ghi file «{name}» vì file đang được mở hoặc bị khóa. "
+            "Hãy đóng file (Excel...) rồi xuất lại.",
+        )
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(500, f"Không thể ghi file «{name}»: {exc.strerror or exc}")
+    return {"ok": True, "file_name": name, "path": str(target)}
 
 
 @router.get("/members", dependencies=[Depends(scoped_owner)])

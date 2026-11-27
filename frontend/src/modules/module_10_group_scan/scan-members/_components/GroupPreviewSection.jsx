@@ -16,7 +16,7 @@ export default function GroupPreviewSection({
           </div>
           <div className="flex flex-col">
             <div className="flex items-center gap-2">
-              <h3 className="text-sm font-bold text-[#0B1C30]">
+              <h3 className="font-heading text-base font-semibold text-[#0F172A]">
                 Xem trước danh sách nhóm muốn quét
               </h3>
               <span className="rounded-full bg-[#DBEAFE] px-2.5 py-0.5 text-[11px] font-semibold text-[#1D4ED8]">
@@ -33,7 +33,7 @@ export default function GroupPreviewSection({
       {/* Table Container */}
       <div className="overflow-x-auto">
         <table className="w-full min-w-[700px] text-left text-xs">
-          <thead className="bg-[#F8FAFC] text-[10px] font-bold uppercase tracking-wide text-[#64748B] border-b border-[#E2E8F0]">
+          <thead className="bg-[#F8FAFC] text-xs font-semibold uppercase tracking-[0.3px] [&_th]:font-semibold text-[#64748B] border-b border-[#E2E8F0]">
             <tr>
               <th className="w-14 px-4 py-3 text-center">STT</th>
               <th className="px-4 py-3">TÊN NHÓM FACEBOOK</th>

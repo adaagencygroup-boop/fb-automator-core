@@ -79,10 +79,10 @@ export default function ScanTargetConfigCard({
   return (
     <section className="flex flex-col h-full rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex items-center gap-2.5 pb-3 mb-4 border-b border-[#F1F5F9]">
-        <span className="flex size-6 items-center justify-center rounded-full bg-[#2563EB] text-[11px] font-bold text-white shrink-0">
+        <span className="flex size-6 items-center justify-center rounded-full bg-[#2563EB] text-xs font-bold text-white shrink-0">
           2
         </span>
-        <h2 className="text-sm font-bold text-[#0B1C30]">Thiết lập cấu hình quét mục tiêu</h2>
+        <h2 className="font-heading text-base font-semibold text-[#0F172A]">Thiết lập cấu hình quét mục tiêu</h2>
       </div>
 
       {method === "keyword" && (

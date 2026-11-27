@@ -25,18 +25,21 @@ export default function LiveMemberResultSection({
   totalFilteredCount,
   totalPages,
   onPageChange,
+  canExport = false,
 }) {
   return (
     <section className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] space-y-4">
       {/* Section Header with Export */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] pb-3">
-        <h3 className="text-sm font-bold text-[#0B1C30]">
+        <h3 className="font-heading text-base font-semibold text-[#0F172A]">
           Kết quả quét thành viên
         </h3>
         <button
           type="button"
           onClick={onExportAll}
-          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#E2E8F0] px-3 text-xs font-semibold text-[#64748B] hover:bg-slate-50 transition-colors"
+          disabled={!canExport}
+          title={canExport ? undefined : "Danh sách thành viên đang rỗng — chưa có dữ liệu để xuất"}
+          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#E2E8F0] px-3 text-xs font-semibold text-[#64748B] hover:bg-slate-50 transition-colors disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
         >
           <Download className="size-3.5 text-[#64748B]" />
           <span>Xuất toàn bộ file</span>
@@ -130,7 +133,9 @@ export default function LiveMemberResultSection({
               <button
                 type="button"
                 onClick={onExportGroup}
-                className="inline-flex items-center gap-1 px-2.5 h-7 border border-[#E2E8F0] rounded-lg text-xs font-semibold text-[#475569] hover:bg-slate-50 transition-colors"
+                disabled={!canExport}
+                title={canExport ? undefined : "Danh sách thành viên đang rỗng — chưa có dữ liệu để xuất"}
+                className="inline-flex items-center gap-1 px-2.5 h-7 border border-[#E2E8F0] rounded-lg text-xs font-semibold text-[#475569] hover:bg-slate-50 transition-colors disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
               >
                 <Download className="size-3 text-[#475569]" />
                 <span>Xuất nhóm</span>
@@ -141,7 +146,7 @@ export default function LiveMemberResultSection({
           {/* Scraped Member Result Table */}
           <div className="w-full border border-[#E2E8F0] rounded-lg overflow-x-auto">
             <table className="w-full min-w-[620px] text-left text-xs">
-              <thead className="bg-[#F8FAFC] text-[10px] font-bold uppercase tracking-wide text-[#64748B] border-b border-[#E2E8F0]">
+              <thead className="bg-[#F8FAFC] text-xs font-semibold uppercase tracking-[0.3px] [&_th]:font-semibold text-[#64748B] border-b border-[#E2E8F0]">
                 <tr>
                   <th className="py-2.5 px-3 text-center w-10">
                     <input

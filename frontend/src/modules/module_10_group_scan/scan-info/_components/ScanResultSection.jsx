@@ -135,7 +135,7 @@ export default function ScanResultSection({
     <section className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] px-5 py-4">
         <div className="flex items-center gap-2">
-          <h2 className="text-sm font-bold text-[#0B1C30]">Kết quả quét</h2>
+          <h2 className="font-heading text-base font-semibold text-[#0F172A]">Kết quả quét</h2>
           <span className="rounded-full bg-[#EFF6FF] px-2 py-0.5 text-[11px] font-semibold text-[#2563EB]">
             {filteredResults.length !== results.length
               ? `${filteredResults.length} / ${results.length} nhóm (đang lọc)`
@@ -237,7 +237,7 @@ export default function ScanResultSection({
       )}
       <div ref={setTableBox} className="overflow-x-auto">
         <table className="w-full min-w-[960px] text-left text-xs">
-          <thead className="bg-[#F8FAFC] text-[10px] font-bold uppercase tracking-wide text-[#64748B]">
+          <thead className="bg-[#F8FAFC] text-xs font-semibold uppercase tracking-[0.3px] [&_th]:font-semibold text-[#64748B]">
             <tr>
               <th className="w-10 px-4 py-2.5">
                 <Checkbox checked={allVisibleSelected} onCheckedChange={(value) => onToggleAllRows(Boolean(value))} />

@@ -2,6 +2,8 @@
 // - .xlsx: ô ID / UID ghi dạng CHỮ → Excel không đổi thành 1,00034E+14, không mất số 0 / chữ số cuối.
 // - .csv: có BOM UTF-8 để Excel đọc đúng tiếng Việt, thoát dấu phẩy / nháy / xuống dòng đúng chuẩn.
 
+import api from "@/services/api";
+
 const pad = (n) => String(n).padStart(2, "0");
 
 /** "Đại học Phenikaa (K20)" → "Dai_hoc_Phenikaa_K20" — tên file không dấu, không ký tự lạ. */
@@ -42,24 +44,29 @@ export function buildWorkbook(XLSX, { headers, rows, sheetName = "Sheet1", width
   return book;
 }
 
-/** Tải file về máy. format: "xlsx" | "csv". Trả về tên file. */
+function textToBase64(text) {
+  const bytes = new TextEncoder().encode(text);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+/**
+ * Lưu file vào thư mục Tải về (Downloads). Trả về đường dẫn file đã lưu.
+ * format: "xlsx" | "csv". Engine ghi file → lỗi (file đích đang mở / bị khóa...) được
+ * ném ra thành Error để màn hình báo Toast; tải qua trình duyệt thì lỗi bị nuốt im lặng.
+ */
 export async function downloadTable({ format = "xlsx", baseName, headers, rows, sheetName, widths }) {
   const fileName = `${safeFileName(baseName)}_${fileStamp()}.${format}`;
+  let contentBase64;
   if (format === "csv") {
-    const blob = new Blob([buildCsv(headers, rows)], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    contentBase64 = textToBase64(buildCsv(headers, rows));
   } else {
     const XLSX = await import("xlsx");
-    XLSX.writeFile(buildWorkbook(XLSX, { headers, rows, sheetName, widths }), fileName);
+    contentBase64 = XLSX.write(buildWorkbook(XLSX, { headers, rows, sheetName, widths }), { bookType: "xlsx", type: "base64" });
   }
-  return fileName;
+  const res = await api.post("/api/group-scan/export-file", { file_name: fileName, content_base64: contentBase64 }, { timeout: 120000 });
+  return res?.path || fileName;
 }
 
 /**

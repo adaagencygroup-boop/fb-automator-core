@@ -20,7 +20,7 @@ export default function LiveLogConsole({
           <span className="flex size-7 items-center justify-center rounded-lg bg-[#EFF6FF]">
             <IconProgress />
           </span>
-          <h2 className="text-sm font-bold text-[#0F172A]">Theo dõi tiến trình</h2>
+          <h2 className="font-heading text-base font-semibold text-[#0F172A]">Theo dõi tiến trình</h2>
         </div>
         <span className="inline-flex items-center gap-1.5 rounded bg-emerald-500/10 px-2.5 py-0.5 font-mono text-[10px] font-semibold text-emerald-600">
           <span className="size-1.5 rounded-full bg-emerald-500" />
