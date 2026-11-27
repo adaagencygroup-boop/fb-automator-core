@@ -174,3 +174,14 @@ export async function downloadFarmHistoryXlsx(filters) {
   XLSX.writeFile(book, fileName);
   return { fileName, rows: body.length };
 }
+
+// ── Chiến dịch đăng bài Status nhiều khung giờ (Tab 2) ──
+
+export const listPostCampaigns = () => api.get("/api/post/campaigns").then((res) => res?.data || []);
+export const getPostCampaign = (id) => api.get(`/api/post/campaigns/${id}`).then((res) => res?.data);
+export const stopPostCampaign = (id) => api.post(`/api/post/campaigns/${id}/stop`);
+export const resumePostCampaign = (id) => api.post(`/api/post/campaigns/${id}/start`);
+export const deletePostCampaign = (id) => api.delete(`/api/post/campaigns/${id}`);
+// runTime rỗng = chạy ngay; "HH:mm" = chạy lúc đó trong hôm nay
+export const rerunPostCampaignSlot = (id, slotId, runTime) =>
+  api.post(`/api/post/campaigns/${id}/slots/${slotId}/rerun`, { run_time: runTime || null });

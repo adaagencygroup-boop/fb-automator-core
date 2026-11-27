@@ -9,6 +9,7 @@ import TikTokDownloadView from "./components/TikTokDownloadView";
 import { PostModeTabs } from "./components/PostModeTabs";
 import { StatusPostView } from "./components/StatusPostView";
 import { ReelsPostView } from "./components/ReelsPostView";
+import PostCampaignsView from "./components/campaigns/PostCampaignsView";
 import { api } from "@/services/api";
 import { useUnsavedChanges } from "@/components/UnsavedChangesContext";
 import { shouldRestoreProgressView } from "@/modules/module_03_acc_farm/postSessionUi";
@@ -19,6 +20,7 @@ import { shouldRestoreProgressView } from "@/modules/module_03_acc_farm/postSess
  *   interact.tiktok  -> Tải video từ TikTok theo từ khóa cho từng tài khoản
  *   interact.history -> Lịch sử (chuẩn từ nhánh main: FarmHistory)
  *   interact.post    -> Tab 2: Đăng bài viết Facebook (Status, Reels, Story)
+ *   interact.campaigns -> Quản lý chiến dịch đăng Status nhiều khung giờ
  */
 export default function AccFarmModule({ subPage = "interact.post" }) {
   const searchParams = useSearchParams();
@@ -125,6 +127,11 @@ export default function AccFarmModule({ subPage = "interact.post" }) {
   // 2. Phân hệ Lịch sử (/interact/history) - Chuẩn từ main
   if (subPage === "interact.history") {
     return <FarmHistory />;
+  }
+
+  // Quản lý chiến dịch đăng bài (/interact/campaigns)
+  if (subPage === "interact.campaigns") {
+    return <PostCampaignsView />;
   }
 
   // Tải video từ TikTok (/interact/tiktok)

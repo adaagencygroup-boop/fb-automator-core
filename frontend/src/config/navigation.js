@@ -63,6 +63,14 @@ export const NAV_ITEMS = [
         icon: icon("icon_nav_post_facebook", 14, 14),
       },
       {
+        id: "interact.campaigns",
+        label: "Quản lý chiến dịch",
+        title: "Quản lý chiến dịch đăng bài",
+        description: "Theo dõi, dừng, sửa và chạy lại các chiến dịch đăng Status nhiều khung giờ.",
+        moduleId: "farm",
+        icon: icon("icon_nav_fanpage_list", 24, 10.5),
+      },
+      {
         id: "interact.engage",
         label: "Tương tác tài khoản",
         description: "Thiết lập kịch bản tương tác tự động để nuôi tài khoản.",

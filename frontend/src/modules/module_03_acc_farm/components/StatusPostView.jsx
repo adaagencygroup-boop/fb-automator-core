@@ -688,9 +688,11 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
     };
   }, []);
 
-  // Restore màn tiến trình ngay khi mount (không chờ load accounts)
+  // Restore màn tiến trình ngay khi mount (không chờ load accounts).
+  // ?progress=1 (từ Quản lý chiến dịch) → mở cả tiến trình của khung chiến dịch đang chạy
   useEffect(() => {
-    checkActiveSessionOnMount();
+    checkActiveSessionOnMount(searchParams?.get("progress") === "1");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
