@@ -19,6 +19,10 @@ CREATE TABLE IF NOT EXISTS public.post_compose_drafts (
   image_paths TEXT,
   min_images INTEGER NOT NULL DEFAULT 1 CHECK (min_images BETWEEN 1 AND 3),
   max_images INTEGER NOT NULL DEFAULT 1 CHECK (max_images BETWEEN 1 AND 3),
+  -- TEXT = ô soạn chung; ACCOUNTS = Từng bài (mỗi nick 1 bài riêng cho mỗi khung giờ)
+  layout TEXT NOT NULL DEFAULT 'ACCOUNTS',
+  -- JSON {uid: [{content, images}, ...]} cho layout ACCOUNTS
+  account_posts TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (owner_key, post_type),
   CHECK (min_images <= max_images)
@@ -40,6 +44,7 @@ CREATE TABLE IF NOT EXISTS public.post_campaigns (
   image_paths TEXT,
   min_images INTEGER NOT NULL DEFAULT 1 CHECK (min_images BETWEEN 1 AND 3),
   max_images INTEGER NOT NULL DEFAULT 1 CHECK (max_images BETWEEN 1 AND 3),
+  layout TEXT NOT NULL DEFAULT 'TEXT',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK (min_images <= max_images)
@@ -59,6 +64,8 @@ CREATE TABLE IF NOT EXISTS public.post_campaign_slots (
   success_count INTEGER NOT NULL DEFAULT 0,
   failed_count INTEGER NOT NULL DEFAULT 0,
   message TEXT,
+  -- Layout ACCOUNTS: JSON {uid: {content, images}} bài của từng nick ở khung này
+  account_posts TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -87,6 +94,12 @@ DROP TRIGGER IF EXISTS trg_post_campaign_slots_updated_at ON public.post_campaig
 CREATE TRIGGER trg_post_campaign_slots_updated_at
   BEFORE UPDATE ON public.post_campaign_slots
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- Bảng tạo từ bản trước của migration này: thêm cột dạng soạn "Từng bài"
+ALTER TABLE public.post_compose_drafts ADD COLUMN IF NOT EXISTS layout TEXT NOT NULL DEFAULT 'ACCOUNTS';
+ALTER TABLE public.post_compose_drafts ADD COLUMN IF NOT EXISTS account_posts TEXT;
+ALTER TABLE public.post_campaigns ADD COLUMN IF NOT EXISTS layout TEXT NOT NULL DEFAULT 'TEXT';
+ALTER TABLE public.post_campaign_slots ADD COLUMN IF NOT EXISTS account_posts TEXT;
 
 ALTER TABLE public.post_compose_drafts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.post_campaigns ENABLE ROW LEVEL SECURITY;

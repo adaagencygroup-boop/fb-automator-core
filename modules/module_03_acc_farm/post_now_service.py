@@ -17,7 +17,14 @@ from typing import Any, Callable, Dict, List, Optional
 from modules.module_03_acc_farm import post_repository
 from modules.module_03_acc_farm.compose_service import (
     IMAGE_NONE,
+    LAYOUT_ACCOUNTS,
+    LAYOUT_TEXT,
+    account_entry,
+    allocate_account_round,
     allocate_round,
+    normalize_account_posts,
+    normalize_layout,
+    validate_account_posts,
     clamp_image_range,
     normalize_content_mode,
     normalize_image_mode,
@@ -48,6 +55,9 @@ class ComposeInput:
     image_paths: List[str] = field(default_factory=list)
     min_images: int = 1
     max_images: int = 1
+    # "TEXT" (ô soạn chung) | "ACCOUNTS" (Từng bài: {uid: [{content, images}, ...]})
+    layout: str = LAYOUT_TEXT
+    account_posts: Dict[str, Any] = field(default_factory=dict)
 
 
 def _format_eta(seconds: Optional[int]) -> str:
@@ -141,22 +151,33 @@ def start_status_post_now(
     file_exists: Callable[[str], bool] = os.path.isfile,
 ) -> Dict[str, Any]:
     accounts = _unique_accounts(accounts)
+    layout = normalize_layout(compose.layout)
     content_mode = normalize_content_mode(compose.content_mode)
     image_mode = normalize_image_mode(compose.image_mode)
     lo, hi = clamp_image_range(compose.min_images, compose.max_images)
-    parsed = parse_compose_text(compose.content_text, content_mode)
-    images = normalize_pool_images(compose.image_paths) if image_mode != IMAGE_NONE else []
+    uids = [str(a["uid"]).strip() for a in accounts]
+    if layout == LAYOUT_ACCOUNTS:
+        account_posts = normalize_account_posts(compose.account_posts)
+        entries = {uid: account_entry(account_posts, uid, 0) for uid in uids}
+        images = [p for e in entries.values() for p in e["images"]]
+        summary = f"Từng bài: {len(accounts)} nick, mỗi nick 1 bài riêng"
+        check = validate_account_posts(account_posts, accounts, 1)
+    else:
+        parsed = parse_compose_text(compose.content_text, content_mode)
+        images = normalize_pool_images(compose.image_paths) if image_mode != IMAGE_NONE else []
+        summary = parsed.summary()
+        check = validate_plan(
+            parsed, images, account_count=len(accounts), slot_count=1,
+            content_mode=content_mode, image_mode=image_mode, min_images=lo, max_images=hi,
+        )
 
-    missing = [p for p in images if not file_exists(p)]
+    missing = list(dict.fromkeys(p for p in images if not file_exists(p)))
     if missing:
         names = ", ".join(os.path.basename(p) for p in missing[:5])
         more = f" và {len(missing) - 5} ảnh khác" if len(missing) > 5 else ""
-        raise PostNowError(f"{len(missing)} ảnh trong kho không còn trên máy ({names}{more}). Xoá ảnh đó khỏi kho rồi thử lại.")
+        where = "đã chọn" if layout == LAYOUT_ACCOUNTS else "trong kho"
+        raise PostNowError(f"{len(missing)} ảnh {where} không còn trên máy ({names}{more}). Bỏ ảnh đó rồi thử lại.")
 
-    check = validate_plan(
-        parsed, images, account_count=len(accounts), slot_count=1,
-        content_mode=content_mode, image_mode=image_mode, min_images=lo, max_images=hi,
-    )
     if not check.ok:
         raise PostNowError(" ".join(check.errors), errors=check.errors)
 
@@ -165,11 +186,14 @@ def start_status_post_now(
         if busy:
             raise PostNowError(busy, status_code=409)
 
-        alloc = allocate_round(
-            [str(a["uid"]).strip() for a in accounts], parsed.posts, images,
-            content_mode=content_mode, image_mode=image_mode, min_images=lo, max_images=hi,
-            rng=rng or random.Random(),
-        )
+        if layout == LAYOUT_ACCOUNTS:
+            alloc = allocate_account_round(uids, entries)
+        else:
+            alloc = allocate_round(
+                uids, parsed.posts, images,
+                content_mode=content_mode, image_mode=image_mode, min_images=lo, max_images=hi,
+                rng=rng or random.Random(),
+            )
         if not alloc.assignments:
             raise PostNowError("Không chia được bài cho nick nào. " + " ".join(alloc.skipped.values()))
 
@@ -217,5 +241,5 @@ def start_status_post_now(
         "inserted_count": len(alloc.assignments),
         "skipped": skipped,
         "warnings": check.warnings,
-        "parsed": parsed.summary(),
+        "parsed": summary,
     }

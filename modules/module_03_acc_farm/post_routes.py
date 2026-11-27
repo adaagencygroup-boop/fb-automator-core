@@ -44,6 +44,7 @@ from modules.module_03_acc_farm.post_runner import runner
 from modules.module_03_acc_farm import compose_jobs, compose_repository
 from modules.module_03_acc_farm.compose_service import (
     MAX_IMAGES_PER_POST,
+    MAX_TIME_SLOTS,
     MIN_IMAGES_PER_POST,
     parse_compose_text,
 )
@@ -84,13 +85,17 @@ MAX_POOL_IMAGES = 2000
 
 
 class ComposeContentPayload(BaseModel):
-    """Nội dung ô soạn bài chung: các bài tách bằng dòng "---" + kho ảnh chung."""
+    """Nội dung soạn bài: ô soạn chung (bài tách bằng "---" + kho ảnh chung) và/hoặc "Từng bài" theo nick.
+    `layout` chọn cách dùng khi đăng: TEXT = ô soạn chung, ACCOUNTS = mỗi nick đăng đúng bài của nó."""
     content_text: str = Field("", max_length=MAX_COMPOSE_CHARS)
     content_mode: str = "MULTI"
     image_mode: str = "NONE"
     image_paths: List[str] = Field(default_factory=list, max_length=MAX_POOL_IMAGES)
     min_images: int = Field(1, ge=MIN_IMAGES_PER_POST, le=MAX_IMAGES_PER_POST)
     max_images: int = Field(1, ge=MIN_IMAGES_PER_POST, le=MAX_IMAGES_PER_POST)
+    layout: str = "TEXT"
+    # {uid: [{content, images}, ...]} — phần tử thứ i cho khung giờ thứ i (Đăng ngay dùng phần tử đầu)
+    account_posts: Dict[str, Any] = Field(default_factory=dict, max_length=5000)
 
 
 class StartPostPayload(BaseModel):
@@ -358,10 +363,19 @@ class ComposeDraftPayload(ComposeContentPayload):
     post_type: str = Field("status", pattern=POST_TYPE_PATTERN)
 
 
+class ComposeGenerateTarget(BaseModel):
+    uid: str = Field(..., min_length=1, max_length=100)
+    index: int = Field(0, ge=0, lt=MAX_TIME_SLOTS)
+
+
 class ComposeGeneratePayload(BaseModel):
     post_type: str = Field("status", pattern=POST_TYPE_PATTERN)
     prompt: str = Field(..., min_length=1, max_length=5000)
-    count: int = Field(..., ge=1, le=compose_jobs.MAX_GENERATE_COUNT)
+    # Ô soạn chung: số bài thêm vào cuối ô. Dạng "Từng bài": bỏ qua, số bài = số ô trong `targets`
+    count: int = Field(1, ge=1, le=compose_jobs.MAX_GENERATE_COUNT)
+    targets: Optional[List[ComposeGenerateTarget]] = Field(None, max_length=compose_jobs.MAX_GENERATE_COUNT)
+    # Nút "Tạo lại" ở 1 ô: ghi đè nội dung đang có
+    overwrite: bool = False
     with_images: bool = False
     api_key_source: Optional[str] = None
     pixabay_key: Optional[str] = None
@@ -427,15 +441,20 @@ def save_compose_draft(payload: ComposeDraftPayload):
         image_paths=payload.image_paths,
         min_images=payload.min_images,
         max_images=min(MAX_IMAGES_PER_POST, max(payload.min_images, payload.max_images)),
+        layout=payload.layout,
+        account_posts=payload.account_posts,
     )
     return _compose_response(payload.post_type, draft)
 
 
 @router.delete("/compose/draft", dependencies=[Depends(scoped_owner)])
-def clear_compose_draft(post_type: str = Query("status", pattern=POST_TYPE_PATTERN)):
-    """Nút "Xoá tất cả": xoá nội dung và kho ảnh, giữ lựa chọn chế độ."""
+def clear_compose_draft(
+    post_type: str = Query("status", pattern=POST_TYPE_PATTERN),
+    layout: Optional[str] = Query(None, pattern="^(TEXT|ACCOUNTS)$"),
+):
+    """Nút "Xoá tất cả": xoá nội dung của cách soạn đang xem (không truyền layout = xoá cả hai), giữ lựa chọn chế độ."""
     _ensure_draft_unlocked(post_type)
-    return _compose_response(post_type, compose_repository.clear_compose_draft(post_type))
+    return _compose_response(post_type, compose_repository.clear_compose_draft(post_type, layout))
 
 
 @router.post("/compose/generate", dependencies=[Depends(scoped_owner)])
@@ -451,7 +470,10 @@ def start_compose_generate(payload: ComposeGeneratePayload):
 
     def generate_text(prompt: str, api_key: str, fallback: List[str], model_name: str):
         try:
-            result = generate_status_content(prompt=prompt, api_key=api_key, model=model_name, fallback_keys=fallback)
+            result = generate_status_content(
+                prompt=prompt, api_key=api_key, model=model_name, fallback_keys=fallback,
+                want_image=payload.with_images,
+            )
         except Exception as exc:
             raise RuntimeError(_friendly_gemini_error(str(exc))) from exc
         return result if isinstance(result, tuple) else (result, None)
@@ -471,9 +493,13 @@ def start_compose_generate(payload: ComposeGeneratePayload):
             pixabay_key=pixabay_key,
             generate_text=generate_text,
             fetch_image=fetch_image,
+            targets=[(t.uid, t.index) for t in payload.targets] if payload.targets is not None else None,
+            overwrite=payload.overwrite,
         )
     except compose_jobs.JobConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return {"success": True, "job": job.to_dict()}
 
 
@@ -833,6 +859,8 @@ def _start_status_post_now(payload: StartPostPayload) -> Dict[str, Any]:
                 image_paths=compose.image_paths,
                 min_images=compose.min_images,
                 max_images=compose.max_images,
+                layout=compose.layout,
+                account_posts=compose.account_posts,
             ),
             thread_count=payload.thread_count or 1,
             min_delay=payload.min_delay if payload.min_delay is not None else 600,

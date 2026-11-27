@@ -41,7 +41,9 @@ import { toast } from "@/lib/toast";
 import { ComposeEditor, PlanCheckNotice } from "./ComposeEditor";
 import { TimeSlotList, slotProblems } from "./TimeSlotList";
 import { useComposeDraft } from "../hooks/useComposeDraft";
-import { parseComposeText, sortSlots } from "../composeText";
+import { CONTENT_MULTI, LAYOUT_TEXT, emptyAccountCells, parseComposeText, sortSlots } from "../composeText";
+
+const MAX_AI_POSTS = 200; // khớp giới hạn 1 lần tạo của /api/post/compose/generate
 import CustomSelect from "@/components/ui/custom-select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
@@ -183,6 +185,28 @@ const loginFilterOptions = [
   { value: "failed", label: "Đăng nhập lỗi" },
 ];
 
+// Cấu hình Bước 2-3 (nick đã chọn, hẹn giờ, khung giờ, tên chiến dịch, luồng, delay) giữ trong trình duyệt
+// để tải lại trang không mất. Nội dung bài đã có nháp trên máy chủ (useComposeDraft).
+const STATUS_CONFIG_STORAGE_KEY = "m03.status.config.v1";
+
+function readSavedStatusConfig() {
+  try {
+    const raw = window.localStorage.getItem(STATUS_CONFIG_STORAGE_KEY);
+    const value = raw ? JSON.parse(raw) : null;
+    return value && typeof value === "object" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSavedStatusConfig(value) {
+  try {
+    window.localStorage.setItem(STATUS_CONFIG_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    // trình duyệt chặn lưu → bỏ qua
+  }
+}
+
 export function StatusPostView({ initialState = "config", onHasPostsChange, isActive = true }) {
   const router = useRouter();
   const [viewState, setViewState] = useState(initialState);
@@ -306,7 +330,8 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
   );
 
   // ── Drafts State ──
-  const [scheduleEnabled, setScheduleEnabled] = useState(true);
+  // Hẹn giờ mặc định tắt; tải lại trang thì lấy lại đúng trạng thái người dùng đã chọn (xem readSavedStatusConfig)
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduleTime, setScheduleTime] = useState("08:00");
   const [threadCount, setThreadCount] = useState(1);
   const [minDelay, setMinDelay] = useState(600);
@@ -396,8 +421,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
         const nextModel = s.gemini_model
           ? String(s.gemini_model).trim().toLowerCase().replace(/\s+/g, "-")
           : selectedModel;
-        const nextScheduleEnabled =
-          s.schedule_enabled !== undefined ? s.schedule_enabled : scheduleEnabled;
+        const nextScheduleEnabled = scheduleEnabled;
         const nextScheduleTime = s.schedule_time
           ? s.schedule_time.slice(0, 5)
           : scheduleTime;
@@ -442,11 +466,12 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
           });
         }
         if (nextPixabay) handleCheckKeys("pixabay", nextPixabay);
-        if (s.schedule_enabled !== undefined) setScheduleEnabled(s.schedule_enabled);
         if (s.schedule_time) setScheduleTime(s.schedule_time.slice(0, 5));
-        if (s.min_delay) setMinDelay(s.min_delay);
-        if (s.max_delay) setMaxDelay(s.max_delay);
-        if (s.thread_count) setThreadCount(s.thread_count);
+        // Luồng / delay vừa chỉnh (lưu trong trình duyệt) được ưu tiên hơn bản lưu trên máy chủ
+        const localCfg = readSavedStatusConfig();
+        if (s.min_delay && localCfg?.minDelay == null) setMinDelay(s.min_delay);
+        if (s.max_delay && localCfg?.maxDelay == null) setMaxDelay(s.max_delay);
+        if (s.thread_count && !localCfg?.threadCount) setThreadCount(s.thread_count);
 
         settingsBaselineRef.current = snapshotSettings({
           keyFileName: nextKey || keyFileName,
@@ -856,6 +881,71 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
   const [viewingCampaignRun, setViewingCampaignRun] = useState(false);
   const [lastCreatedCampaign, setLastCreatedCampaign] = useState(null);
   const campaignUidsRef = useRef(null);
+  const previewSectionRef = useRef(null);
+
+  // ── Giữ cấu hình Bước 2-3 khi tải lại trang (không áp khi đang sửa chiến dịch) ──
+  const savedConfigRef = useRef(null);
+  const configRestoredRef = useRef(false);
+  const selectionRestoredRef = useRef(false);
+  useEffect(() => {
+    const saved = readSavedStatusConfig();
+    savedConfigRef.current = saved;
+    if (saved && !editCampaignId) {
+      if (typeof saved.scheduleEnabled === "boolean") setScheduleEnabled(saved.scheduleEnabled);
+      if (Array.isArray(saved.slots)) setSlots(sortSlots(saved.slots));
+      if (typeof saved.campaignName === "string") setCampaignName(saved.campaignName);
+      if (saved.threadCount) setThreadCount(saved.threadCount);
+      if (saved.minDelay != null) setMinDelay(saved.minDelay);
+      if (saved.maxDelay != null) setMaxDelay(saved.maxDelay);
+    }
+    configRestoredRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Tick lại các nick đã chọn lần trước (chỉ nick còn Live + Đã đăng nhập)
+  useEffect(() => {
+    if (!accountsLoaded || selectionRestoredRef.current) return;
+    selectionRestoredRef.current = true;
+    if (editCampaignId || sessionAccountsRef.current?.length) return;
+    const uids = savedConfigRef.current?.selectedUids;
+    if (!Array.isArray(uids) || uids.length === 0) return;
+    const wanted = new Set(uids.map(String));
+    setAccounts((prev) => prev.map((a) => ({ ...a, selected: wanted.has(String(a.uid || a.id)) && isAccountEligible(a) })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountsLoaded]);
+
+  useEffect(() => {
+    if (!configRestoredRef.current || editCampaignId) return;
+    writeSavedStatusConfig({
+      scheduleEnabled: Boolean(scheduleEnabled),
+      slots,
+      campaignName,
+      threadCount,
+      minDelay,
+      maxDelay,
+      // Chưa tải xong danh sách nick thì giữ nguyên lựa chọn cũ
+      selectedUids: selectionRestoredRef.current
+        ? selectedAccs.map((a) => String(a.uid || a.id))
+        : savedConfigRef.current?.selectedUids || [],
+    });
+  }, [scheduleEnabled, slots, campaignName, threadCount, minDelay, maxDelay, selectedAccs, editCampaignId]);
+  // Cào ảnh Pixabay cùng lúc với AI viết bài: tự bật khi đã có Pixabay key (trừ khi người dùng tự tắt)
+  const [aiWithImages, setAiWithImages] = useState(false);
+  const aiImagesTouchedRef = useRef(false);
+  useEffect(() => {
+    if (!aiImagesTouchedRef.current) setAiWithImages(Boolean(String(pixabayKey || "").trim()));
+  }, [pixabayKey]);
+
+  /** Cào 1 ảnh Pixabay theo nội dung / từ khoá (nút "Cào ảnh" ở thẻ nick và kho ảnh chung). */
+  const crawlImage = async (query) => {
+    const res = await api.post("/api/post/media/crawl", {
+      query: String(query || "").trim().slice(0, 300),
+      pixabay_key: String(pixabayKey || "").trim() || null,
+    });
+    const path = res?.image_path || res?.data?.image_path;
+    if (!path) throw new Error(res?.message || "Không cào được ảnh.");
+    return path;
+  };
   const useSchedule = Boolean(editCampaignId) || Boolean(scheduleEnabled);
   const keptSlots = useMemo(() => editingCampaign?.waitingSlots || [], [editingCampaign]);
 
@@ -944,6 +1034,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
       try {
         const res = await api.post("/api/post/compose/check", {
           account_count: selectedAccs.length,
+          accounts: selectedAccs.map((a) => ({ uid: String(a.uid || a.id), name: a.name || "" })),
           compose,
           slots: useSchedule ? slots : [],
           keep_slots: keptSlots,
@@ -958,7 +1049,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
     }, 600);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compose, selectedAccs.length, slots, useSchedule, keptSlots, threadCount, minDelay, maxDelay, viewState]);
+  }, [compose, selectedAccs, slots, useSchedule, keptSlots, threadCount, minDelay, maxDelay, viewState]);
 
   // Khung chiến dịch đang chạy → banner "Xem tiến trình" trên màn soạn
   useEffect(() => {
@@ -987,34 +1078,39 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
     setViewState("config");
   };
 
-  const handleAiGenerate = async (count, withImages) => {
+  /** Bắt đầu AI tạo bài: { count } = thêm vào cuối ô soạn chung; { targets, overwrite } = điền ô của từng nick. */
+  const handleAiGenerate = async ({ count = 1, targets = null, overwrite = false }, withImages) => {
     setShowConfigErrors(true);
     if (!hasApiKeySource) {
       toast.warning("Nhập Gemini API Key hoặc chọn file ở Bước 1 trước khi dùng AI.", "THIẾU GEMINI API KEY");
-      return;
+      return false;
     }
     if (!hasPrompt) {
       toast.warning("Nhập Khung Prompt AI ở Bước 1 trước khi dùng AI.", "CHƯA CÓ PROMPT");
-      return;
+      return false;
     }
     try {
       handleSaveSettingsToDb();
       await composeDraft.startGenerate({
         prompt,
-        count,
+        count: targets ? targets.length : count,
+        targets,
+        overwrite,
         withImages,
         apiKeySource: apiKeyContent || keyFileName,
         pixabayKey,
         model: selectedModel,
       });
+      return true;
     } catch (err) {
       toast.error(err?.message || "Không bắt đầu được AI tạo bài.", "AI TẠO BÀI");
+      return false;
     }
   };
 
-  const handleClearCompose = async () => {
+  const handleClearCompose = async (layout) => {
     try {
-      await composeDraft.clearAll();
+      await composeDraft.clearAll(layout);
     } catch (err) {
       toast.error(err?.message || "Không xoá được.", "XOÁ TẤT CẢ");
     }
@@ -1280,14 +1376,100 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
     if (val > maxThreadCount) setThreadCount(maxThreadCount);
   }, [selectedCount, maxThreadCount, threadCount]);
 
-  // Gợi ý số bài AI tạo = số nick × số khung giờ
-  const suggestedAiCount = Math.max(1, selectedCount) * Math.max(1, useSchedule ? slots.length : 1);
+  // Dạng "Từng bài": mỗi nick 1 thẻ; có hẹn giờ thì mỗi khung 1 ô (ô thứ i = khung thứ i theo giờ tăng dần)
+  const isAccountsLayout = compose.layout !== LAYOUT_TEXT;
+  const rowLabels = useMemo(() => (useSchedule && slots.length > 0 ? sortSlots(slots) : [""]), [useSchedule, slots]);
+  const selectedUids = useMemo(() => selectedAccs.map((a) => String(a.uid || a.id)), [selectedAccs]);
+  const cardAccounts = useMemo(
+    () => selectedAccs.map((a) => ({ uid: String(a.uid || a.id), name: a.name || a.account_name || "" })),
+    [selectedAccs],
+  );
+  const emptyCells = useMemo(
+    () => (isAccountsLayout ? emptyAccountCells(compose.account_posts, selectedUids, rowLabels.length) : []),
+    [isAccountsLayout, compose.account_posts, selectedUids, rowLabels.length],
+  );
+  const [regeneratingUid, setRegeneratingUid] = useState(null);
+  useEffect(() => {
+    if (!composeDraft.generating) setRegeneratingUid(null);
+  }, [composeDraft.generating]);
+
+  // Lý do chưa dùng được AI (THỰC THI / Tạo lại)
+  const aiBlockReason = (() => {
+    if (editCampaignId) return "Khi sửa chiến dịch, sửa bài trực tiếp ở Bước 4 (AI chỉ tạo bài vào nháp soạn bài).";
+    if (!hasApiKeySource) return "Nhập Gemini API Key hoặc chọn file ở Bước 1 trước khi thực thi.";
+    if (!hasModel) return "Chọn Model Gemini ở Bước 1 trước khi thực thi.";
+    if (!hasPrompt) return "Nhập Khung Prompt AI ở Bước 1 trước khi thực thi.";
+    if (composeDraft.generating) return "AI đang tạo bài, đợi xong hoặc bấm Huỷ.";
+    return "";
+  })();
+
+  // THỰC THI: AI tạo cho đủ số bài = số nick × số khung giờ (đã có bao nhiêu thì chỉ tạo phần còn thiếu)
+  const executePlan = (() => {
+    const slotCount = rowLabels.length;
+    const need = selectedCount * slotCount;
+    const scope = `${selectedCount} nick${slotCount > 1 ? ` × ${slotCount} khung giờ` : ""}`;
+    let have;
+    let shortfall;
+    let hint;
+    if (isAccountsLayout) {
+      have = need - emptyCells.length;
+      shortfall = Math.min(MAX_AI_POSTS, emptyCells.length);
+      hint = shortfall > 0
+        ? `Cần ${need} bài (${scope}). Đã có ${have} → AI điền ${shortfall} ô còn trống ở Bước 4.`
+        : `Đã đủ ${need} bài cho ${scope}.`;
+    } else {
+      have = parseComposeText(compose.content_text, CONTENT_MULTI).count;
+      shortfall = Math.max(0, Math.min(MAX_AI_POSTS, need - have));
+      hint = shortfall > 0
+        ? `Cần ${need} bài (${scope}). Ô soạn đang có ${have} bài → AI tạo thêm ${shortfall} bài.`
+        : `Đã đủ ${need} bài cho ${scope} (đang có ${have}).`;
+    }
+    if (selectedCount === 0) hint = "Chọn nick ở Bước 2, AI sẽ tạo mỗi nick 1 bài khác nhau.";
+    let blockReason = "";
+    if (selectedCount === 0) blockReason = "Chọn nick ở Bước 2 trước khi thực thi.";
+    else if (aiBlockReason) blockReason = aiBlockReason;
+    else if (shortfall === 0)
+      blockReason = isAccountsLayout
+        ? "Mọi nick đã có bài. Muốn AI viết lại 1 nick thì bấm Tạo lại ở thẻ của nick đó."
+        : "Đã đủ bài. Muốn AI tạo lại thì xoá bớt bài hoặc bấm Xoá tất cả ở Bước 4.";
+    return { need, have, shortfall, hint, blockReason };
+  })();
+
+  const handleExecuteGenerate = async () => {
+    if (executePlan.blockReason || executePlan.shortfall <= 0) return;
+    const ok = isAccountsLayout
+      ? await handleAiGenerate({ targets: emptyCells.slice(0, MAX_AI_POSTS) }, aiWithImages)
+      : await handleAiGenerate({ count: executePlan.shortfall }, aiWithImages);
+    if (ok) previewSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  // Nút "Tạo lại" ở thẻ 1 nick: AI viết lại mọi ô của nick đó (ghi đè)
+  const handleRegenerateAccount = async (uid) => {
+    if (aiBlockReason) {
+      toast.warning(aiBlockReason, "TẠO LẠI");
+      return;
+    }
+    setRegeneratingUid(uid);
+    const ok = await handleAiGenerate(
+      { targets: rowLabels.map((_, index) => ({ uid, index })), overwrite: true },
+      aiWithImages,
+    );
+    if (!ok) setRegeneratingUid(null);
+  };
+
+  // Nút "Xoá" ở thẻ: bỏ chọn nick (bài của nick đã được xoá khỏi nháp)
+  const handleRemoveAccount = (uid) => {
+    setAccounts((prev) => prev.map((a) => (String(a.uid || a.id) === String(uid) ? { ...a, selected: false } : a)));
+  };
 
   // Lý do chưa bấm được Đăng ngay / Tạo chiến dịch (máy chủ vẫn kiểm tra lại khi bấm)
   const submitBlockReason = (() => {
     if (composeDraft.generating) return "AI đang tạo bài, đợi xong hoặc bấm Huỷ.";
     if (selectedAccs.length === 0) return "Chưa chọn nick nào ở Bước 2.";
-    if (parsedCompose.count === 0) return "Ô soạn ở Bước 3 chưa có bài nào.";
+    if (isAccountsLayout && emptyCells.length > 0)
+      return `Còn ${emptyCells.length} ô chưa có bài: bấm THỰC THI ở Bước 3 hoặc tự nhập ở Bước 4.`;
+    if (!isAccountsLayout && parsedCompose.count === 0)
+      return "Ô soạn chưa có bài nào: bấm THỰC THI ở Bước 3 hoặc tự nhập ở Bước 4.";
     if (threadExceedsAccounts) return `Số luồng tối đa ${maxThreadCount} (≤ số nick đã chọn, tối đa 10).`;
     if (useSchedule && slots.length === 0) return "Thêm ít nhất 1 khung giờ để tạo chiến dịch.";
     if (useSchedule && slotProblems(slots, keptSlots).length > 0)
@@ -1528,7 +1710,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
               <label className="text-xs sm:text-sm font-bold text-[#0F172A] flex items-center">
                 <span>
                   Khung Prompt AI cấu trúc bài đăng{" "}
-                  <span className="text-[11px] font-medium text-slate-400">(cần khi dùng AI tạo bài ở Bước 3)</span>
+                  <span className="text-[11px] font-medium text-slate-400">(cần khi bấm THỰC THI ở Bước 3)</span>
                 </span>
                 <span className="w-3.5 h-3.5 rounded-full border border-[#94A3B8] text-[#94A3B8] inline-flex items-center justify-center text-[10px] font-normal leading-none shrink-0 ml-1 cursor-help select-none" title="Nhập yêu cầu câu lệnh hướng dẫn AI tạo bài viết">
                   ?
@@ -1847,59 +2029,14 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
       </div>
       )}
 
-      {/* ── BƯỚC 3: NỘI DUNG ĐĂNG (ô soạn chung + kho ảnh + AI tạo bài) ── */}
+      {/* ── BƯỚC 3: LỊCH ĐĂNG & THỰC THI (AI tạo đủ bài theo số nick) ── */}
       {viewState === "config" && (
         <div className="space-y-3">
           <div className="flex items-center gap-2.5">
             <div className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
               3
             </div>
-            <h2 className="text-sm font-bold text-slate-800 tracking-tight">Bước 3: Nội dung đăng</h2>
-          </div>
-
-          {editingCampaign && (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-900">
-              <span>
-                Đang sửa chiến dịch <strong>&quot;{editingCampaign.name}&quot;</strong>. Thay đổi chỉ áp dụng cho các khung giờ
-                chưa chạy; nháp soạn bài của bạn được giữ nguyên.
-              </span>
-              <button type="button" onClick={handleCancelEdit} className="font-bold text-amber-900 underline">
-                Huỷ sửa
-              </button>
-            </div>
-          )}
-
-          <div className="rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-xs">
-            <ComposeEditor
-              compose={compose}
-              parsed={parsedCompose}
-              onChange={composeDraft.update}
-              onClearAll={handleClearCompose}
-              saveState={editCampaignId ? "idle" : composeDraft.saveState}
-              lockedReason="AI đang thêm bài vào cuối ô. Bấm Huỷ nếu muốn sửa ngay."
-              ai={{
-                generating: composeDraft.generating,
-                job: composeDraft.job,
-                suggestedCount: suggestedAiCount,
-                onGenerate: handleAiGenerate,
-                onCancel: composeDraft.cancelGenerate,
-                disabledReason: editCampaignId
-                  ? "Khi sửa chiến dịch, dán hoặc sửa bài trực tiếp trong ô (AI chỉ thêm bài vào nháp soạn bài)."
-                  : "",
-              }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* ── BƯỚC 4: LỊCH ĐĂNG & THỰC THI ── */}
-      {viewState === "config" && (
-        <div className="space-y-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
-              4
-            </div>
-            <h2 className="text-sm font-bold text-slate-800 tracking-tight">Bước 4: Lịch đăng &amp; thực thi</h2>
+            <h2 className="text-sm font-bold text-slate-800 tracking-tight">Bước 3: Lịch đăng &amp; thực thi</h2>
           </div>
 
           <div className="rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-xs space-y-5">
@@ -2099,6 +2236,125 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
                   </div>
               </div>
             </div>
+
+            {/* THỰC THI: AI tạo cho đủ số bài = số nick × số khung giờ, bài hiện ở Bước 4 */}
+            <div className="space-y-3 border-t border-slate-100 pt-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <p className="text-[11px] font-medium text-slate-500">{executePlan.hint}</p>
+                <div className="space-y-0.5 text-right">
+                  <label className="flex cursor-pointer items-center justify-end gap-2 text-xs font-semibold text-slate-700">
+                    <Checkbox
+                      checked={aiWithImages}
+                      disabled={composeDraft.generating}
+                      onCheckedChange={(v) => {
+                        aiImagesTouchedRef.current = true;
+                        setAiWithImages(!!v);
+                      }}
+                    />
+                    Cào ảnh Pixabay cùng lúc
+                  </label>
+                  {aiWithImages && (
+                    <p className={`text-[10px] font-medium ${pixabayKey.trim() ? "text-slate-400" : "text-amber-600"}`}>
+                      {pixabayKey.trim()
+                        ? "AI viết bài, đồng thời cào 1 ảnh hợp nội dung cho mỗi bài."
+                        : "Chưa có Pixabay API Key ở Bước 1: sẽ nhờ Gemini vẽ ảnh (chậm, có thể không ra ảnh)."}
+                    </p>
+                  )}
+                </div>
+              </div>
+              {composeDraft.generating ? (
+                <button
+                  type="button"
+                  onClick={composeDraft.cancelGenerate}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-white py-3.5 text-xs font-bold tracking-wider text-red-600 hover:bg-red-50"
+                >
+                  <Square size={12} className="fill-red-600" />
+                  HUỶ AI TẠO BÀI
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleExecuteGenerate}
+                  disabled={Boolean(executePlan.blockReason)}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3.5 text-xs font-bold tracking-wider text-white shadow-sm shadow-blue-500/10 transition-all hover:bg-blue-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Play size={14} className="fill-white" />
+                  {executePlan.shortfall > 0 ? `THỰC THI (AI TẠO ${executePlan.shortfall} BÀI)` : "THỰC THI"}
+                </button>
+              )}
+              {composeDraft.job && (composeDraft.job.status === "RUNNING" || composeDraft.job.processed > 0) && (
+                <div className="space-y-1.5">
+                  <div className="h-1.5 overflow-hidden rounded-full bg-blue-100">
+                    <div
+                      className="h-full rounded-full bg-[#2563EB] transition-all"
+                      style={{
+                        width: `${Math.round((100 * (composeDraft.job.processed || 0)) / Math.max(1, composeDraft.job.total))}%`,
+                      }}
+                    />
+                  </div>
+                  <p className="flex items-center gap-1.5 text-[11px] font-medium text-slate-600">
+                    {composeDraft.job.status === "RUNNING" && <Loader2 size={12} className="animate-spin text-[#2563EB]" />}
+                    {composeDraft.job.status === "RUNNING"
+                      ? `AI đang viết ${composeDraft.job.processed}/${composeDraft.job.total} bài (đã xong ${composeDraft.job.done}${composeDraft.job.failed ? `, lỗi ${composeDraft.job.failed}` : ""})${
+                          composeDraft.job.with_images
+                            ? ` · cào ảnh: được ${composeDraft.job.images_added || 0}${composeDraft.job.images_pending ? `, đang cào ${composeDraft.job.images_pending}` : ""}${composeDraft.job.images_missing ? `, không ra ${composeDraft.job.images_missing}` : ""}`
+                            : ""
+                        }. Bài và ảnh hiện dần ở Bước 4.`
+                      : composeDraft.job.message}
+                  </p>
+                </div>
+              )}
+              {!composeDraft.generating && executePlan.blockReason && (
+                <p className="flex items-center justify-center gap-1.5 text-center text-[11px] font-medium text-amber-600">
+                  <Info size={13} />
+                  <span>{executePlan.blockReason}</span>
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── BƯỚC 4: XEM TRƯỚC & ĐĂNG (mỗi bài 1 ô, kho ảnh chung) ── */}
+      {viewState === "config" && (
+        <div ref={previewSectionRef} className="space-y-3 scroll-mt-4">
+          <div className="flex items-center gap-2.5">
+            <div className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
+              4
+            </div>
+            <h2 className="text-sm font-bold text-slate-800 tracking-tight">Bước 4: Xem trước &amp; đăng bài</h2>
+          </div>
+
+          {editingCampaign && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-900">
+              <span>
+                Đang sửa chiến dịch <strong>&quot;{editingCampaign.name}&quot;</strong>. Thay đổi chỉ áp dụng cho các khung giờ
+                chưa chạy; nháp soạn bài của bạn được giữ nguyên.
+              </span>
+              <button type="button" onClick={handleCancelEdit} className="font-bold text-amber-900 underline">
+                Huỷ sửa
+              </button>
+            </div>
+          )}
+
+          <div className="rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-xs space-y-5">
+            <ComposeEditor
+              compose={compose}
+              parsed={parsedCompose}
+              onChange={composeDraft.update}
+              onClearAll={handleClearCompose}
+              saveState={editCampaignId ? "idle" : composeDraft.saveState}
+              locked={composeDraft.generating}
+              lockedReason="AI đang viết bài. Bấm Huỷ ở Bước 3 nếu muốn sửa ngay."
+              accounts={cardAccounts}
+              rowLabels={rowLabels}
+              onRegenerate={handleRegenerateAccount}
+              regenerating={regeneratingUid}
+              regenerateDisabledReason={aiBlockReason}
+              onRemoveAccount={handleRemoveAccount}
+              onCrawlImage={crawlImage}
+              crawlDisabledReason={String(pixabayKey || "").trim() ? "" : "Nhập Pixabay API Key ở Bước 1 để cào ảnh."}
+            />
 
             <PlanCheckNotice check={planCheck} loading={planChecking} />
 

@@ -23,7 +23,10 @@ from modules.module_03_acc_farm import campaign_repository as repo
 from modules.module_03_acc_farm import post_now_service, post_repository
 from modules.module_03_acc_farm.compose_service import (
     IMAGE_NONE,
+    LAYOUT_ACCOUNTS,
+    allocate_account_round,
     allocate_round,
+    normalize_layout,
     clamp_image_range,
     normalize_pool_images,
     parse_compose_text,
@@ -179,7 +182,52 @@ class CampaignScheduler:
             repo.finish_slot(slot["id"], repo.DONE, len(already), 0, "Tất cả nick đã đăng thành công ở lần chạy trước.")
             return None
         target_uids = [str(a["uid"]) for a in targets]
+        if normalize_layout(campaign.get("layout")) == LAYOUT_ACCOUNTS:
+            alloc, notes = self._allocate_account_posts(slot, target_uids)
+        else:
+            alloc, notes = self._allocate_from_pool(campaign, slot, target_uids)
+        if alloc.skipped:
+            reasons = sorted(set(alloc.skipped.values()))
+            notes.append(f"{len(alloc.skipped)} nick bị bỏ qua: {' '.join(reasons)}")
+        if not alloc.assignments:
+            repo.finish_slot(slot["id"], repo.FAILED, len(already), len(targets), "Không chia được bài. " + " ".join(notes))
+            return None
 
+        late = (now - slot["run_at"]).total_seconds() / 60
+        if late >= 1:
+            notes.insert(0, f"Bắt đầu trễ {int(late)} phút so với giờ hẹn {_hhmm(slot['run_at'])}.")
+        message = " ".join(notes) or None
+
+        session_id = post_repository.create_post_session("status")
+        if not repo.claim_slot(slot["id"], session_id, len(alloc.assignments), message):
+            # Khung vừa bị sửa / dừng / xoá trong lúc chuẩn bị
+            post_repository.update_post_session(session_id, "STOPPED", finished=True)
+            return None
+
+        try:
+            self._launch(campaign, slot, session_id, targets, alloc)
+        except Exception:
+            post_repository.stop_all_session_posts(session_id)
+            post_repository.update_post_session(session_id, "STOPPED", finished=True)
+            raise
+        return session_id
+
+    def _allocate_account_posts(self, slot: Dict[str, Any], target_uids):
+        """Dạng "Từng bài": mỗi nick đăng đúng bài đã soạn cho nó ở khung này (ảnh mất trên máy thì bỏ ảnh đó)."""
+        repo.delete_slot_usage(slot["id"], target_uids)  # lần chạy lại: không ghi trùng lượt dùng
+        entries = repo.slot_account_posts(slot["id"])
+        notes, dropped = [], 0
+        for uid in target_uids:
+            entry = entries.get(uid)
+            if isinstance(entry, dict) and entry.get("images"):
+                kept = [p for p in entry["images"] if self.file_exists(p)]
+                dropped += len(entry["images"]) - len(kept)
+                entries[uid] = {**entry, "images": kept}
+        if dropped:
+            notes.append(f"{dropped} ảnh không còn trên máy nên bị bỏ qua.")
+        return allocate_account_round(target_uids, entries), notes
+
+    def _allocate_from_pool(self, campaign: Dict[str, Any], slot: Dict[str, Any], target_uids):
         # Lần chạy lại: bỏ lượt dùng bài / ảnh cũ của các nick chưa đăng được để chia lại
         repo.delete_slot_usage(slot["id"], target_uids)
         used_texts, used_images = defaultdict(set), defaultdict(set)
@@ -207,31 +255,7 @@ class CampaignScheduler:
             used_texts=used_texts, used_images=used_images, text_usage=text_usage, image_usage=image_usage,
             remaining_rounds=max(1, repo.count_waiting_slots(campaign["id"])), rng=self.rng,
         )
-        if alloc.skipped:
-            reasons = sorted(set(alloc.skipped.values()))
-            notes.append(f"{len(alloc.skipped)} nick bị bỏ qua: {' '.join(reasons)}")
-        if not alloc.assignments:
-            repo.finish_slot(slot["id"], repo.FAILED, len(already), len(targets), "Không chia được bài. " + " ".join(notes))
-            return None
-
-        late = (now - slot["run_at"]).total_seconds() / 60
-        if late >= 1:
-            notes.insert(0, f"Bắt đầu trễ {int(late)} phút so với giờ hẹn {_hhmm(slot['run_at'])}.")
-        message = " ".join(notes) or None
-
-        session_id = post_repository.create_post_session("status")
-        if not repo.claim_slot(slot["id"], session_id, len(alloc.assignments), message):
-            # Khung vừa bị sửa / dừng / xoá trong lúc chuẩn bị
-            post_repository.update_post_session(session_id, "STOPPED", finished=True)
-            return None
-
-        try:
-            self._launch(campaign, slot, session_id, targets, alloc)
-        except Exception:
-            post_repository.stop_all_session_posts(session_id)
-            post_repository.update_post_session(session_id, "STOPPED", finished=True)
-            raise
-        return session_id
+        return alloc, notes
 
     def _launch(self, campaign, slot, session_id, targets, alloc) -> None:
         by_uid = {str(a["uid"]): a for a in targets}

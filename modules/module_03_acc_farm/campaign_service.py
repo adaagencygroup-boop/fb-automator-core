@@ -17,13 +17,18 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from modules.module_03_acc_farm import campaign_repository as repo
 from modules.module_03_acc_farm.compose_service import (
     IMAGE_NONE,
+    LAYOUT_ACCOUNTS,
     MAX_TIME_SLOTS,
     PlanCheck,
+    account_entry,
     clamp_image_range,
+    normalize_account_posts,
     normalize_content_mode,
+    normalize_layout,
     normalize_image_mode,
     normalize_pool_images,
     parse_compose_text,
+    validate_account_posts,
     validate_plan,
 )
 from modules.module_03_acc_farm.post_now_service import ComposeInput
@@ -124,13 +129,53 @@ def slot_gap_warnings(times: Sequence[datetime], account_count: int, settings: D
     return warnings
 
 
+def _check_account_posts(
+    compose: ComposeInput,
+    accounts: Sequence[Dict[str, Any]],
+    slot_count: int,
+    file_exists: Callable[[str], bool],
+) -> Tuple[Dict[str, Any], PlanCheck]:
+    """Dạng "Từng bài": mỗi nick đủ `slot_count` bài; chỉ giữ bài của nick đã chọn và các khung đang có."""
+    s = max(1, int(slot_count or 1))
+    posts = normalize_account_posts(compose.account_posts)
+    check = validate_account_posts(posts, accounts, s)
+    kept: Dict[str, List[Dict[str, Any]]] = {}
+    filled = 0
+    for acc in accounts:
+        uid = str(acc.get("uid") or "").strip()
+        entries = [account_entry(posts, uid, i) for i in range(s)]
+        filled += sum(1 for e in entries if e["content"].strip())
+        kept[uid] = entries
+    images = list(dict.fromkeys(p for entries in kept.values() for e in entries for p in e["images"]))
+    missing = [p for p in images if not file_exists(p)]
+    if missing:
+        names = ", ".join(os.path.basename(p) for p in missing[:5])
+        check.errors.append(f"{len(missing)} ảnh đã chọn không còn trên máy ({names}). Bỏ ảnh đó rồi thử lại.")
+    normalized = {
+        "layout": LAYOUT_ACCOUNTS,
+        "account_posts": kept,
+        "content_text": compose.content_text or "",
+        "content_mode": normalize_content_mode(compose.content_mode),
+        "image_mode": IMAGE_NONE,
+        "image_paths": [],
+        "min_images": 1,
+        "max_images": 1,
+        "parsed": {"count": filled, "summary": f"Đã có {filled}/{len(accounts) * s} bài"},
+    }
+    return normalized, check
+
+
 def check_compose(
     compose: ComposeInput,
     account_count: int,
     slot_count: int,
     file_exists: Callable[[str], bool] = os.path.isfile,
+    accounts: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Tuple[Dict[str, Any], PlanCheck]:
-    """Tách bài + kiểm tra kho. Trả về (nội dung đã chuẩn hoá để lưu, kết quả kiểm tra)."""
+    """Tách bài + kiểm tra kho. Trả về (nội dung đã chuẩn hoá để lưu, kết quả kiểm tra).
+    Dạng "Từng bài" cần danh sách nick (`accounts`) để kiểm tra từng nick."""
+    if normalize_layout(compose.layout) == LAYOUT_ACCOUNTS:
+        return _check_account_posts(compose, normalize_accounts(accounts or []), slot_count, file_exists)
     content_mode = normalize_content_mode(compose.content_mode)
     image_mode = normalize_image_mode(compose.image_mode)
     lo, hi = clamp_image_range(compose.min_images, compose.max_images)
@@ -146,6 +191,8 @@ def check_compose(
             names = ", ".join(os.path.basename(p) for p in missing[:5])
             check.errors.append(f"{len(missing)} ảnh trong kho không còn trên máy ({names}). Xoá khỏi kho rồi thử lại.")
     normalized = {
+        "layout": normalize_layout(compose.layout),
+        "account_posts": {},
         "content_text": compose.content_text or "",
         "content_mode": content_mode,
         "image_mode": image_mode,
@@ -165,6 +212,7 @@ def preview(
     settings: Dict[str, int],
     now: Optional[datetime] = None,
     keep_slots: Sequence[str] = (),
+    accounts: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Kiểm tra trước khi bấm Đăng ngay / Tạo chiến dịch (FE hiện lỗi + cảnh báo ngay khi soạn).
     keep_slots: khung chờ cũ của chiến dịch đang sửa (được giữ dù đã sát giờ)."""
@@ -183,7 +231,7 @@ def preview(
         errors.extend(exc.errors)
     if len(slot_times or []) > MAX_TIME_SLOTS:
         errors.append(f"Tối đa {MAX_TIME_SLOTS} khung giờ.")
-    normalized, check = check_compose(compose, account_count, max(1, len(slot_times or [])))
+    normalized, check = check_compose(compose, account_count, max(1, len(slot_times or [])), accounts=accounts)
     errors.extend(check.errors)
     warnings.extend(check.warnings)
     warnings.extend(slot_gap_warnings(times, account_count, settings))
@@ -206,7 +254,7 @@ def _validated_payload(
         raise CampaignError(f"Tên chiến dịch tối đa {MAX_NAME_LENGTH} ký tự.")
     accs = normalize_accounts(accounts)
     clean_settings = normalize_settings(settings.get("thread_count"), settings.get("min_delay"), settings.get("max_delay"))
-    normalized, check = check_compose(compose, len(accs), slot_count)
+    normalized, check = check_compose(compose, len(accs), slot_count, accounts=accs)
     if not check.ok:
         raise CampaignError(" ".join(check.errors), errors=check.errors)
     normalized.pop("parsed")
@@ -353,12 +401,25 @@ def _slot_view(slot: Dict[str, Any], runner, local: bool) -> Dict[str, Any]:
 def campaign_detail(owner_key: str, campaign_id: str, *, runner, machine_id: str) -> Dict[str, Any]:
     campaign = _owned(owner_key, campaign_id)
     local = campaign.get("machine_id") == machine_id
-    parsed = parse_compose_text(campaign["content_text"], campaign["content_mode"])
     slots = [_slot_view(s, runner, local) for s in repo.list_slots(campaign_id)]
+    account_posts: Dict[str, List[Dict[str, Any]]] = {}
+    if normalize_layout(campaign.get("layout")) == LAYOUT_ACCOUNTS:
+        # Mở lại khi sửa: bài thứ i của nick = bài của khung CHƯA CHẠY thứ i
+        waiting = repo.waiting_slots_account_posts(campaign_id)
+        for acc in campaign.get("accounts") or []:
+            uid = str(acc.get("uid"))
+            account_posts[uid] = [
+                {"content": str((w.get(uid) or {}).get("content") or ""), "images": list((w.get(uid) or {}).get("images") or [])}
+                for w in waiting
+            ]
+        post_count = len(campaign.get("accounts") or []) * len(slots)
+    else:
+        post_count = len(parse_compose_text(campaign["content_text"], campaign["content_mode"]).posts)
     return {
         **campaign,
+        "account_posts": account_posts,
         "on_this_machine": local,
-        "post_count": len(parsed.posts),
+        "post_count": post_count,
         "can_edit": not any(s["status"] == repo.RUNNING for s in slots),
         "slots": slots,
     }

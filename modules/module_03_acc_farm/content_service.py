@@ -275,10 +275,12 @@ def generate_status_content(
     api_key: Optional[str] = None,
     model: str = "gemini-3.8-flash",
     fallback_keys: Optional[List[str]] = None,
-    key_source: Optional[str] = None
+    key_source: Optional[str] = None,
+    want_image: bool = False,
 ) -> Tuple[str, Optional[str]]:
     """
     Gọi Gemini REST API trực tiếp không phụ thuộc thư viện nặng.
+    want_image=True: người dùng đã bật cào ảnh → luôn yêu cầu từ khoá ảnh (không để AI tự đoán có cần ảnh hay không).
     Tự động xoay vòng fallback key nếu key chính dính lỗi 429 Rate Limit.
     Khắc phục triệt để hiện tượng bài viết bị ngắt cụt giữa chừng do Gemini 2.5 tiêu hao token vào Thinking.
     """
@@ -293,6 +295,21 @@ def generate_status_content(
     if not all_keys:
         raise ValueError("Không có Gemini API Key hợp lệ.")
 
+    image_rules = (
+        "QUY TẮC VỀ HÌNH ẢNH MINH HỌA (RẤT QUAN TRỌNG):\n"
+        "- Hãy phân tích prompt của người dùng xem có yêu cầu hoặc ngụ ý cần hình ảnh minh họa hay không (ví dụ: prompt có chứa 'kèm ảnh', 'có hình', 'tìm ảnh', 'cào ảnh', 'ảnh minh họa', hoặc chủ đề yêu cầu ảnh).\n"
+        "- Nếu prompt KHÔNG yêu cầu ảnh hoặc không cần ảnh: Hãy ghi [IMAGE_KEYWORD: NONE] ở dòng cuối cùng.\n"
+        "- Nếu prompt CÓ yêu cầu hoặc cần ảnh: Hãy ghi [IMAGE_KEYWORD: <2-4 từ khóa tiếng Anh miêu tả hình ảnh phù hợp>] ở dòng cuối cùng (ví dụ: [IMAGE_KEYWORD: coffee shop chill], [IMAGE_KEYWORD: dalat travel], [IMAGE_KEYWORD: vietnam economy]).\n\n"
+    )
+    if want_image:
+        image_rules = (
+            "QUY TẮC VỀ HÌNH ẢNH MINH HỌA (BẮT BUỘC):\n"
+            "- Bài viết này LUÔN đi kèm 1 ảnh minh họa lấy từ kho ảnh Pixabay.\n"
+            "- Dòng cuối cùng PHẢI là [IMAGE_KEYWORD: <2-4 từ khóa tiếng Anh miêu tả cảnh/vật trong ảnh hợp với nội dung bài>] "
+            "(ví dụ: [IMAGE_KEYWORD: coffee shop chill], [IMAGE_KEYWORD: dalat travel], [IMAGE_KEYWORD: family dinner]). "
+            "Không bao giờ ghi NONE.\n\n"
+        )
+
     system_instruction = (
         "Bạn là một người dùng thật trên Facebook đang đăng status chia sẻ lên trang cá nhân. "
         "Hãy viết bằng tiếng Việt tự nhiên, đời thường, cuốn hút, chèn icon cảm xúc phù hợp và kèm 3-5 hashtag ở cuối.\n"
@@ -300,10 +317,7 @@ def generate_status_content(
         "- BÀI VIẾT PHẢI HOÀN CHỈNH TỪ ĐẦU ĐẾN CUỐI, TUYỆT ĐỐI KHÔNG ĐƯỢC CẮT NGANG HAY BỎ DỞ CÂU GIỮA CHỪNG.\n"
         "- Kết thúc bài viết bằng dấu câu trọn vẹn, icon và hashtag đầy đủ.\n"
         "- Tuyệt đối KHÔNG tự bịa tên mã nick/profile ảo (như Profile FB, bot, UID), không xưng danh tên máy móc.\n\n"
-        "QUY TẮC VỀ HÌNH ẢNH MINH HỌA (RẤT QUAN TRỌNG):\n"
-        "- Hãy phân tích prompt của người dùng xem có yêu cầu hoặc ngụ ý cần hình ảnh minh họa hay không (ví dụ: prompt có chứa 'kèm ảnh', 'có hình', 'tìm ảnh', 'cào ảnh', 'ảnh minh họa', hoặc chủ đề yêu cầu ảnh).\n"
-        "- Nếu prompt KHÔNG yêu cầu ảnh hoặc không cần ảnh: Hãy ghi [IMAGE_KEYWORD: NONE] ở dòng cuối cùng.\n"
-        "- Nếu prompt CÓ yêu cầu hoặc cần ảnh: Hãy ghi [IMAGE_KEYWORD: <2-4 từ khóa tiếng Anh miêu tả hình ảnh phù hợp>] ở dòng cuối cùng (ví dụ: [IMAGE_KEYWORD: coffee shop chill], [IMAGE_KEYWORD: dalat travel], [IMAGE_KEYWORD: vietnam economy]).\n\n"
+        + image_rules +
         "Chỉ trả về trực tiếp nội dung bài viết và dòng [IMAGE_KEYWORD: ...] ở cuối, không kèm lời chào mở đầu hay ghi chú nào khác của AI."
     )
 

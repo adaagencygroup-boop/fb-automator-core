@@ -172,6 +172,15 @@ ADDED_COLUMNS = [
     ("posts", "slot_id", "UUID"),
 ]
 
+# Cột thêm vào bảng Tab 2 (chạy SAU khi tạo bảng Tab 2) — bảng đã tạo trước khi có các cột này.
+# Dạng soạn "Từng bài": mỗi nick 1 bài riêng cho mỗi khung giờ — migrations/016_post_campaigns.sql
+TAB2_ADDED_COLUMNS = [
+    ("post_compose_drafts", "layout", "TEXT NOT NULL DEFAULT 'ACCOUNTS'"),
+    ("post_compose_drafts", "account_posts", "TEXT"),
+    ("post_campaigns", "layout", "TEXT NOT NULL DEFAULT 'TEXT'"),
+    ("post_campaign_slots", "account_posts", "TEXT"),
+]
+
 
 # Bảng dùng chung của core/browser (mọi module mở Chrome qua core). Tạm đặt ở Module 03 vì Module 03 là
 # module đầu tiên dùng core; khi các module khác dùng core thì chuyển DDL này sang core.
@@ -208,8 +217,8 @@ def _init_shared_tables():
         print(f"[Module 3 DB] Copy fingerprints error: {e}")
 
 
-def _add_missing_columns():
-    for table, column, kind in ADDED_COLUMNS:
+def _add_missing_columns(columns=None):
+    for table, column, kind in (ADDED_COLUMNS if columns is None else columns):
         try:
             if db._is_postgres:
                 db.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {kind}")
@@ -411,6 +420,10 @@ TAB2_DDL_STATEMENTS_PG = [
       image_paths TEXT,
       min_images INTEGER NOT NULL DEFAULT 1 CHECK (min_images BETWEEN 1 AND 3),
       max_images INTEGER NOT NULL DEFAULT 1 CHECK (max_images BETWEEN 1 AND 3),
+      -- TEXT = ô soạn chung; ACCOUNTS = Từng bài (mỗi nick 1 bài riêng cho mỗi khung giờ)
+      layout TEXT NOT NULL DEFAULT 'ACCOUNTS',
+      -- JSON {uid: [{content, images}, ...]} cho layout ACCOUNTS
+      account_posts TEXT,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (owner_key, post_type),
       CHECK (min_images <= max_images)
@@ -433,6 +446,7 @@ TAB2_DDL_STATEMENTS_PG = [
       image_paths TEXT,
       min_images INTEGER NOT NULL DEFAULT 1 CHECK (min_images BETWEEN 1 AND 3),
       max_images INTEGER NOT NULL DEFAULT 1 CHECK (max_images BETWEEN 1 AND 3),
+      layout TEXT NOT NULL DEFAULT 'TEXT',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       CHECK (min_images <= max_images)
@@ -453,6 +467,8 @@ TAB2_DDL_STATEMENTS_PG = [
       success_count INTEGER NOT NULL DEFAULT 0,
       failed_count INTEGER NOT NULL DEFAULT 0,
       message TEXT,
+      -- Layout ACCOUNTS: JSON {uid: {content, images}} bài của từng nick ở khung này
+      account_posts TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -622,6 +638,10 @@ TAB2_DDL_STATEMENTS_SQLITE = [
       image_paths TEXT,
       min_images INTEGER NOT NULL DEFAULT 1 CHECK (min_images BETWEEN 1 AND 3),
       max_images INTEGER NOT NULL DEFAULT 1 CHECK (max_images BETWEEN 1 AND 3),
+      -- TEXT = ô soạn chung; ACCOUNTS = Từng bài (mỗi nick 1 bài riêng cho mỗi khung giờ)
+      layout TEXT NOT NULL DEFAULT 'ACCOUNTS',
+      -- JSON {uid: [{content, images}, ...]} cho layout ACCOUNTS
+      account_posts TEXT,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (owner_key, post_type),
       CHECK (min_images <= max_images)
@@ -644,6 +664,7 @@ TAB2_DDL_STATEMENTS_SQLITE = [
       image_paths TEXT,
       min_images INTEGER NOT NULL DEFAULT 1 CHECK (min_images BETWEEN 1 AND 3),
       max_images INTEGER NOT NULL DEFAULT 1 CHECK (max_images BETWEEN 1 AND 3),
+      layout TEXT NOT NULL DEFAULT 'TEXT',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       CHECK (min_images <= max_images)
@@ -664,6 +685,8 @@ TAB2_DDL_STATEMENTS_SQLITE = [
       success_count INTEGER NOT NULL DEFAULT 0,
       failed_count INTEGER NOT NULL DEFAULT 0,
       message TEXT,
+      -- Layout ACCOUNTS: JSON {uid: {content, images}} bài của từng nick ở khung này
+      account_posts TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -706,6 +729,7 @@ def init_tab2_models():
             db.execute(stmt)
         except Exception as e:
             print(f"[Module 3 Tab 2 DB] Error: {e}")
+    _add_missing_columns(TAB2_ADDED_COLUMNS)
     try:
         db.execute(BACKFILL_POST_OWNER)
     except Exception as e:

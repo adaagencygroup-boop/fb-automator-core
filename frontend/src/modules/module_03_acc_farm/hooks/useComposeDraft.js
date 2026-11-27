@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/services/api";
 import { toast } from "@/lib/toast";
-import { CONTENT_MULTI, IMAGE_NONE } from "../composeText";
+import { CONTENT_MULTI, IMAGE_NONE, LAYOUT_ACCOUNTS, LAYOUT_TEXT } from "../composeText";
 
 export const EMPTY_COMPOSE = {
   content_text: "",
@@ -12,6 +12,9 @@ export const EMPTY_COMPOSE = {
   image_paths: [],
   min_images: 1,
   max_images: 1,
+  // "Từng bài" (mỗi nick 1 bài riêng cho mỗi khung giờ) | "Dạng văn bản" (ô soạn chung)
+  layout: LAYOUT_ACCOUNTS,
+  account_posts: {},
 };
 
 const SAVE_DELAY_MS = 800;
@@ -26,6 +29,8 @@ function pickCompose(data) {
     image_paths: Array.isArray(data.image_paths) ? data.image_paths : [],
     min_images: Number(data.min_images) || 1,
     max_images: Number(data.max_images) || 1,
+    layout: data.layout === LAYOUT_TEXT ? LAYOUT_TEXT : LAYOUT_ACCOUNTS,
+    account_posts: data.account_posts && typeof data.account_posts === "object" ? data.account_posts : {},
   };
 }
 
@@ -46,7 +51,7 @@ export function useComposeDraft({ postType = "status", autosave = true } = {}) {
   const saveTimerRef = useRef(null);
   const savingRef = useRef(null);
   const jobTimerRef = useRef(null);
-  const lastProcessedRef = useRef(-1);
+  const lastProcessedRef = useRef("");
   const autosaveRef = useRef(autosave);
   autosaveRef.current = autosave;
 
@@ -133,15 +138,17 @@ export function useComposeDraft({ postType = "status", autosave = true } = {}) {
   const pollJob = useCallback(
     (jobId) => {
       stopJobPolling();
-      lastProcessedRef.current = -1;
+      lastProcessedRef.current = "";
       const tick = async () => {
         try {
           const res = await api.get(`/api/post/compose/generate/${jobId}`);
           const next = res?.job || res?.data?.job;
           if (!next) return;
           setJob(next);
-          if (next.processed !== lastProcessedRef.current) {
-            lastProcessedRef.current = next.processed;
+          // Bài mới hoặc ảnh cào xong (chạy song song) → tải lại nháp để hiện lên
+          const progressKey = `${next.processed}-${next.images_added || 0}-${next.images_missing || 0}`;
+          if (progressKey !== lastProcessedRef.current) {
+            lastProcessedRef.current = progressKey;
             if (autosaveRef.current) await reload();
           }
           if (next.status !== "RUNNING") {
@@ -165,12 +172,15 @@ export function useComposeDraft({ postType = "status", autosave = true } = {}) {
   );
 
   const startGenerate = useCallback(
-    async ({ prompt, count, withImages, apiKeySource, pixabayKey, model }) => {
+    async ({ prompt, count, targets, overwrite, withImages, apiKeySource, pixabayKey, model }) => {
       await flush();
       const res = await api.post("/api/post/compose/generate", {
         post_type: postType,
         prompt,
-        count,
+        count: Math.max(1, count || 1),
+        // Dạng "Từng bài": [{uid, index}] các ô cần AI điền; overwrite = nút "Tạo lại"
+        targets: targets || null,
+        overwrite: !!overwrite,
         with_images: !!withImages,
         api_key_source: apiKeySource || null,
         pixabay_key: pixabayKey || null,
@@ -197,16 +207,23 @@ export function useComposeDraft({ postType = "status", autosave = true } = {}) {
     }
   }, [job]);
 
-  const clearAll = useCallback(async () => {
+  /** Xoá nội dung của cách soạn đang xem (Từng bài: bài của mọi nick; Dạng văn bản: ô soạn + kho ảnh). */
+  const clearAll = useCallback(async (layout) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = null;
+    const which = layout || composeRef.current.layout;
     if (!autosaveRef.current) {
-      replace({ ...composeRef.current, content_text: "", image_paths: [] });
+      replace(
+        which === LAYOUT_TEXT
+          ? { ...composeRef.current, content_text: "", image_paths: [] }
+          : { ...composeRef.current, account_posts: {} },
+      );
       return;
     }
-    const res = await api.delete(`/api/post/compose/draft?post_type=${postType}`);
+    await flush();
+    const res = await api.delete(`/api/post/compose/draft?post_type=${postType}&layout=${which}`);
     applyServerDraft(res?.data);
-  }, [applyServerDraft, postType, replace]);
+  }, [applyServerDraft, flush, postType, replace]);
 
   // Nạp nháp lần đầu + nối lại lượt AI đang chạy (sau khi tải lại trang)
   useEffect(() => {

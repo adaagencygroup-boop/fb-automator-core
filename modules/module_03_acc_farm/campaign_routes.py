@@ -35,6 +35,9 @@ class CampaignComposePayload(BaseModel):
     image_paths: List[str] = Field(default_factory=list, max_length=MAX_POOL_IMAGES)
     min_images: int = Field(1, ge=MIN_IMAGES_PER_POST, le=MAX_IMAGES_PER_POST)
     max_images: int = Field(1, ge=MIN_IMAGES_PER_POST, le=MAX_IMAGES_PER_POST)
+    # TEXT = ô soạn chung; ACCOUNTS = "Từng bài" ({uid: [{content, images}, ...]}, phần tử i cho khung thứ i)
+    layout: str = "TEXT"
+    account_posts: Dict[str, Any] = Field(default_factory=dict, max_length=5000)
 
     def to_input(self) -> ComposeInput:
         return ComposeInput(**self.model_dump())
@@ -59,6 +62,8 @@ class CampaignPayload(BaseModel):
 
 class ComposeCheckPayload(BaseModel):
     account_count: int = Field(..., ge=0, le=5000)
+    # Dạng "Từng bài": danh sách nick đã chọn ({uid, name}) để kiểm tra bài của từng nick
+    accounts: List[Dict[str, Any]] = Field(default_factory=list, max_length=5000)
     compose: CampaignComposePayload
     slots: List[str] = Field(default_factory=list, max_length=MAX_TIME_SLOTS * 2)
     settings: CampaignSettingsPayload = Field(default_factory=CampaignSettingsPayload)
@@ -92,7 +97,7 @@ def check_compose(payload: ComposeCheckPayload):
     """Kiểm tra kho bài / ảnh / khung giờ trước khi Đăng ngay hoặc Tạo chiến dịch (không ghi gì)."""
     result = campaign_service.preview(
         payload.compose.to_input(), payload.account_count, payload.slots, payload.settings.model_dump(),
-        keep_slots=payload.keep_slots,
+        keep_slots=payload.keep_slots, accounts=payload.accounts,
     )
     return {"success": True, **result}
 
@@ -112,7 +117,8 @@ def create_campaign(payload: CampaignPayload):
     )
     if payload.clear_draft:
         try:
-            compose_repository.clear_compose_draft("status")
+            # Chỉ xoá cách soạn vừa dùng (cách còn lại giữ nguyên)
+            compose_repository.clear_compose_draft("status", payload.compose.layout)
         except Exception:
             logger.exception("Tạo chiến dịch xong nhưng không xoá được nháp ô soạn bài")
     return {"success": True, "data": result["campaign"], "warnings": result["warnings"]}

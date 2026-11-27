@@ -2,7 +2,8 @@
 campaign_repository.py
 Module 03 - Tab 2: Truy xuất chiến dịch đăng bài nhiều khung giờ.
   post_campaigns       : chiến dịch (nick, cài đặt, nội dung ô soạn + kho ảnh), gắn với máy tạo ra nó
-  post_campaign_slots  : các khung giờ (WAITING / RUNNING / DONE / MISSED / STOPPED / FAILED)
+  post_campaign_slots  : các khung giờ (WAITING / RUNNING / DONE / MISSED / STOPPED / FAILED);
+                         dạng "Từng bài" lưu bài của từng nick ngay trên khung (account_posts)
   post_campaign_usage  : nick nào đã nhận bài / ảnh nào (luật không đăng trùng trong chiến dịch)
 """
 import json
@@ -16,7 +17,7 @@ ACTIVE, COMPLETED = "ACTIVE", "COMPLETED"
 
 _CAMPAIGN_COLUMNS = (
     "id::text AS id, owner_key, machine_id, name, post_type, status, accounts, settings, content_text, "
-    "content_mode, image_mode, image_paths, min_images, max_images, created_at, updated_at"
+    "content_mode, image_mode, image_paths, min_images, max_images, layout, created_at, updated_at"
 )
 _SLOT_COLUMNS = (
     "id::text AS id, campaign_id::text AS campaign_id, run_at, status, session_id::text AS session_id, "
@@ -33,6 +34,22 @@ def _json(value: Any, default: Any) -> Any:
         return json.loads(value)
     except (TypeError, ValueError):
         return default
+
+
+def _slot_posts_json(account_posts: Dict[str, List[Dict[str, Any]]], index: int) -> Optional[str]:
+    """Bài của từng nick cho khung thứ `index` (dạng "Từng bài") → JSON {uid: {content, images}}."""
+    if not account_posts:
+        return None
+    slot = {uid: entries[index] for uid, entries in account_posts.items() if index < len(entries)}
+    return json.dumps(slot, ensure_ascii=False) if slot else None
+
+
+def _insert_slots(cur, campaign_id: str, run_times: Sequence[datetime], account_posts: Dict[str, Any]) -> None:
+    for i, run_at in enumerate(run_times):
+        cur.execute(
+            "INSERT INTO post_campaign_slots (campaign_id, run_at, account_posts) VALUES (%s, %s, %s)",
+            (campaign_id, run_at, _slot_posts_json(account_posts, i)),
+        )
 
 
 def _campaign(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -56,8 +73,8 @@ def create_campaign(data: Dict[str, Any], run_times: Sequence[datetime]) -> Dict
             f"""
             INSERT INTO post_campaigns
                 (owner_key, machine_id, name, post_type, status, accounts, settings, content_text,
-                 content_mode, image_mode, image_paths, min_images, max_images)
-            VALUES (%s, %s, %s, %s, 'ACTIVE', %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s)
+                 content_mode, image_mode, image_paths, min_images, max_images, layout)
+            VALUES (%s, %s, %s, %s, 'ACTIVE', %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s)
             RETURNING {_CAMPAIGN_COLUMNS}
             """,
             (
@@ -65,11 +82,11 @@ def create_campaign(data: Dict[str, Any], run_times: Sequence[datetime]) -> Dict
                 json.dumps(data["accounts"], ensure_ascii=False), json.dumps(data["settings"]),
                 data["content_text"], data["content_mode"], data["image_mode"],
                 json.dumps(data["image_paths"], ensure_ascii=False), data["min_images"], data["max_images"],
+                data.get("layout") or "TEXT",
             ),
         )
         campaign = _campaign(cur.fetchone())
-        for run_at in run_times:
-            cur.execute("INSERT INTO post_campaign_slots (campaign_id, run_at) VALUES (%s, %s)", (campaign["id"], run_at))
+        _insert_slots(cur, campaign["id"], run_times, data.get("account_posts") or {})
     return campaign
 
 
@@ -115,7 +132,7 @@ def update_campaign(campaign_id: str, fields: Dict[str, Any], waiting_times: Seq
             """
             UPDATE post_campaigns SET
                 name = %s, accounts = %s::jsonb, settings = %s::jsonb, content_text = %s, content_mode = %s,
-                image_mode = %s, image_paths = %s, min_images = %s, max_images = %s,
+                image_mode = %s, image_paths = %s, min_images = %s, max_images = %s, layout = %s,
                 status = CASE WHEN status = 'COMPLETED' AND %s THEN 'ACTIVE' ELSE status END
             WHERE id = %s
             """,
@@ -123,12 +140,11 @@ def update_campaign(campaign_id: str, fields: Dict[str, Any], waiting_times: Seq
                 fields["name"], json.dumps(fields["accounts"], ensure_ascii=False), json.dumps(fields["settings"]),
                 fields["content_text"], fields["content_mode"], fields["image_mode"],
                 json.dumps(fields["image_paths"], ensure_ascii=False), fields["min_images"], fields["max_images"],
-                bool(waiting_times), campaign_id,
+                fields.get("layout") or "TEXT", bool(waiting_times), campaign_id,
             ),
         )
         cur.execute("DELETE FROM post_campaign_slots WHERE campaign_id = %s AND status = 'WAITING'", (campaign_id,))
-        for run_at in waiting_times:
-            cur.execute("INSERT INTO post_campaign_slots (campaign_id, run_at) VALUES (%s, %s)", (campaign_id, run_at))
+        _insert_slots(cur, campaign_id, waiting_times, fields.get("account_posts") or {})
 
 
 def stop_campaign(campaign_id: str) -> None:
@@ -195,6 +211,27 @@ def get_slot(slot_id: str, campaign_id: str) -> Optional[Dict[str, Any]]:
         f"SELECT {_SLOT_COLUMNS} FROM post_campaign_slots WHERE id = %s AND campaign_id = %s",
         (slot_id, campaign_id),
     )
+
+
+def slot_account_posts(slot_id: str) -> Dict[str, Dict[str, Any]]:
+    """Dạng "Từng bài": {uid: {content, images}} của 1 khung."""
+    row = db.fetch_one("SELECT account_posts FROM post_campaign_slots WHERE id = %s", (slot_id,))
+    value = _json(row.get("account_posts") if row else None, {})
+    return value if isinstance(value, dict) else {}
+
+
+def waiting_slots_account_posts(campaign_id: str) -> List[Dict[str, Dict[str, Any]]]:
+    """Bài từng nick của các khung chưa chạy, theo thứ tự giờ (để mở lại khi sửa chiến dịch)."""
+    rows = db.fetch_all(
+        "SELECT account_posts FROM post_campaign_slots WHERE campaign_id = %s AND status = 'WAITING' "
+        "ORDER BY run_at, created_at",
+        (campaign_id,),
+    )
+    out = []
+    for r in rows:
+        value = _json(r.get("account_posts"), {})
+        out.append(value if isinstance(value, dict) else {})
+    return out
 
 
 def has_running_slot(campaign_id: str) -> bool:

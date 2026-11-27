@@ -19,7 +19,14 @@ import random
 import re
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Sequence, Set
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
+
+# Cách soạn: TEXT = ô soạn chung (bài tách bằng "---", chia ngẫu nhiên cho nick);
+#            ACCOUNTS = "Từng bài": mỗi nick 1 bài riêng cho mỗi khung giờ, đăng đúng bài đó
+LAYOUT_TEXT = "TEXT"
+LAYOUT_ACCOUNTS = "ACCOUNTS"
+LAYOUTS = (LAYOUT_TEXT, LAYOUT_ACCOUNTS)
+MAX_ACCOUNT_POST_IMAGES = 10
 
 CONTENT_SINGLE = "SINGLE"
 CONTENT_MULTI = "MULTI"
@@ -481,6 +488,107 @@ def _ranked(items: Sequence[str], usage_counts: Dict[str, int], rng: random.Rand
     shuffled = list(items)
     rng.shuffle(shuffled)
     return sorted(shuffled, key=lambda it: usage_counts.get(it, 0))
+
+
+# ==============================================================================
+# 4. DẠNG "TỪNG BÀI": MỖI NICK 1 BÀI RIÊNG CHO MỖI LƯỢT (đăng ngay = lượt 1, chiến dịch = từng khung giờ)
+# ==============================================================================
+
+def normalize_layout(layout: Optional[str]) -> str:
+    value = str(layout or "").strip().upper()
+    return value if value in LAYOUTS else LAYOUT_TEXT
+
+
+def _clean_entry(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, str):
+        raw = {"content": raw}
+    if not isinstance(raw, dict):
+        raw = {}
+    content = str(raw.get("content") or "").replace("\r\n", "\n").replace("\r", "\n")
+    images = normalize_pool_images(raw.get("images") or [])[:MAX_ACCOUNT_POST_IMAGES]
+    return {"content": content, "images": images}
+
+
+def normalize_account_posts(raw: Any) -> Dict[str, List[Dict[str, Any]]]:
+    """{uid: [{content, images}, ...]} — phần tử thứ i là bài của nick cho lượt / khung giờ thứ i."""
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for uid, entries in raw.items():
+        key = str(uid or "").strip()
+        if not key:
+            continue
+        if not isinstance(entries, list):
+            entries = [entries]
+        out[key] = [_clean_entry(e) for e in entries[:MAX_TIME_SLOTS]]
+    return out
+
+
+def account_entry(account_posts: Dict[str, List[Dict[str, Any]]], uid: str, index: int) -> Dict[str, Any]:
+    entries = account_posts.get(str(uid)) or []
+    return entries[index] if 0 <= index < len(entries) else {"content": "", "images": []}
+
+
+def validate_account_posts(
+    account_posts: Dict[str, List[Dict[str, Any]]],
+    accounts: Sequence[Dict[str, Any]],
+    slot_count: int,
+) -> PlanCheck:
+    """Mỗi nick cần đủ `slot_count` bài có nội dung; một nick không đăng lại cùng nội dung ở 2 khung."""
+    check = PlanCheck()
+    s = max(1, int(slot_count or 1))
+    if not accounts:
+        check.errors.append("Chưa chọn tài khoản nào.")
+    if s > MAX_TIME_SLOTS:
+        check.errors.append(f"Tối đa {MAX_TIME_SLOTS} khung giờ cho một chiến dịch.")
+    missing: List[str] = []
+    too_long: List[str] = []
+    repeated: List[str] = []
+    for acc in accounts:
+        uid = str(acc.get("uid") or "").strip()
+        name = str(acc.get("name") or uid)
+        seen: Set[str] = set()
+        for i in range(s):
+            label = name if s == 1 else f"{name} (khung {i + 1})"
+            post = account_entry(account_posts, uid, i)["content"].strip()
+            if not post:
+                missing.append(label)
+                continue
+            if len(post) > MAX_POST_CHARS:
+                too_long.append(label)
+            if post in seen:
+                repeated.append(label)
+            seen.add(post)
+
+    def _names(items: List[str]) -> str:
+        return ", ".join(items[:5]) + (f" và {len(items) - 5} ô khác" if len(items) > 5 else "")
+
+    if missing:
+        check.errors.append(f"Còn {len(missing)} ô chưa có nội dung: {_names(missing)}. Bấm THỰC THI để AI điền.")
+    if too_long:
+        limit = f"{MAX_POST_CHARS:,}".replace(",", ".")
+        check.errors.append(f"Bài dài quá {limit} ký tự (giới hạn của Facebook): {_names(too_long)}.")
+    if repeated:
+        check.errors.append(f"Một nick không đăng lại cùng nội dung ở 2 khung: {_names(repeated)}.")
+    return check
+
+
+def allocate_account_round(
+    account_uids: Sequence[str],
+    entries_by_uid: Dict[str, Dict[str, Any]],
+) -> RoundAllocation:
+    """Dạng "Từng bài": mỗi nick đăng đúng bài đã soạn cho nó ở lượt này."""
+    result = RoundAllocation()
+    for uid in dict.fromkeys(str(u) for u in account_uids if str(u or "").strip()):
+        entry = _clean_entry(entries_by_uid.get(uid))
+        content = entry["content"].strip()
+        if not content:
+            result.skipped[uid] = "Nick này chưa có nội dung bài ở lượt này."
+            continue
+        result.assignments.append(
+            Assignment(account_uid=uid, content=content, text_key=text_key(content), images=entry["images"])
+        )
+    return result
 
 
 def allocate_round(
