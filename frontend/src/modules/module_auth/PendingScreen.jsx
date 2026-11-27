@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import api from "@/services/api";
+import { SUPPORT } from "@/config/support";
 import { toast } from "@/lib/toast";
 import { clearRegistrationToken, getRegistrationToken } from "@/services/authTokens.mjs";
 import { PendingStatusHeader } from "./components/PendingStatusHeader";
@@ -9,9 +10,10 @@ import { PendingSupportCards } from "./components/PendingSupportCards";
 import { PendingFooter } from "./components/PendingFooter";
 import { AuthFeedback } from "./components/AuthFeedback";
 
-const ZALO_PHONE = "0988.888.247";
-const RAW_ZALO_PHONE = "0988888247";
-const TELEGRAM_HANDLE = "@admin_support";
+// Thông tin CSKH dùng chung: src/config/support.js
+const ZALO_PHONE = SUPPORT.zalo.display;
+const RAW_ZALO_PHONE = SUPPORT.zalo.phone;
+const TELEGRAM_HANDLE = SUPPORT.telegram.display;
 
 export default function PendingScreen({ onBack, onStatus, onApproved }) {
   const [copiedPhone, setCopiedPhone] = useState(false);

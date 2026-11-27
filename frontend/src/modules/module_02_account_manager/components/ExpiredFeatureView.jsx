@@ -12,6 +12,7 @@ import {
   User as UserIcon,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
+import { SUPPORT } from "@/config/support";
 
 export default function ExpiredFeatureView({
   featureName = "Tính năng này",
@@ -22,9 +23,9 @@ export default function ExpiredFeatureView({
   const [copiedTele, setCopiedTele] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  const zaloPhone = "0988.888.247";
-  const rawZaloPhone = "0988888247";
-  const telegramHandle = "@admin_support";
+  const zaloPhone = SUPPORT.zalo.display; // Thông tin CSKH dùng chung: src/config/support.js
+  const rawZaloPhone = SUPPORT.zalo.phone;
+  const telegramHandle = SUPPORT.telegram.display;
 
   const handleCopyPhone = () => {
     navigator.clipboard.writeText(rawZaloPhone);
