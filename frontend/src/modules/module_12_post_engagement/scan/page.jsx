@@ -12,6 +12,7 @@ import DelayRangeInput, { normalizeDelayRange } from "../components/DelayRangeIn
 import LiveConsole from "../components/LiveConsole";
 import ModulePageHeader from "../components/ModulePageHeader";
 import ResultsExplorer from "../components/ResultsExplorer";
+import useRowMultiSelect from "../components/useRowMultiSelect";
 import { INT_INPUT_PROPS, blockNonDigitKey, digitsOnly } from "../utils/intInput";
 import { loadInputDraft, saveInputDraft } from "../utils/inputDraft.mjs";
 import { downloadLinkTemplate } from "../utils/exportTable";
@@ -94,6 +95,8 @@ export default function PostEngagementScanPage() {
   const [removed, setRemoved] = useState(() => new Set(draft.removed || []));
   const [checked, setChecked] = useState(draft.checked || {}); // post_key → {status, meta}
   const [quotas, setQuotas] = useState(draft.quotas || {}); // post_key → {like, comment}
+  // Bài khả dụng KHÔNG tick ở bảng xem trước (mặc định mọi bài khả dụng đều tick; chỉ bài được tick mới quét)
+  const [unselected, setUnselected] = useState(() => new Set(draft.unselected || []));
   const [delayMin, setDelayMin] = useState(draft.delayMin ?? 5);
   const [delayMax, setDelayMax] = useState(draft.delayMax ?? 10);
 
@@ -103,6 +106,8 @@ export default function PostEngagementScanPage() {
   const [scanStatus, setScanStatus] = useState("idle"); // idle | running | paused | stopping | done | aborted | error
   const [logs, setLogs] = useState([]);
   const [sessionKeys, setSessionKeys] = useState(draft.sessionKeys || []);
+  // Phiên quét vừa kết thúc → dọn danh sách link khi về màn cấu hình: {unfinished: [post_key chưa quét xong]}
+  const [pendingCleanup, setPendingCleanup] = useState(draft.pendingCleanup || null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [resumable, setResumable] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -115,18 +120,12 @@ export default function PostEngagementScanPage() {
   const checking = Boolean(checkJobId);
   const locked = running || checking || view === "scan";
 
-  const backToConfig = () => {
-    setView("config");
-    setScanJobId("");
-    setScanStatus("idle");
-    setLogs([]);
-  };
-
   useEffect(() => {
     saveInputDraft(draftKey(), {
-      selectedUids, method, linkText, file, removed: [...removed], checked, quotas, delayMin, delayMax, sessionKeys,
+      selectedUids, method, linkText, file, removed: [...removed], checked, quotas, unselected: [...unselected],
+      delayMin, delayMax, sessionKeys, pendingCleanup,
     });
-  }, [selectedUids, method, linkText, file, removed, checked, quotas, delayMin, delayMax, sessionKeys]);
+  }, [selectedUids, method, linkText, file, removed, checked, quotas, unselected, delayMin, delayMax, sessionKeys, pendingCleanup]);
 
   // ---- Tải tài khoản Module 2
   const loadAccounts = useCallback(async ({ fresh = false } = {}) => {
@@ -176,17 +175,84 @@ export default function PostEngagementScanPage() {
     [previewRows],
   );
   const available = useMemo(() => targets.filter((r) => r.view === "available"), [targets]);
+  // Bảng xem trước (khung 3) chỉ hiện bài ĐÃ KIỂM TRA: khả dụng + không khả dụng (mờ, để biết bài bị loại);
+  // link chưa / đang / dở / lỗi kiểm tra chỉ thấy ở bảng link (khung 1)
+  const checkedTargets = useMemo(() => targets.filter((r) => r.view === "available" || r.view === "unavailable"), [targets]);
+  const picked = useMemo(() => available.filter((r) => !unselected.has(r.post_key)), [available, unselected]);
+  const pickedKeys = useMemo(() => new Set(picked.map((r) => r.post_key)), [picked]);
   // "Chưa kiểm tra xong" (dừng Kiểm tra giữa chừng / rời màn hình) cũng phải Kiểm tra lại trước khi chạy
   const uncheckedCount = targets.filter((r) => ["valid", "error", "incomplete"].includes(r.view)).length;
 
-  const totals = useMemo(() => available.reduce((acc, r) => {
+  /**
+   * Dọn danh sách link sau phiên quét (bấm "Quay về cấu hình ban đầu" hoặc mở lại trang sau khi phiên đã kết thúc):
+   * bỏ bài đã quét xong / không khả dụng / đã kiểm tra mà không đưa vào phiên, link trùng / sai định dạng; GIỮ bài chưa
+   * quét xong (Dừng khẩn cấp / lỗi giữa chừng) và bài chưa tới lượt (quá 20 bài, chưa kiểm tra). Không còn gì → rỗng.
+   * Tài khoản, Delay, cách nhập giữ nguyên.
+   */
+  const applyCleanup = (cleanup) => {
+    setPendingCleanup(null);
+    if (!cleanup) return;
+    const unfinished = new Set(cleanup.unfinished || []);
+    const keep = previewRows.filter(
+      (r) => r.post_key && !["duplicate", "invalid"].includes(r.view) && (unfinished.has(r.post_key) || !["available", "unavailable"].includes(r.view)),
+    );
+    const keepKeys = new Set(keep.map((r) => r.post_key));
+    const pick = (obj) => Object.fromEntries(Object.entries(obj).filter(([key]) => keepKeys.has(key)));
+    setRemoved(new Set());
+    setUnselected(new Set());
+    setChecked((cur) => pick(cur));
+    setQuotas((cur) => pick(cur));
+    if (!keep.length) {
+      setLinkText("");
+      setFile(null);
+      return;
+    }
+    const lines = keep.map((r) => r.raw || r.url);
+    if (method === "file" && file) setFile({ ...file, rows: lines });
+    else setLinkText(lines.join("\n"));
+    toast.info(`Giữ lại ${keep.length} bài chưa quét xong trong danh sách link.`);
+  };
+
+  const applyCleanupRef = useRef(applyCleanup);
+  applyCleanupRef.current = applyCleanup;
+
+  const backToConfig = () => {
+    setView("config");
+    setScanJobId("");
+    setScanStatus("idle");
+    setLogs([]);
+    applyCleanup(pendingCleanup);
+  };
+
+  const totals = useMemo(() => picked.reduce((acc, r) => {
     const q = quotas[r.post_key] || defaultQuota(checked[r.post_key]?.meta);
     if (isBlank(q.like)) acc.likeAll = true;
     else acc.like += Number(q.like);
     if (isBlank(q.comment)) acc.commentAll = true;
     else acc.comment += Number(q.comment);
     return acc;
-  }, { like: 0, comment: 0, likeAll: false, commentAll: false }), [available, quotas, checked]);
+  }, { like: 0, comment: 0, likeAll: false, commentAll: false }), [picked, quotas, checked]);
+
+  // Tick chọn bài ở bảng xem trước: kéo chuột bôi đen · Shift + click chọn khoảng · Ctrl + click thêm / bỏ từng bài
+  const setPicked = (nextKeys) =>
+    setUnselected((cur) => {
+      const next = new Set(cur);
+      available.forEach((r) => (nextKeys.has(r.post_key) ? next.delete(r.post_key) : next.add(r.post_key)));
+      return next;
+    });
+  const togglePicked = (key) => {
+    const next = new Set(pickedKeys);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setPicked(next);
+  };
+  const allPicked = available.length > 0 && picked.length === available.length;
+  const { setContainer: setPreviewBox, rowProps: previewRowProps } = useRowMultiSelect({
+    rows: available,
+    selected: pickedKeys,
+    onChange: setPicked,
+    getId: (r) => r.post_key,
+  });
 
   // Bài còn "Đang kiểm tra" (keys = null → mọi bài) chuyển sang "Chưa kiểm tra xong" để phải Kiểm tra lại
   const markIncomplete = useCallback((keys) => {
@@ -243,6 +309,7 @@ export default function PostEngagementScanPage() {
         }
         // Nháp cũ còn bài "Đang kiểm tra" mà không còn phiên Kiểm tra nào chạy → Chưa kiểm tra xong
         if (!c?.job_id) markIncomplete(null);
+        if (!s?.job_id && draft.pendingCleanup) applyCleanupRef.current(draft.pendingCleanup);
         if (!s?.job_id) setResumable(await getResumableSession());
       } catch {
         /* bỏ qua */
@@ -320,6 +387,11 @@ export default function PostEngagementScanPage() {
         setScanStatus(job.status);
         if (["done", "aborted", "error"].includes(job.status)) {
           stopped = true;
+          // Ghi nhớ bài chưa quét xong để dọn danh sách link khi về màn cấu hình (lưu cả vào nháp: tải lại trang vẫn dọn)
+          const progress = job.progress || {};
+          const unfinished = job.status === "done" ? [] : (job.posts || []).map((p) => p.post_key)
+            .filter((key) => !["done", "unavailable"].includes(progress[key]?.status));
+          setPendingCleanup({ unfinished });
           setRefreshKey((k) => k + 1);
           if (job.status === "done") toast.success("Đã quét xong toàn bộ bài viết.");
           else if (job.status === "aborted") toast.warning(job.error ? `${job.error}.` : "Đã dừng phiên quét — dữ liệu đã quét vẫn được lưu.");
@@ -420,7 +492,7 @@ export default function PostEngagementScanPage() {
       toast.warning(`Bấm Kiểm tra & Lọc trùng lặp trước — còn ${uncheckedCount} bài chưa kiểm tra.`);
       return;
     }
-    const posts = available.map((r) => {
+    const posts = picked.map((r) => {
       const q = quotas[r.post_key] || defaultQuota(checked[r.post_key]?.meta);
       return {
         post_url: r.url,
@@ -433,12 +505,13 @@ export default function PostEngagementScanPage() {
       toast.warning("Chưa có bài khả dụng nào có số lượng quét lớn hơn 0.");
       return;
     }
-    const delay = normalizeDelayRange(delayMin, delayMax, { ceil: 3600 });
+    const delay = normalizeDelayRange(delayMin, delayMax);
     try {
       setBusy(true);
       const res = await startScan({ uids: validSelected, posts, delayMin: delay.min, delayMax: delay.max });
       setSessionKeys((res?.posts || []).map((p) => p.post_key));
       setLogs([]);
+      setPendingCleanup(null);
       setScanStatus("running");
       setScanJobId(res.job_id);
       setResumable(null);
@@ -469,6 +542,7 @@ export default function PostEngagementScanPage() {
       const res = await resumeSession(resumable.session_id);
       setSessionKeys((res?.posts || []).map((p) => p.post_key));
       setLogs([]);
+      setPendingCleanup(null);
       setScanStatus("running");
       setScanJobId(res.job_id);
       setResumable(null);
@@ -696,7 +770,7 @@ export default function PostEngagementScanPage() {
       </div>
 
       {/* -------------------- Card 3: xem trước bài + hạn mức -------------------- */}
-      {targets.some((r) => checked[r.post_key]?.meta) && (
+      {checkedTargets.length > 0 && (
         <section className="rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="flex items-center gap-2.5 text-[15px] font-bold text-[#0F172A]">
@@ -704,13 +778,31 @@ export default function PostEngagementScanPage() {
               Xem trước danh sách bài viết muốn quét
             </h2>
             <span className="rounded-full border border-[#A7F3D0] bg-[#ECFDF5] px-3 py-1 text-xs font-semibold text-[#047857]">
-              • Đã chọn: {available.length} bài viết
+              • Đã chọn: {picked.length} / {available.length} bài viết
             </span>
           </div>
-          <div className="mt-4 overflow-x-auto rounded-xl border border-[#E2E8F0]">
-            <table className="w-full min-w-[880px] text-left text-[13px]">
+          {available.length > 0 && (
+            <p className="mt-3 text-[11px] text-[#94A3B8]">
+              Chỉ bài được tick mới quét · giữ chuột trái và kéo để chọn nhiều bài · Ctrl + click chọn riêng lẻ · Shift + click chọn cả khoảng.
+            </p>
+          )}
+          <div ref={setPreviewBox} className="mt-2 overflow-x-auto rounded-xl border border-[#E2E8F0]">
+            <table className="w-full min-w-[920px] text-left text-[13px]">
               <thead className="border-b border-[#E2E8F0] bg-[#F8FAFC] text-[11px] font-bold uppercase text-[#475569]">
                 <tr>
+                  <th className="w-10 px-3 py-3 text-center">
+                    <input
+                      type="checkbox"
+                      aria-label="Chọn tất cả bài khả dụng"
+                      checked={allPicked}
+                      ref={(el) => {
+                        if (el) el.indeterminate = picked.length > 0 && !allPicked;
+                      }}
+                      disabled={locked || !available.length}
+                      onChange={() => setPicked(allPicked ? new Set() : new Set(available.map((r) => r.post_key)))}
+                      className="size-4 cursor-pointer accent-[#2563EB] disabled:cursor-not-allowed"
+                    />
+                  </th>
                   <th className="w-12 px-3 py-3">STT</th>
                   <th className="px-3 py-3">Tiêu đề / nội dung bài viết</th>
                   <th className="px-3 py-3">Nguồn đăng</th>
@@ -720,14 +812,27 @@ export default function PostEngagementScanPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#F1F5F9]">
-                {targets.map((r, i) => {
+                {checkedTargets.map((r, i) => {
                   const info = checked[r.post_key] || {};
                   const meta = info.meta || {};
                   const q = quotas[r.post_key] || defaultQuota(meta);
                   const setQ = (k, v) => setQuotas((cur) => ({ ...cur, [r.post_key]: { ...(cur[r.post_key] || defaultQuota(meta)), [k]: v } }));
                   const ok = info.status === "available";
+                  const on = ok && pickedKeys.has(r.post_key);
+                  const pickIdx = ok ? available.indexOf(r) : -1;
                   return (
-                    <tr key={r.id} className={ok ? "" : "bg-slate-50/60"}>
+                    <tr key={r.id} {...(ok && !locked && pickIdx >= 0 ? previewRowProps(r, pickIdx) : {})}
+                      className={ok ? `select-none ${locked ? "" : "cursor-pointer"} ${on ? "bg-[#EFF6FF]" : "hover:bg-slate-50/70"}` : "bg-slate-50/60"}>
+                      <td className="px-3 py-3 text-center" data-no-row-selection>
+                        <input
+                          type="checkbox"
+                          aria-label="Chọn bài này để quét"
+                          checked={on}
+                          disabled={locked || !ok}
+                          onChange={() => togglePicked(r.post_key)}
+                          className="size-4 cursor-pointer accent-[#2563EB] disabled:cursor-not-allowed disabled:opacity-40"
+                        />
+                      </td>
                       <td className="px-3 py-3 font-mono text-xs text-[#94A3B8]">{String(i + 1).padStart(2, "0")}</td>
                       <td className="max-w-[340px] px-3 py-3">
                         <p className="line-clamp-2 font-semibold text-[#0F172A]" title={meta.content}>
@@ -781,7 +886,7 @@ export default function PostEngagementScanPage() {
           <p className="mt-3 text-[13px] text-[#334155]">
             Tổng tương tác dự kiến quét:{" "}
             <b>{totals.likeAll || totals.commentAll ? "toàn bộ" : nf(totals.like + totals.comment)}</b> (
-            {totals.likeAll ? "toàn bộ" : nf(totals.like)} Like, {totals.commentAll ? "toàn bộ" : nf(totals.comment)} Cmt) · để trống = quét toàn bộ số hiện có.
+            {totals.likeAll ? "toàn bộ" : nf(totals.like)} Like, {totals.commentAll ? "toàn bộ" : nf(totals.comment)} Cmt) · để trống = quét toàn bộ số hiện có · nhập 0 = không quét loại đó.
           </p>
         </section>
       )}
@@ -795,8 +900,8 @@ export default function PostEngagementScanPage() {
             Quay về cấu hình ban đầu
           </button>
         ) : !running ? (
-          <button type="button" onClick={runScan} disabled={busy || checking || !available.length || uncheckedCount > 0}
-            title={uncheckedCount > 0 ? "Bấm Kiểm tra & Lọc trùng lặp trước" : !available.length ? "Chưa có bài viết khả dụng" : undefined}
+          <button type="button" onClick={runScan} disabled={busy || checking || !picked.length || uncheckedCount > 0}
+            title={uncheckedCount > 0 ? "Bấm Kiểm tra & Lọc trùng lặp trước" : !available.length ? "Chưa có bài viết khả dụng" : !picked.length ? "Chọn ít nhất 1 bài viết để quét" : undefined}
             className="flex h-14 w-full items-center justify-center gap-3 rounded-2xl bg-[#2563EB] text-base font-bold uppercase tracking-wide text-white shadow-[0_8px_20px_rgba(37,99,235,0.25)] hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60">
             {busy ? <Loader2 className="size-5 animate-spin" /> : <Play className="size-5" />}
             Bắt đầu thực thi
