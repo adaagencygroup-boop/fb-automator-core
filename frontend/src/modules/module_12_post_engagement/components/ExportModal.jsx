@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Download, FileSpreadsheet, FileText, Hash, Loader2, X } from "lucide-react";
+import { Download, FileSpreadsheet, FileText, Hash, Loader2 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "@/lib/toast";
 import { exportEngagements } from "../service";
@@ -88,11 +88,9 @@ export default function ExportModal({ open, onOpenChange, post, postKeys = [], p
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg gap-0 rounded-2xl p-0">
-        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+        {/* Nút X đóng hộp do khung Dialog dùng chung tự gắn (góc phải trên) — không vẽ thêm nút X ở đây */}
+        <div className="flex items-center border-b border-slate-100 py-4 pl-6 pr-14">
           <DialogTitle className="text-base font-bold text-slate-900">Xuất dữ liệu tương tác</DialogTitle>
-          <button type="button" onClick={() => onOpenChange(false)} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100">
-            <X className="size-4" />
-          </button>
         </div>
         <div className="space-y-5 px-6 py-5">
           <div className="space-y-2">
