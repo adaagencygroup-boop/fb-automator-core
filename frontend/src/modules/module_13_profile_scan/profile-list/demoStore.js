@@ -39,6 +39,9 @@ export function createDemoStore() {
       categories = categories.filter((c) => `category:${c.id}` !== key);
       rows = rows.map((r) => (r.sourceKey === key ? { ...r, sourceKey: UNCATEGORIZED } : r));
     },
+    async getProfileMemberships() {
+      return [];
+    },
     async moveProfiles(fromKey, toKey, uids) {
       const set = new Set(uids);
       const already = new Set(rows.filter((r) => r.sourceKey === toKey).map((r) => r.uid));

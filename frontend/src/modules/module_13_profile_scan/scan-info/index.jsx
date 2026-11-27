@@ -11,7 +11,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
 import { normalizeAccount } from "@/modules/module_07_group_spam/shared/components";
-import { LiveLogConsole, nowStamp } from "@/modules/module_11_page_scanner/_shared";
+import { LiveLogConsole, notifyExportResult, nowStamp } from "@/modules/module_11_page_scanner/_shared";
+import { saveBlobFile } from "@/modules/module_11_page_scanner/shared/saveFile.mjs";
 
 /** Số luồng backend ghi kèm log → "Thread-02"; log chung của phiên (bắt đầu / hoàn tất / thao tác) → "Phiên" */
 const threadLabel = (n) => (n ? `Thread-${String(n).padStart(2, "0")}` : "Phiên");
@@ -22,7 +23,7 @@ import { askConfirm } from "@/modules/module_11_page_scanner/shared/askConfirm";
 import { loadSavedAccountUids, resolveUsableSavedUids, saveSelectedAccountUids } from "@/modules/module_11_page_scanner/shared/accountStorage";
 import { exportMessage, exportProfiles } from "../shared/exportProfiles";
 import { controlScan, getLatestScan, getScanProgress, getScanResults, startProfileScan } from "../service";
-import { SCALE_UNITS, SOURCE_TYPES, fmtNum, parseProfileLines, pickProfileCell, shortFbUrl, summarizeSources } from "../utils.mjs";
+import { FILE_TEMPLATE_HEADER, SCALE_UNITS, SOURCE_TYPES, fmtNum, parseProfileLines, pickProfileCell, profileFileTemplate, shortFbUrl, summarizeSources } from "../utils.mjs";
 import ProfileTable, { rowId } from "./ProfileTable";
 import SaveProfileListModal from "./SaveProfileListModal";
 import SelectSourcesModal from "./SelectSourcesModal";
@@ -310,6 +311,17 @@ export default function ProfileScanInfo() {
     setFile(f);
     return setFileRows([]);
   };
+  const downloadTemplate = async () => {
+    try {
+      const res = await saveBlobFile(new Blob([profileFileTemplate()], { type: "text/csv;charset=utf-8" }), {
+        suggestedName: "mau_quet_profile.csv",
+        types: [{ description: "Tệp CSV", accept: { "text/csv": [".csv"] } }],
+      });
+      notifyExportResult(res, { successMessage: `Đã tải file mẫu "${res?.fileName}".`, key: "m13-template" });
+    } catch (err) {
+      toast.error(`Không tải được file mẫu: ${err.message}`);
+    }
+  };
   const readFile = async () => {
     setReading(true);
     try {
@@ -568,6 +580,20 @@ export default function ProfileScanInfo() {
                 <FileUp className="size-6 text-[#1877F2]" /> Kéo thả hoặc bấm để chọn tệp .csv, .txt, .xlsx
               </button>
             )}
+            {/* Ghi chú định dạng tệp (QA #9) */}
+            <div className="mt-3 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-3 py-2.5 text-xs text-[#1E3A8A]">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p>
+                  <b>Ghi chú:</b> Định dạng các cột của file: <b className="font-mono">{FILE_TEMPLATE_HEADER.join(" | ")}</b>
+                </p>
+                <button type="button" onClick={downloadTemplate} className="inline-flex items-center gap-1.5 rounded-md border border-[#93C5FD] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#1D4ED8] hover:bg-[#DBEAFE]">
+                  <Download className="size-3.5" /> Tải file mẫu
+                </button>
+              </div>
+              <p className="mt-1 text-[11px] text-[#3B5BA9]">
+                Mỗi dòng một profile; cột link nhận link trang cá nhân (facebook.com/…, profile.php?id=…) hoặc UID. Dòng tiêu đề được tự bỏ qua. Tệp .txt: mỗi dòng một link.
+              </p>
+            </div>
             <button type="button" disabled={!file || reading} onClick={readFile} className="mt-3 inline-flex h-[30px] w-full items-center justify-center gap-2 rounded-lg border border-[#93C5FD] bg-[#EFF6FF] text-xs font-semibold text-[#1D4ED8] hover:bg-[#DBEAFE] disabled:opacity-50"><Database className="size-3.5" /> {reading ? "Đang đọc…" : "Đọc dữ liệu & Xem trước danh sách"}</button>
           </div>
         )}
@@ -641,12 +667,13 @@ export default function ProfileScanInfo() {
             <div className="grid gap-6 lg:grid-cols-[300px_minmax(0,1fr)]">
               <div className={`${CARD} p-4`}>
                 <p className="flex items-center gap-2 border-b border-[#F1F5F9] pb-3 text-xs font-bold uppercase tracking-[0.5px] text-[#334155]"><ListChecks className="size-4 text-[#1877F2]" /> Danh mục nguồn quét ({entries.length})</p>
-                <div className="mt-3 flex gap-2">
-                  <div className="relative min-w-0 flex-1">
+                {/* Tìm kiếm + lọc loại nguồn: cùng chiều cao / khung, ô lọc rộng cố định */}
+                <div className="mt-3 grid grid-cols-[minmax(0,1fr)_120px] gap-2">
+                  <div className="relative min-w-0">
                     <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-[#94A3B8]" />
-                    <input aria-label="Tìm nguồn" value={sourceSearch} onChange={(e) => setSourceSearch(e.target.value)} placeholder="Tìm kiếm" className="h-[30px] w-full rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] pl-8 pr-2 text-xs outline-none focus:border-[#1877F2]" />
+                    <input aria-label="Tìm nguồn" value={sourceSearch} onChange={(e) => setSourceSearch(e.target.value)} placeholder="Tìm kiếm nguồn" className="h-[34px] w-full rounded-lg border border-[#E2E8F0] bg-white pl-8 pr-2 text-xs outline-none placeholder:text-[#94A3B8] focus:border-[#1877F2]" />
                   </div>
-                  <CustomSelect className="w-[118px]" buttonClassName="!h-[30px] !border-[#E2E8F0] !shadow-none" value={sourceType} onChange={setSourceType} options={[{ value: "ALL", label: "Tất cả loại" }, ...Object.entries(SOURCE_TYPES).map(([value, label]) => ({ value, label }))]} />
+                  <CustomSelect className="w-full" buttonClassName="!h-[34px] !w-full !rounded-lg !border-[#E2E8F0] !bg-white !px-3 !text-xs !shadow-none" value={sourceType} onChange={setSourceType} options={[{ value: "ALL", label: "Tất cả loại" }, ...Object.entries(SOURCE_TYPES).map(([value, label]) => ({ value, label }))]} />
                 </div>
                 <div className="mt-3 max-h-[420px] space-y-2.5 overflow-y-auto">
                   {shownSources.length === 0 && <p className="py-8 text-center text-xs text-[#94A3B8]">Chưa có nguồn nào.</p>}

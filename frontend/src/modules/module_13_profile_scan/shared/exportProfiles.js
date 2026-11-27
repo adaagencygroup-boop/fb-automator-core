@@ -1,4 +1,4 @@
-import { saveBlobFile } from "@/modules/module_11_page_scanner/shared/saveFile.mjs";
+import { pickSaveTarget, writeSaveTarget } from "@/modules/module_11_page_scanner/shared/saveFile.mjs";
 
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
@@ -12,10 +12,22 @@ export const jobText = (r) => [r.job_title, r.job_place].filter(Boolean).join(" 
 
 /**
  * Xuất .xlsx — UID là ô chữ để Excel không đổi thành số mũ.
- * Mở hộp thoại "Lưu thành" để chọn thư mục + tên tệp (Chrome / Edge và app Windows — WebView2);
- * không mở được thì tải về thư mục Tải xuống. Trả { status: "saved" | "cancelled" | "downloaded", fileName }.
+ * Mở hộp thoại "Lưu thành" để chọn thư mục + tên tệp (Chrome / Edge và app Windows — WebView2) NGAY khi bấm,
+ * rồi mới tải dữ liệu / dựng file — tránh mất quyền mở hộp thoại khi dữ liệu tải lâu (vd "Xuất toàn bộ").
+ * input: mảng profile hoặc hàm async trả mảng (tải sau khi đã chọn nơi lưu).
+ * Trả { status: "saved" | "cancelled" | "downloaded" | "empty", fileName, count }.
  */
-export async function exportProfiles(rows, fileName, nameOf = () => "") {
+export async function exportProfiles(input, fileName, nameOf = () => "") {
+  const target = await pickSaveTarget({
+    suggestedName: `${fileName}_${new Date().toISOString().slice(0, 10)}.xlsx`,
+    types: [{ description: "Tệp Excel", accept: { [XLSX_MIME]: [".xlsx"] } }],
+  });
+  if (target.cancelled) return { status: "cancelled", fileName: target.fileName, count: 0 };
+  const rows = typeof input === "function" ? await input() : input;
+  if (!rows?.length) {
+    await target.handle?.remove?.().catch(() => {}); // bỏ tệp rỗng vừa tạo (nếu trình duyệt hỗ trợ)
+    return { status: "empty", fileName: target.fileName, count: 0 };
+  }
   const XLSX = await import("xlsx");
   const sheet = XLSX.utils.aoa_to_sheet([
     HEADERS,
@@ -28,16 +40,14 @@ export async function exportProfiles(rows, fileName, nameOf = () => "") {
   const book = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(book, sheet, "Profile");
   const data = XLSX.write(book, { bookType: "xlsx", type: "array" });
-  return saveBlobFile(new Blob([data], { type: XLSX_MIME }), {
-    suggestedName: `${fileName}_${new Date().toISOString().slice(0, 10)}.xlsx`,
-    types: [{ description: "Tệp Excel", accept: { [XLSX_MIME]: [".xlsx"] } }],
-  });
+  return { ...(await writeSaveTarget(target, new Blob([data], { type: XLSX_MIME }))), count: rows.length };
 }
 
 /** Thông báo sau khi xuất: chỉ khẳng định "đã lưu" khi người dùng thực sự bấm Lưu */
-export function exportMessage(result, count) {
+export function exportMessage(result, count = result?.count) {
   const n = Number(count || 0).toLocaleString("vi-VN");
   if (result?.status === "cancelled") return { type: "info", text: "Đã hủy xuất file." };
+  if (result?.status === "empty") return { type: "warning", text: "Chưa có profile để xuất." };
   if (result?.status === "saved") return { type: "success", text: `Đã lưu ${n} profile vào ${result.fileName}.` };
   return { type: "success", text: `Đã tải ${n} profile xuống: ${result?.fileName || ""} (thư mục Tải xuống).` };
 }

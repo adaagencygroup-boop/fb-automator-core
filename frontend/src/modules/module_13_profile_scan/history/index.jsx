@@ -536,14 +536,18 @@ function SessionDetail({ session: s, onClose }) {
   const exportResults = async () => {
     setExporting(true);
     try {
-      const res = await getScanResults(s.id);
-      const items = res?.items || [];
-      if (!items.length) {
-        toast.warning("Phiên này chưa có profile quét thành công.");
-        return;
-      }
-      const names = new Map((res?.sources || []).map((x) => [x.key, x.name]));
-      const msg = exportMessage(await exportProfiles(items, `profile_phien_${s.id}`, (r) => names.get(r.sourceKey) || ""), items.length);
+      // Chọn nơi lưu trước, tải kết quả phiên sau (giữ được hộp thoại "Lưu thành")
+      const names = new Map();
+      const result = await exportProfiles(
+        async () => {
+          const res = await getScanResults(s.id);
+          (res?.sources || []).forEach((x) => names.set(x.key, x.name));
+          return res?.items || [];
+        },
+        `profile_phien_${s.id}`,
+        (r) => names.get(r.sourceKey) || "",
+      );
+      const msg = result.status === "empty" ? { type: "warning", text: "Phiên này chưa có profile quét thành công." } : exportMessage(result);
       toast[msg.type](msg.text);
     } catch (err) {
       toast.error(`Không xuất được: ${err.message}`);

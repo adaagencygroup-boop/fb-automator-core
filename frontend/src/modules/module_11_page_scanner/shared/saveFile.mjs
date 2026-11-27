@@ -70,6 +70,45 @@ export async function saveBlobFile(
   return { status: "downloaded", fileName: suggestedName };
 }
 
+/**
+ * Mở hộp thoại "Lưu thành" NGAY lúc người dùng bấm (trước mọi await chậm như tải dữ liệu / import thư viện):
+ * trình duyệt chỉ cho mở picker trong vài giây sau cú click — chờ API xong mới mở thì picker lỗi và
+ * tệp bị tải thẳng vào Tải xuống. Trả { handle, fileName } | { cancelled: true, fileName }
+ * (handle null = không có picker → khi ghi sẽ tải bằng <a download>).
+ */
+export async function pickSaveTarget({ suggestedName = "export", types = [], win = typeof window !== "undefined" ? window : null } = {}) {
+  if (win && typeof win.showSaveFilePicker === "function") {
+    try {
+      const handle = await win.showSaveFilePicker(types?.length ? { suggestedName, types } : { suggestedName });
+      return { handle, fileName: handle.name || suggestedName };
+    } catch (err) {
+      if (isAbortError(err)) return { cancelled: true, fileName: suggestedName };
+    }
+  }
+  return { handle: null, fileName: suggestedName };
+}
+
+/** Ghi Blob vào nơi đã chọn bằng pickSaveTarget → { status: "saved" | "downloaded", fileName } */
+export async function writeSaveTarget(
+  target,
+  blob,
+  { doc = typeof document !== "undefined" ? document : null, urlApi = typeof URL !== "undefined" ? URL : null } = {},
+) {
+  if (target?.handle) {
+    const writable = await target.handle.createWritable();
+    try {
+      await writable.write(blob);
+      await writable.close();
+    } catch (writeErr) {
+      await writable.abort?.().catch(() => {});
+      throw writeErr;
+    }
+    return { status: "saved", fileName: target.fileName };
+  }
+  triggerBrowserDownload(blob, target?.fileName || "export", { doc, urlApi });
+  return { status: "downloaded", fileName: target?.fileName || "export" };
+}
+
 /** Lưu nội dung CSV (tự thêm BOM UTF-8 để Excel mở không lỗi tiếng Việt). */
 export async function saveCsvContent(csvText, fileName, envOpts = {}) {
   const text = String(csvText ?? "");

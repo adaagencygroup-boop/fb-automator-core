@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Download, ExternalLink, FileSpreadsheet, ListChecks, Loader2, MessageCircle, MoreVertical, Pencil, Plus, Search, Share2, ThumbsUp, Trash2, Users } from "lucide-react";
 
 import CustomSelect from "@/components/ui/custom-select";
@@ -10,7 +10,7 @@ import * as service from "../service";
 import { SCALE_UNITS, SOURCE_TYPES, UNCATEGORIZED, fmtNum, shortFbUrl } from "../utils.mjs";
 import { exportMessage, exportProfiles, jobText } from "../shared/exportProfiles";
 import ProfileTable, { rowId } from "../scan-info/ProfileTable";
-import { CategoryFormModal, MoveProfilesModal } from "./CategoryModals";
+import { CategoryFormModal, MoveConflictModal, MoveProfilesModal } from "./CategoryModals";
 import { SelectionBar } from "@/modules/module_11_page_scanner/_listLayout";
 import { createDemoStore } from "./demoStore";
 
@@ -53,7 +53,8 @@ const FOLLOWER_OPTIONS = [
   { value: "1000", label: "1.000 – 9.999" },
   { value: "10000", label: "Từ 10.000" },
 ];
-const SELECT = "!h-[30px] !border-[#E2E8F0] !shadow-none";
+// Thanh tìm kiếm + bộ lọc danh sách profile: cùng chiều cao, bo góc, cỡ chữ; các ô lọc rộng bằng nhau
+const FILTER_SELECT = "!h-[34px] !w-full !rounded-lg !border-[#E2E8F0] !bg-white !px-3 !text-xs !shadow-none";
 
 function CollectionCard({ item, active, menuOpen, onSelect, onMenu, onEdit, onDelete }) {
   const isCategory = item.type === "category";
@@ -134,8 +135,9 @@ function CollectionHeader({ item, onExport }) {
       {item.type === "page" && <div className="mt-3"><Stat label="Tổng người theo dõi quét" value={fmtNum(item.profile_count)} unit="lượt" /></div>}
       {item.type === "post" && (
         <div className="mt-3 grid grid-cols-2 gap-3">
-          <Stat label="ĐÃ QUÉT LIKE" value={`${fmtNum(item.scanned_likes)}/${fmtNum(item.likes)}`} />
-          <Stat label="ĐÃ QUÉT BÌNH LUẬN" value={`${fmtNum(item.scanned_comments)}/${fmtNum(item.comments)}`} />
+          {/* Đã quét thông tin / số người (không tính fanpage) đã like, bình luận */}
+          <Stat label="ĐÃ QUÉT LIKE" value={`${fmtNum(item.scanned_likes ?? 0)}/${fmtNum(item.like_people ?? item.likes ?? 0)}`} />
+          <Stat label="ĐÃ QUÉT BÌNH LUẬN" value={`${fmtNum(item.scanned_comments ?? 0)}/${fmtNum(item.comment_people ?? item.comments ?? 0)}`} />
         </div>
       )}
     </div>
@@ -161,7 +163,33 @@ export default function ProfileList() {
   const [menuKey, setMenuKey] = useState(null);
   const [form, setForm] = useState(null); // { category } — null khi đóng
   const [moving, setMoving] = useState(false);
+  const [moveConflict, setMoveConflict] = useState(null); // { toKey, uids, conflict } — chờ người dùng xác nhận
   const [exporting, setExporting] = useState(false);
+
+  /* Phần đầu cột phải đang dính? — chỉ khi đó mới phủ khe p-6 phía trên (lúc chưa cuộn sẽ che tiêu đề trang) */
+  const stickyHeadRef = useRef(null);
+  const [headStuck, setHeadStuck] = useState(false);
+  useEffect(() => {
+    const scroller = document.querySelector("main");
+    if (!scroller) return undefined;
+    const check = () => {
+      const el = stickyHeadRef.current;
+      if (!el || getComputedStyle(el).position !== "sticky") {
+        setHeadStuck(false);
+        return;
+      }
+      const padTop = parseFloat(getComputedStyle(scroller).paddingTop) || 0;
+      const offset = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      setHeadStuck(scroller.scrollTop > 0 && offset <= padTop + 1);
+    };
+    check();
+    scroller.addEventListener("scroll", check, { passive: true });
+    window.addEventListener("resize", check);
+    return () => {
+      scroller.removeEventListener("scroll", check);
+      window.removeEventListener("resize", check);
+    };
+  }, []);
 
   useEffect(() => {
     const id = setTimeout(() => {
@@ -264,12 +292,28 @@ export default function ProfileList() {
     }
   };
 
-  const move = async (toKey) => {
-    await api.moveProfiles(currentKey, toKey, picked.map((r) => r.uid));
+  const doMove = async (toKey, uids, exclusive) => {
+    await api.moveProfiles(currentKey, toKey, uids, { exclusive });
     // Nguồn quét giữ nguyên profile, chỉ thêm vào danh mục đích
-    toast.success(isCategory ? `Đã chuyển ${fmtNum(picked.length)} profile.` : `Đã thêm ${fmtNum(picked.length)} profile vào danh mục.`);
+    toast.success(isCategory || exclusive ? `Đã chuyển ${fmtNum(uids.length)} profile.` : `Đã thêm ${fmtNum(uids.length)} profile vào danh mục.`);
     setSelected(new Set());
     refresh();
+  };
+
+  // Profile đã nằm trong danh mục khác (ngoài mục đang xem và mục đích) → hiện cảnh báo trước khi chuyển
+  const move = async (toKey) => {
+    const uids = [...new Set(picked.map((r) => String(r.uid)))];
+    const rows = (await api.getProfileMemberships?.(uids)) || [];
+    const keyOf = (r) => `category:${r.id}`;
+    const inTarget = new Set(rows.find((r) => keyOf(r) === toKey)?.uids || []);
+    const others = rows
+      .filter((r) => keyOf(r) !== toKey && keyOf(r) !== currentKey)
+      .map((r) => ({ id: r.id, name: r.name, color: r.color, count: r.uids.length, uids: r.uids }));
+    if (!others.length) return doMove(toKey, uids, false); // trùng với chính mục đích thì DB tự bỏ qua
+    const taken = new Set([...inTarget, ...others.flatMap((r) => r.uids)]);
+    const names = [...new Map(picked.filter((r) => taken.has(String(r.uid))).map((r) => [String(r.uid), r.name || r.uid])).values()];
+    setMoveConflict({ toKey, uids, conflict: { others, inTarget: inTarget.size, names, total: taken.size } });
+    return undefined;
   };
 
   const removeProfiles = async () => {
@@ -290,16 +334,12 @@ export default function ProfileList() {
     }
   };
 
+  // Hộp thoại chọn nơi lưu mở ngay khi bấm; dữ liệu (getRows) tải sau khi đã chọn
   const runExport = async (getRows, fileName) => {
     setExporting(true);
     try {
-      const list = await getRows();
-      if (!list.length) {
-        toast.warning("Chưa có profile để xuất.");
-        return;
-      }
       const names = new Map(collections.map((c) => [c.key, c.name]));
-      const msg = exportMessage(await exportProfiles(list, fileName, (r) => names.get(r.sourceKey) || ""), list.length);
+      const msg = exportMessage(await exportProfiles(getRows, fileName, (r) => names.get(r.sourceKey) || ""));
       toast[msg.type](msg.text);
     } catch (err) {
       toast.error(`Không xuất được: ${err.message}`);
@@ -308,35 +348,36 @@ export default function ProfileList() {
     }
   };
   const exportAll = () => runExport(async () => (await Promise.all(collections.map((c) => api.getCollectionProfiles(c.key)))).flat(), "danh_sach_profile");
-  const exportCurrent = () => runExport(async () => (picked.length ? picked : filtered), "profile_theo_danh_muc");
+  const exportCurrent = () => {
+    if (!picked.length && !filtered.length) return toast.warning("Chưa có profile để xuất.");
+    return runExport(async () => (picked.length ? picked : filtered), "profile_theo_danh_muc");
+  };
   const exportPicked = () => runExport(async () => picked, "profile_da_chon");
 
   return (
     <div className="-m-6 min-h-full space-y-5 bg-[#F8FAFC] p-6">
-      <div>
-        <h1 className="font-heading text-xl font-bold text-[#0F172A]">Danh sách thông tin profile đã quét</h1>
-        <p className="mt-1 text-xs text-[#64748B]">Quản lý các thông tin về tên, hồ sơ, UID, link facebook, số bạn bè của những profile nhập từ page, nhóm, bài viết hoặc nhập thủ công</p>
-        {demo && <p className="mt-2 inline-block rounded-md bg-[#FEF3C7] px-2.5 py-1 text-xs font-semibold text-[#92400E]">Đang xem dữ liệu mẫu — thay đổi sẽ mất khi tải lại trang</p>}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="font-heading text-xl font-bold text-[#0F172A]">Danh sách thông tin profile đã quét</h1>
+          <p className="mt-1 text-xs text-[#64748B]">Quản lý các thông tin về tên, hồ sơ, UID, link facebook, số bạn bè của những profile nhập từ page, nhóm, bài viết hoặc nhập thủ công</p>
+          {demo && <p className="mt-2 inline-block rounded-md bg-[#FEF3C7] px-2.5 py-1 text-xs font-semibold text-[#92400E]">Đang xem dữ liệu mẫu — thay đổi sẽ mất khi tải lại trang</p>}
+        </div>
+        <button type="button" disabled={exporting || !collections.length} onClick={exportAll} className="inline-flex h-8 shrink-0 items-center gap-2 rounded-lg border border-[#CBD5E1] bg-white px-4 text-xs font-semibold text-[#1E293B] hover:bg-slate-50 disabled:opacity-50"><Download className="size-3.5" /> Xuất toàn bộ file</button>
       </div>
 
-      <section className={`${CARD} p-5`}>
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] pb-4">
-          <h2 className="text-base font-bold uppercase tracking-[0.4px] text-[#0F172A]">Danh sách profile đã quét</h2>
-          <button type="button" disabled={exporting || !collections.length} onClick={exportAll} className="inline-flex h-8 items-center gap-2 rounded-lg border border-[#CBD5E1] bg-white px-4 text-xs font-semibold text-[#1E293B] hover:bg-slate-50 disabled:opacity-50"><Download className="size-3.5" /> Xuất toàn bộ file</button>
-        </div>
-
-        <div className="mt-4 grid items-start gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
-          <aside className={`${CARD} flex h-[520px] flex-col p-4`}>
+      <div className="grid items-start gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
+          {/* Dính khi cuộn trang (main của AppShell là vùng cuộn) */}
+          <aside className={`${CARD} flex h-[520px] max-h-[calc(100vh-120px)] min-h-[360px] flex-col p-4 lg:sticky lg:top-0`}>
             <div className="flex items-center justify-between gap-2 border-b border-[#F1F5F9] pb-3">
               <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.4px] text-[#334155]"><ListChecks className="size-4 text-[#1877F2]" /> Danh mục nguồn quét ({collections.length})</p>
               <button type="button" aria-label="Thêm danh mục" title="Thêm danh mục" onClick={() => setForm({ category: null })} className="rounded-md bg-[#EFF6FF] p-1 text-[#1877F2] hover:bg-[#DBEAFE]"><Plus className="size-4" /></button>
             </div>
-            <div className="mt-3 flex gap-2">
-              <div className="relative min-w-0 flex-1">
+            <div className="mt-3 grid grid-cols-[minmax(0,1fr)_120px] gap-2">
+              <div className="relative min-w-0">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-[#94A3B8]" />
-                <input aria-label="Tìm nguồn hoặc danh mục" value={sideSearch} onChange={(e) => { setSideSearch(e.target.value); setSelected(new Set()); }} placeholder="Tìm kiếm" className="h-[30px] w-full rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] pl-8 pr-2 text-xs outline-none focus:border-[#1877F2]" />
+                <input aria-label="Tìm nguồn hoặc danh mục" value={sideSearch} onChange={(e) => { setSideSearch(e.target.value); setSelected(new Set()); }} placeholder="Tìm kiếm" className="h-[34px] w-full rounded-lg border border-[#E2E8F0] bg-white pl-8 pr-2 text-xs outline-none placeholder:text-[#94A3B8] focus:border-[#1877F2]" />
               </div>
-              <CustomSelect className="w-[118px]" buttonClassName={SELECT} value={type} onChange={(v) => { setType(v); setSelected(new Set()); }} options={TYPE_OPTIONS} />
+              <CustomSelect className="w-full" buttonClassName={FILTER_SELECT} value={type} onChange={(v) => { setType(v); setSelected(new Set()); }} options={TYPE_OPTIONS} />
             </div>
             <div className="mt-3 min-h-0 flex-1 space-y-2.5 overflow-y-auto">
               {loading ? (
@@ -366,17 +407,28 @@ export default function ProfileList() {
           <div className="min-w-0 space-y-4">
             {current && (
               <>
+                {/* Phần đầu cột phải (thông tin nguồn, bộ lọc, thanh chọn) dính cùng hàng với cột trái.
+                    main có p-6 → khe 24px phía trên; khi đang dính thì dải ::before màu nền phủ khe đó */}
+                <div
+                  ref={stickyHeadRef}
+                  className={`space-y-4 bg-[#F8FAFC] pb-1 lg:sticky lg:top-0 lg:z-30 ${
+                    headStuck
+                      ? "before:pointer-events-none before:absolute before:inset-x-0 before:-top-6 before:h-6 before:bg-[#F8FAFC] before:content-['']"
+                      : ""
+                  }`}
+                >
                 <CollectionHeader item={current} onExport={exportCurrent} />
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="relative w-full max-w-[320px]">
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3 xl:grid-cols-[minmax(240px,1fr)_repeat(3,152px)]">
+                  <div className="relative sm:col-span-3 xl:col-span-1">
                     <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-[#94A3B8]" />
-                    <input aria-label="Tìm profile" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Tìm tên, UID, nơi ở, học vấn, công việc..." className="h-[30px] w-full rounded-lg border border-[#E2E8F0] bg-white pl-8 pr-3 text-xs outline-none focus:border-[#1877F2]" />
+                    <input aria-label="Tìm profile" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Tìm tên, UID, nơi ở, học vấn, công việc..." className="h-[34px] w-full rounded-lg border border-[#E2E8F0] bg-white pl-9 pr-3 text-xs outline-none placeholder:text-[#94A3B8] focus:border-[#1877F2]" />
                   </div>
-                  <CustomSelect className="w-[124px]" buttonClassName={SELECT} value={phone} onChange={setPhone} options={PHONE_OPTIONS} />
-                  <CustomSelect className="w-[130px]" buttonClassName={SELECT} value={friends} onChange={setFriends} options={FRIEND_OPTIONS} />
-                  <CustomSelect className="w-[136px]" buttonClassName={SELECT} value={followers} onChange={setFollowers} options={FOLLOWER_OPTIONS} />
+                  <CustomSelect className="w-full" buttonClassName={FILTER_SELECT} value={phone} onChange={setPhone} options={PHONE_OPTIONS} />
+                  <CustomSelect className="w-full" buttonClassName={FILTER_SELECT} value={friends} onChange={setFriends} options={FRIEND_OPTIONS} />
+                  <CustomSelect className="w-full" buttonClassName={FILTER_SELECT} value={followers} onChange={setFollowers} options={FOLLOWER_OPTIONS} />
                 </div>
                 <SelectionBar count={picked.length} onMoveCategory={() => setMoving(true)} onExport={exportPicked} onDelete={removeProfiles} exportDisabled={exporting} />
+                </div>
                 {rowsLoading ? (
                   <div className={`${CARD} py-16`}><Loader2 className="mx-auto size-5 animate-spin text-[#1877F2]" /></div>
                 ) : (
@@ -388,10 +440,18 @@ export default function ProfileList() {
               <div className={`${CARD} px-4 py-16 text-center text-xs text-[#94A3B8]`}>Chưa có dữ liệu profile nào được lưu trữ. Vui lòng sử dụng tính năng &quot;Quét thông tin profile&quot; để thu thập.</div>
             )}
           </div>
-        </div>
-      </section>
+      </div>
 
       {form && <CategoryFormModal category={form.category} takenNames={categories.map((c) => c.name)} onSave={saveCategory} onClose={() => setForm(null)} />}
+      {moveConflict && (
+        <MoveConflictModal
+          conflict={moveConflict.conflict}
+          count={moveConflict.uids.length}
+          target={collections.find((c) => c.key === moveConflict.toKey)?.name || ""}
+          onConfirm={(exclusive) => doMove(moveConflict.toKey, moveConflict.uids, exclusive)}
+          onClose={() => setMoveConflict(null)}
+        />
+      )}
       {moving && <MoveProfilesModal count={picked.length} categories={categories.filter((c) => c.key !== currentKey)} onMove={move} onClose={() => setMoving(false)} />}
     </div>
   );

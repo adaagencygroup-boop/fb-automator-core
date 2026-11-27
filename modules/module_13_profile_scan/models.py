@@ -580,6 +580,37 @@ def session_sources(owner: str, session_id: int) -> List[Dict[str, Any]]:
 # ==================== Danh sách profile ====================
 
 
+def post_source_stats(owner: str, post_keys: List[str]) -> Dict[str, Dict[str, int]]:
+    """Bài viết nguồn (Module 12): số Like / Bình luận / Chia sẻ của bài + số người like / bình luận (trừ fanpage)
+    và bao nhiêu người trong đó đã quét thông tin profile."""
+    if not post_keys or not (_table_exists("pe_posts") and _table_exists("pe_users")):
+        return {}
+    rows = db.fetch_all(
+        """
+        WITH done AS (
+            SELECT uid AS k FROM scanned_profiles WHERE owner_key = %s
+            UNION SELECT LOWER(username) FROM scanned_profiles WHERE owner_key = %s AND username IS NOT NULL
+        ),
+        u AS (
+            SELECT post_key, has_like, has_comment,
+                   LOWER(REGEXP_REPLACE(uid, '^(id|user):', '')) IN (SELECT k FROM done) AS scanned
+            FROM pe_users WHERE owner_username = %s AND post_key = ANY(%s) AND NOT is_page
+        )
+        SELECT p.post_key,
+               GREATEST(COALESCE(p.fb_like_count, 0), COALESCE(p.like_count, 0))::int AS likes,
+               GREATEST(COALESCE(p.fb_comment_count, 0), COALESCE(p.comment_count, 0))::int AS comments,
+               GREATEST(COALESCE(p.fb_share_count, 0), COALESCE(p.share_count, 0))::int AS shares,
+               (SELECT COUNT(*) FROM u WHERE u.post_key = p.post_key AND u.has_like)::int AS like_people,
+               (SELECT COUNT(*) FROM u WHERE u.post_key = p.post_key AND u.has_comment)::int AS comment_people,
+               (SELECT COUNT(*) FROM u WHERE u.post_key = p.post_key AND u.has_like AND u.scanned)::int AS scanned_likes,
+               (SELECT COUNT(*) FROM u WHERE u.post_key = p.post_key AND u.has_comment AND u.scanned)::int AS scanned_comments
+        FROM pe_posts p WHERE p.owner_username = %s AND p.post_key = ANY(%s)
+        """,
+        (owner, owner, owner, post_keys, owner, post_keys),
+    )
+    return {r.pop("post_key"): r for r in rows}
+
+
 def collections(owner: str) -> List[Dict[str, Any]]:
     counts = {
         r["collection_key"]: int(r["c"])
@@ -598,13 +629,22 @@ def collections(owner: str) -> List[Dict[str, Any]]:
         )
     }
     out = []
-    for s in db.fetch_all("SELECT * FROM profile_sources WHERE owner_key = %s ORDER BY updated_at DESC", (owner,)):
+    sources = db.fetch_all("SELECT * FROM profile_sources WHERE owner_key = %s ORDER BY updated_at DESC", (owner,))
+    try:
+        posts = post_source_stats(owner, [s["source_key"][len("post:"):] for s in sources if s["type"] == "post"])
+    except Exception as exc:  # bảng Module 12 khác cấu trúc → vẫn hiện danh sách, chỉ thiếu số liệu
+        logger.warning(f"[Module 13] số liệu bài viết nguồn: {exc}")
+        posts = {}
+    for s in sources:
         n = counts.get(s["source_key"], 0)
         if n:
-            out.append({
+            item = {
                 "key": s["source_key"], "type": s["type"], "name": s["name"], "url": s["url"], "scale": s["scale"],
                 "profile_count": n, "target_count": max(n, targets.get(s["source_key"], 0)),
-            })
+            }
+            if s["type"] == "post":
+                item.update(posts.get(s["source_key"][len("post:"):]) or {})
+            out.append(item)
     for c in categories(owner):
         out.append({
             "key": f"category:{c['id']}", "type": "category", "name": c["name"], "color": c["color"], "profile_count": c["profile_count"],
@@ -648,6 +688,20 @@ def category_memberships(owner: str, uids: List[str]) -> List[Dict[str, Any]]:
         """,
         (owner, uids),
     )
+
+
+def remove_from_categories(owner: str, uids: List[str], keep: List[str]) -> int:
+    """Bỏ profile khỏi mọi danh mục (kể cả "Chưa có danh mục") trừ các key trong keep — dùng khi "chuyển hẳn"."""
+    with db.session() as cur:
+        cur.execute(
+            """
+            DELETE FROM profile_members
+            WHERE owner_key = %s AND uid = ANY(%s) AND collection_key LIKE 'category:%%' AND NOT (collection_key = ANY(%s))
+            RETURNING uid
+            """,
+            (owner, uids, keep),
+        )
+        return len(cur.fetchall())
 
 
 def category_exists(owner: str, key: str) -> bool:

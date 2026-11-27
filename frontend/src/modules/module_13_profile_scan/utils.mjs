@@ -63,10 +63,25 @@ export function parseProfileLines(lines, { skipDuplicates = false, skipInvalid =
 /** Mỗi dòng của tệp → ô đầu tiên là link / UID hợp lệ; không có thì lấy ô có chữ đầu tiên */
 export function pickProfileCell(cells) {
   const texts = (cells || []).map((c) => String(c ?? "").trim()).filter(Boolean);
-  return texts.find((c) => /facebook\.com|fb\.com/i.test(c) && normalizeProfile(c)) ||
-    texts.find((c) => normalizeProfile(c)) ||
-    texts[0] ||
-    "";
+  const found = texts.find((c) => /facebook\.com|fb\.com/i.test(c) && normalizeProfile(c)) || texts.find((c) => normalizeProfile(c));
+  if (found) return found;
+  // Dòng tiêu đề của tệp mẫu (STT | Link trang cá nhân) → bỏ qua, không tính là dòng lỗi
+  if (texts.some((c) => HEADER_CELL.test(c))) return "";
+  // Dòng sai: hiện ô link (bỏ qua ô STT) để người dùng biết dòng nào lỗi
+  return texts.find((c) => !/^\d{1,4}$/.test(c)) || texts[0] || "";
+}
+const HEADER_CELL = /^(stt|#|no\.?|số thứ tự|uid|url|link( trang cá nhân| profile| facebook)?)$/i;
+
+/** Tệp mẫu "Tải tệp": cột STT | Link trang cá nhân (CSV, có BOM để Excel đọc đúng tiếng Việt) */
+export const FILE_TEMPLATE_HEADER = ["STT", "Link trang cá nhân"];
+export function profileFileTemplate() {
+  const rows = [
+    FILE_TEMPLATE_HEADER,
+    [1, "https://www.facebook.com/profile.php?id=100012345678901"],
+    [2, "https://www.facebook.com/ten.trang.ca.nhan"],
+    [3, "100098765432109"],
+  ];
+  return `\uFEFF${rows.map((r) => r.join(",")).join("\r\n")}\r\n`;
 }
 
 export const SOURCE_TYPES = { group: "Nhóm", page: "Fanpage", post: "Bài viết" };

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Folder, FolderInput, Loader2, X } from "lucide-react";
+import { AlertTriangle, Folder, FolderInput, Loader2, X } from "lucide-react";
 import { toast } from "@/lib/toast";
 
 const COLORS = ["#2563EB", "#059669", "#D97706", "#DC2626", "#7C3AED", "#DB2777", "#0891B2", "#475569"];
@@ -92,6 +92,83 @@ export function CategoryFormModal({ category, takenNames, onSave, onClose }) {
 }
 
 /** Chuyển profile đã chọn sang danh mục khác */
+const fmt = (n) => Number(n || 0).toLocaleString("vi-VN");
+
+/**
+ * Cảnh báo khi chuyển profile mà một số đã nằm trong danh mục khác (QA #19).
+ * conflict: { others: [{ id, name, color, count }], inTarget, names, total }
+ * onConfirm(exclusive): false = thêm vào đích, giữ danh mục cũ · true = chuyển hẳn, bỏ khỏi danh mục cũ
+ */
+export function MoveConflictModal({ conflict, target, count, onConfirm, onClose }) {
+  const [busy, setBusy] = useState(null);
+  const run = async (exclusive) => {
+    setBusy(exclusive ? "move" : "add");
+    try {
+      await onConfirm(exclusive);
+      onClose();
+    } catch (err) {
+      toast.error(err.message);
+      setBusy(null);
+    }
+  };
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && !busy && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+  const { others, inTarget, names, total } = conflict;
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
+      <div role="alertdialog" aria-modal="true" aria-label="Profile đã có danh mục" className="w-full max-w-[480px] rounded-xl bg-white p-6 shadow-2xl">
+        <div className="flex items-start gap-3">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#FEF3C7] text-[#D97706]"><AlertTriangle className="size-5" /></span>
+          <div className="min-w-0">
+            <h4 className="text-base font-bold text-[#0F172A]">{fmt(total)} profile đã có danh mục</h4>
+            <p className="mt-1 text-[13px] leading-5 text-[#475569]">
+              Trong {fmt(count)} profile đang chuyển sang <b className="text-[#0F172A]">"{target}"</b>, có profile đã nằm trong danh mục khác:
+            </p>
+          </div>
+        </div>
+        <ul className="mt-4 max-h-40 space-y-1.5 overflow-y-auto rounded-lg bg-[#F8FAFC] p-3 text-[13px] text-[#334155]">
+          {inTarget > 0 && (
+            <li className="flex items-center justify-between gap-2">
+              <span className="truncate">Đã có sẵn trong <b>"{target}"</b> (bỏ qua)</span>
+              <b className="shrink-0">{fmt(inTarget)}</b>
+            </li>
+          )}
+          {others.map((c) => (
+            <li key={c.id} className="flex items-center justify-between gap-2">
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="size-2.5 shrink-0 rounded-full" style={{ background: c.color || "#94A3B8" }} />
+                <span className="truncate">{c.name}</span>
+              </span>
+              <b className="shrink-0">{fmt(c.count)}</b>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-2 truncate text-[11px] text-[#94A3B8]" title={names.join(", ")}>
+          {names.slice(0, 4).join(", ")}{names.length > 4 ? ` và ${fmt(names.length - 4)} profile khác` : ""}
+        </p>
+        <p className="mt-3 text-[13px] leading-5 text-[#475569]">
+          <b>Chuyển hẳn</b>: bỏ các profile này khỏi danh mục cũ, chỉ còn trong "{target}". <b>Vẫn thêm</b>: giữ ở danh mục cũ và thêm vào "{target}" (profile thuộc nhiều danh mục).
+        </p>
+        <div className="mt-5 flex flex-wrap justify-end gap-2.5">
+          <button type="button" disabled={!!busy} onClick={onClose} className="h-9 rounded-lg border border-[#E2E8F0] px-4 text-[13px] text-[#334155] hover:bg-slate-50">Quay lại</button>
+          {others.length > 0 && (
+            <button type="button" disabled={!!busy} onClick={() => run(false)} className="inline-flex h-9 items-center gap-2 rounded-lg border border-[#93C5FD] bg-[#EFF6FF] px-4 text-[13px] font-medium text-[#1D4ED8] hover:bg-[#DBEAFE] disabled:opacity-50">
+              {busy === "add" && <Loader2 className="size-4 animate-spin" />} Vẫn thêm
+            </button>
+          )}
+          <button type="button" disabled={!!busy} onClick={() => run(true)} className="inline-flex h-9 items-center gap-2 rounded-lg bg-[#2563EB] px-4 text-[13px] font-medium text-white hover:bg-[#1D4ED8] disabled:opacity-50">
+            {busy === "move" ? <Loader2 className="size-4 animate-spin" /> : <FolderInput className="size-4" />} Chuyển hẳn
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export function MoveProfilesModal({ count, categories, onMove, onClose }) {
   const [target, setTarget] = useState(null);
   const [busy, submit] = useSubmit(onMove, onClose);

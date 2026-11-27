@@ -38,6 +38,10 @@ export const getTikTokDownloadStatus = (page, size) => api.get("/api/post/tiktok
 
 export const getTikTokHistory = (params) => api.get("/api/post/tiktok/history", { params });
 export const openTikTokHistoryFolder = (id) => api.post(`/api/post/tiktok/history/${id}/open`);
+// Mở thư mục lưu / file caption .txt của video trong bảng kết quả quét — engine (chạy trên máy người dùng) mở bằng
+// Explorer/Notepad, nên dùng được cả bản web lẫn desktop (Tauri).
+export const openTikTokScannedItem = (videoId, target) =>
+  api.post(`/api/post/tiktok/videos/${encodeURIComponent(videoId)}/open`, null, { params: { target } });
 
 // Hộp chọn thư mục của Windows; t: tránh cache GET trả lại thư mục cũ, chờ lâu vì người dùng còn đang duyệt thư mục
 export const pickVideoFolder = () =>
