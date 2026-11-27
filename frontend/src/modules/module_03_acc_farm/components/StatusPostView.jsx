@@ -487,13 +487,40 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
     }
   };
 
+  // Tự tick các nick (Live + Đã đăng nhập) đã có draft trong DB, để Khu vực Xem trước
+  // hiện đúng bài đang có — tránh việc modal "Rời đi" bật lên mà người dùng không thấy bài nào.
+  const autoSelectAccountsWithDrafts = (loadedDrafts) => {
+    if (!Array.isArray(loadedDrafts) || loadedDrafts.length === 0) return;
+    // Đang restore phiên chạy → giữ nguyên lựa chọn theo session
+    if (sessionAccountsRef.current?.length > 0) return;
+    const draftUids = new Set(
+      loadedDrafts
+        .filter(
+          (d) =>
+            ((d.content || "").trim().length > 0) ||
+            (d.imageCount || 0) > 0 ||
+            (d.imagePaths || []).length > 0,
+        )
+        .map((d) => String(d.accountUid)),
+    );
+    if (draftUids.size === 0) return;
+    setAccounts((prev) =>
+      prev.map((a) =>
+        draftUids.has(String(a.uid || a.id)) &&
+        a.accountStatusCode === "live" &&
+        a.connectionStatusCode === "logged_in"
+          ? { ...a, selected: true }
+          : a,
+      ),
+    );
+  };
+
   const loadDraftsFromDb = async () => {
     try {
       const res = await api.get("/api/post/drafts?post_type=status");
       const data = Array.isArray(res) ? res : (res?.data || []);
       if (Array.isArray(data)) {
-        setDrafts(
-          data.map((d) => {
+        const mapped = data.map((d) => {
             const imgs = normalizeImagePaths(d);
             return {
               id: d.id,
@@ -508,12 +535,14 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
               mediaType: "status",
               isSaved: d.status === "READY",
             };
-          })
-        );
+          });
+        setDrafts(mapped);
+        return mapped;
       }
     } catch (err) {
       console.error("Lỗi khi tải bài nháp từ DB:", err);
     }
+    return [];
   };
 
   const loadAccountsFromDb = async () => {
@@ -682,9 +711,11 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
   }, []);
 
   useEffect(() => {
-    loadAccountsFromDb();
+    // Chờ cả accounts + drafts tải xong rồi mới tự tick nick có draft
+    Promise.all([loadAccountsFromDb(), loadDraftsFromDb()]).then(([, loadedDrafts]) =>
+      autoSelectAccountsWithDrafts(loadedDrafts),
+    );
     loadSettingsFromDb();
-    loadDraftsFromDb();
     fetchGeminiModels();
   }, []);
 
@@ -1573,7 +1604,10 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
     // Xóa nội dung prompt cũ khi quay lại màn cấu hình
     setPrompt("");
     // UC-M03-07: Tải lại nháp sạch từ CSDL (những bài đã PUBLISHED thành công đã được xóa)
-    loadDraftsFromDb();
+    // Sau đó tự tick lại các nick còn draft (bài chưa đăng)
+    sessionAccountsRef.current = [];
+    const loadedDrafts = await loadDraftsFromDb();
+    autoSelectAccountsWithDrafts(loadedDrafts);
   };
 
   const selectedCount = accounts.filter((a) => a.selected).length;

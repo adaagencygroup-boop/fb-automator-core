@@ -13,6 +13,10 @@ export const getScanProgress = (id, afterLog = 0) => api.get(`${BASE}/sessions/$
 export const getScanResults = (id) => api.get(`${BASE}/sessions/${id}/results`);
 /** action: pause | resume | stop */
 export const controlScan = (id, action, body = {}) => api.post(`${BASE}/sessions/${id}/${action}`, body);
+/** Lịch sử phiên: { items, total } — params: page, page_size, keyword, mode, status, date_from, date_to */
+export const getScanSessions = (params = {}) => api.get(`${BASE}/sessions`, { params });
+/** Profile trong 1 phiên: { items, total } — status: DONE | SKIPPED | FAILED | PENDING */
+export const getSessionTargets = (id, params = {}) => api.get(`${BASE}/sessions/${id}/targets`, { params });
 
 export const getProfileLists = async () => (await api.get(`${BASE}/categories`)).items;
 /** Danh mục đang chứa các profile: [{ id, name, color, uids }] */

@@ -1,6 +1,7 @@
 """Module 13 — API Quét profile."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 import psycopg2.errors
@@ -116,6 +117,40 @@ def start_session(body: StartIn):
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     return {"session_id": session_id, "total": len(merged)}
+
+
+def _utc(value: Optional[datetime]) -> Optional[datetime]:
+    return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
+
+
+@router.get("/sessions")
+def list_sessions(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=500),
+    keyword: Optional[str] = Query(None, max_length=200),
+    mode: Optional[Literal["source", "link", "file"]] = None,
+    status: Optional[str] = Query(None, description="Nhiều trạng thái cách nhau bằng dấu phẩy"),
+    date_from: Optional[datetime] = Query(None, description="ISO; không có múi giờ = UTC"),
+    date_to: Optional[datetime] = Query(None, description="Trước thời điểm này (không bao gồm)"),
+):
+    """Lịch sử phiên quét profile (mới nhất trước)."""
+    owner = _owner()
+    models.suspend_orphans(owner, engine.local_ids())
+    statuses = [s.strip().upper() for s in (status or "").split(",") if s.strip()]
+    return models.list_sessions(
+        owner, page, page_size, (keyword or "").strip(), mode or "", statuses, _utc(date_from), _utc(date_to)
+    )
+
+
+@router.get("/sessions/{session_id}/targets")
+def session_targets(
+    session_id: int,
+    status: Optional[Literal["DONE", "SKIPPED", "FAILED", "PENDING"]] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
+):
+    _session_or_404(session_id)
+    return models.session_targets(session_id, status or "", page, page_size)
 
 
 @router.get("/sessions/latest")

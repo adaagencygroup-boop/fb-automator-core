@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Download,
   ExternalLink,
@@ -133,6 +133,39 @@ export default function PageScannerListFollowers() {
     setLoading(true);
     return load(p);
   };
+
+  /* Chiều cao phần đầu dính (đổi khi hiện thanh "đang tick chọn") → vị trí dính của tiêu đề cột */
+  const stickyHeadRef = useRef(null);
+  const [stickyHeadHeight, setStickyHeadHeight] = useState(0);
+  useLayoutEffect(() => {
+    const el = stickyHeadRef.current;
+    if (!el) return undefined;
+    const measure = () => setStickyHeadHeight(el.offsetHeight);
+    measure();
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    return () => ro?.disconnect();
+  }, []);
+
+  /* Chỉ phủ khe 24px phía trên khi phần đầu đang dính — lúc chưa cuộn, dải phủ sẽ che dòng mô tả trang */
+  const [headStuck, setHeadStuck] = useState(false);
+  useEffect(() => {
+    const el = stickyHeadRef.current;
+    const scroller = el?.closest("main");
+    if (!el || !scroller) return undefined;
+    const check = () => {
+      const padTop = parseFloat(getComputedStyle(scroller).paddingTop) || 0;
+      const offset = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      setHeadStuck(scroller.scrollTop > 0 && offset <= padTop + 1);
+    };
+    check();
+    scroller.addEventListener("scroll", check, { passive: true });
+    window.addEventListener("resize", check);
+    return () => {
+      scroller.removeEventListener("scroll", check);
+      window.removeEventListener("resize", check);
+    };
+  }, []);
 
   const selectPage = (key) => {
     if (key === activePageKey) return;
@@ -294,6 +327,8 @@ export default function PageScannerListFollowers() {
             search={sideSearch}
             onSearchChange={setSideSearch}
             searchPlaceholder="Tìm tên hoặc ID page…"
+            // Cuộn trang vẫn giữ danh mục Page trong tầm nhìn (main của AppShell là vùng cuộn, p-6)
+            className="lg:sticky lg:top-0"
           >
             <SideListItem
               active={activePageKey === ALL_ID}
@@ -353,7 +388,19 @@ export default function PageScannerListFollowers() {
           </ListSidePanel>
         }
       >
-        <Card className="overflow-hidden border-slate-200 shadow-sm">
+        {/* Không overflow-hidden: sẽ chặn sticky của phần đầu bảng */}
+        <Card className="border-slate-200 shadow-sm">
+          {/* Phần đầu (tiêu đề, nút, tìm kiếm, thanh chọn) dính trên cùng khi cuộn trang */}
+          {/* top-0: thẳng hàng với cột Danh mục Page. main (vùng cuộn) có p-6 nên phía trên còn khe 24px —
+              dải ::before màu nền phủ khe đó để dòng bảng cuộn qua không lộ ra */}
+          <div
+            ref={stickyHeadRef}
+            className={`sticky top-0 z-30 rounded-t-xl bg-white ${
+              headStuck
+                ? "before:pointer-events-none before:absolute before:-inset-x-px before:-top-6 before:h-6 before:bg-background before:content-['']"
+                : ""
+            }`}
+          >
           <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
             <div>
               <div className="flex items-center gap-2">
@@ -441,10 +488,15 @@ export default function PageScannerListFollowers() {
               onDelete={handleDeleteSelected}
             />
           </div>
+          </div>
 
-          <div className="overflow-auto">
+          {/* Màn rộng: bỏ overflow để tiêu đề cột dính theo trang, ngay dưới phần đầu; màn hẹp: cuộn ngang */}
+          <div className="overflow-x-auto lg:overflow-visible">
             <table className="w-full min-w-[720px] text-left text-[11px]">
-              <thead className="sticky top-0 z-10 bg-slate-50 text-slate-500">
+              <thead
+                className="z-20 bg-slate-50 text-slate-500 lg:sticky lg:top-[var(--m11-head-h)]"
+                style={{ "--m11-head-h": `${stickyHeadHeight}px` }}
+              >
                 <tr className="border-b border-slate-200">
                   <th className="w-10 px-4 py-3">
                     <Checkbox
