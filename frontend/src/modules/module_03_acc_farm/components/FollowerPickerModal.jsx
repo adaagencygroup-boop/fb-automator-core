@@ -14,7 +14,6 @@ import {
   Checkbox,
   ListPagination,
   ListSidePanel,
-  MasterDetail,
   SideListItem,
   TableEmpty,
   TableLoading,
@@ -22,6 +21,7 @@ import {
 import { getPageFollowers, getPagesWithFollowers } from "@/modules/module_11_page_scanner/service";
 import { getPickerGroupCategories, getPickerGroupMembers, pickerErrorMessage } from "../service";
 import { parseFbLink } from "./ScenarioConfig";
+import usePickerMultiSelect from "./usePickerMultiSelect";
 
 const ALL_ID = "__all__";
 const PAGE_SIZE = 10;
@@ -53,6 +53,23 @@ function memberLink(row) {
   return link?.kind === "friend" ? { key: link.key, url } : null;
 }
 
+const personKey = (r) => r.link.key;
+const personUrl = (r) => r.link.url;
+
+/**
+ * Bố cục 2 cột vừa khít chiều cao hộp (thay MasterDetail của Module 11, vốn cao theo nội dung): hộp không cuộn tổng thể,
+ * khung danh mục chỉ cuộn danh sách của nó, bảng bên phải chỉ cuộn phần dòng.
+ */
+function PickerLayout({ side, children }) {
+  return (
+    <div className="flex h-full min-h-0 gap-4">
+      {side}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</div>
+    </div>
+  );
+}
+const SIDE_PANEL_FIT = "!h-full !max-h-none !min-h-0 !w-[280px] shrink-0";
+
 const shortLink = (url) => url.replace(/^https?:\/\/(m\.|www\.|web\.|mbasic\.)?facebook\.com\//, "fb.com/").slice(0, 32);
 const fmt = (n) => Number(n || 0).toLocaleString("vi-VN");
 
@@ -83,14 +100,16 @@ function usePagedList(fetchPage, errorModule) {
 }
 
 /** Bảng chọn người dùng chung cho 2 tab: cột tick + STT + tên, các cột còn lại do tab truyền vào */
-function PeopleTable({ rows, list, selected, onToggle, onToggleAll, columns, emptyText }) {
+function PeopleTable({ rows, list, selected, setSelected, onToggle, onToggleAll, columns, emptyText }) {
   const { loading, error, page, items } = list;
-  const selectable = rows.filter((r) => r.link);
+  const selectable = useMemo(() => rows.filter((r) => r.link), [rows]);
   const allSelected = selectable.length > 0 && selectable.every((r) => selected.has(r.link.key));
   const colSpan = columns.length + 3;
+  // Kéo chuột / Shift / Ctrl chỉ trên các dòng chọn được (dòng mờ không phải link cá nhân thì bỏ qua)
+  const { setContainer, rowProps } = usePickerMultiSelect({ rows: selectable, getKey: personKey, getUrl: personUrl, selected, setSelected });
   return (
-    // Giữ chỗ đủ 1 trang (10 dòng): ít người thì thanh phân trang không bị kéo lên
-    <div className="min-h-[585px] overflow-auto">
+    // Chiếm phần còn lại của khung bảng, tự cuộn khi màn hình thấp: thanh phân trang luôn ở đáy
+    <div ref={setContainer} className="min-h-0 flex-1 overflow-auto">
       <table className="w-full min-w-[760px] text-left text-[11px]">
         <thead className="sticky top-0 z-10 bg-slate-50 text-slate-500">
           <tr className="border-b border-slate-200">
@@ -112,16 +131,17 @@ function PeopleTable({ rows, list, selected, onToggle, onToggleAll, columns, emp
           ) : rows.length === 0 ? (
             <TableEmpty colSpan={colSpan} message={emptyText} />
           ) : (
-            rows.map(({ row, link, name, rowKey }, idx) => {
+            rows.map((item, idx) => {
+              const { row, link, name, rowKey } = item;
               const on = Boolean(link && selected.has(link.key));
               return (
                 <tr
                   key={rowKey}
-                  onClick={(e) => link && !e.target.closest("a") && onToggle(link, !on)}
-                  className={on ? "cursor-pointer bg-blue-50/50" : link ? "cursor-pointer hover:bg-slate-50" : "opacity-50"}
+                  {...(link ? rowProps(item, selectable.indexOf(item)) : {})}
+                  className={cn("select-none", on ? "cursor-pointer bg-blue-50/50" : link ? "cursor-pointer hover:bg-slate-50" : "opacity-50")}
                 >
-                  {/* Bấm cả dòng là chọn; ô tick tự xử lý, không để dòng chọn lần nữa */}
-                  <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+                  {/* Ô tick chỉ bật / tắt đúng dòng này; bấm phần còn lại của dòng = chọn kiểu bảng (Ctrl / Shift / kéo) */}
+                  <td className="px-4 py-2.5" data-no-row-selection>
                     <Checkbox checked={on} disabled={!link} onCheckedChange={(c) => link && onToggle(link, Boolean(c))} />
                   </td>
                   <td className="px-3 py-2.5 font-mono text-slate-400">{String((page - 1) * PAGE_SIZE + idx + 1).padStart(2, "0")}</td>
@@ -161,8 +181,8 @@ const profileCell = (row) =>
 /** Khung bảng bên phải: tiêu đề + tổng + Làm mới + ô tìm + bảng + phân trang */
 function TableCard({ title, list, keyword, setKeyword, onSearch, onRefresh, children, onPageChange }) {
   return (
-    <Card className="overflow-hidden border-slate-200 shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+    <Card className="flex min-h-0 flex-1 flex-col overflow-hidden border-slate-200 shadow-sm">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
         <div>
           <h3 className="font-heading text-sm font-bold text-slate-800">{title}</h3>
           <p className="mt-0.5 text-[11px] text-slate-400">
@@ -178,7 +198,7 @@ function TableCard({ title, list, keyword, setKeyword, onSearch, onRefresh, chil
           <RefreshCw className="size-3.5" /> Làm mới
         </Button>
       </div>
-      <div className="px-5 py-3">
+      <div className="shrink-0 px-5 py-3">
         <Input
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
@@ -188,7 +208,9 @@ function TableCard({ title, list, keyword, setKeyword, onSearch, onRefresh, chil
         />
       </div>
       {children}
-      <ListPagination page={list.page} pageSize={PAGE_SIZE} total={list.total} onPageChange={onPageChange} />
+      <div className="shrink-0">
+        <ListPagination page={list.page} pageSize={PAGE_SIZE} total={list.total} onPageChange={onPageChange} />
+      </div>
     </Card>
   );
 }
@@ -203,11 +225,9 @@ const fetchFollowers = (p, { side, word }) =>
 const FOLLOWER_COLS = [
   { title: "UID FACEBOOK", render: (r) => <span className="font-mono">{String(r.follower_key || "").replace(/^id:|^user:/, "") || "—"}</span> },
   { title: "PROFILE LINK", render: profileCell },
-  { title: "SỐ BẠN BÈ", render: (r) => (r.friend_count != null ? fmt(r.friend_count) : "—") },
-  { title: "VỊ TRÍ", render: (r) => r.location || "—" },
 ];
 
-function FollowersTab({ selected, onToggle, onToggleAll }) {
+function FollowersTab({ selected, setSelected, onToggle, onToggleAll }) {
   const [pages, setPages] = useState([]);
   const [sideSearch, setSideSearch] = useState("");
   const [side, setSide] = useState(ALL_ID);
@@ -245,9 +265,9 @@ function FollowersTab({ selected, onToggle, onToggleAll }) {
   const activePage = side === ALL_ID ? null : pages.find((p) => p.page_key === side);
 
   return (
-    <MasterDetail
+    <PickerLayout
       side={
-        <ListSidePanel title="Danh mục Page" totalLabel={`Tổng: ${pages.length} page`} search={sideSearch} onSearchChange={setSideSearch} searchPlaceholder="Tìm tên hoặc ID page…">
+        <ListSidePanel className={SIDE_PANEL_FIT} title="Danh mục Page" totalLabel={`Tổng: ${pages.length} page`} search={sideSearch} onSearchChange={setSideSearch} searchPlaceholder="Tìm tên hoặc ID page…">
           <SideListItem active={side === ALL_ID} onClick={() => selectSide(ALL_ID)} title="Tất cả page" subtitle="Toàn bộ followers đã quét" />
           {shownPages.map((p, i) => (
             <SideListItem
@@ -281,13 +301,14 @@ function FollowersTab({ selected, onToggle, onToggleAll }) {
           rows={rows}
           list={list}
           selected={selected}
+          setSelected={setSelected}
           onToggle={onToggle}
           onToggleAll={onToggleAll}
           columns={FOLLOWER_COLS}
           emptyText="Chưa có followers — chạy Quét followers ở mục Quét page."
         />
       </TableCard>
-    </MasterDetail>
+    </PickerLayout>
   );
 }
 
@@ -298,16 +319,13 @@ const fetchMembers = (p, { side, word }) =>
     (res) => ({ items: res?.members || [], total: res?.total || 0 }),
   );
 
-const ROLE_LABELS = { admin: "Quản trị viên", moderator: "Người kiểm duyệt", member: "Thành viên" };
-
 const MEMBER_COLS = [
   { title: "UID FACEBOOK", render: (r) => <span className="font-mono">{r.uid || "—"}</span> },
   { title: "NHÓM", render: (r) => <span className="inline-block max-w-[200px] truncate align-bottom" title={r.group_name}>{r.group_name || "—"}</span> },
   { title: "PROFILE LINK", render: profileCell },
-  { title: "VAI TRÒ", render: (r) => ROLE_LABELS[r.role] || r.role || "—" },
 ];
 
-function MembersTab({ selected, onToggle, onToggleAll }) {
+function MembersTab({ selected, setSelected, onToggle, onToggleAll }) {
   const [categories, setCategories] = useState([]);
   const [sideSearch, setSideSearch] = useState("");
   const [side, setSide] = useState(ALL_ID);
@@ -340,9 +358,9 @@ function MembersTab({ selected, onToggle, onToggleAll }) {
   const activeCat = side === ALL_ID ? null : categories.find((c) => String(c.id) === String(side));
 
   return (
-    <MasterDetail
+    <PickerLayout
       side={
-        <ListSidePanel title="Danh mục nhóm" totalLabel={`Tổng: ${categories.length} danh mục`} search={sideSearch} onSearchChange={setSideSearch} searchPlaceholder="Tìm danh mục…">
+        <ListSidePanel className={SIDE_PANEL_FIT} title="Danh mục nhóm" totalLabel={`Tổng: ${categories.length} danh mục`} search={sideSearch} onSearchChange={setSideSearch} searchPlaceholder="Tìm danh mục…">
           <SideListItem active={side === ALL_ID} onClick={() => selectSide(ALL_ID)} title="Tất cả nhóm" subtitle="Toàn bộ thành viên đã quét" />
           {shownCats.map((c, i) => (
             <SideListItem
@@ -375,13 +393,14 @@ function MembersTab({ selected, onToggle, onToggleAll }) {
           rows={rows}
           list={list}
           selected={selected}
+          setSelected={setSelected}
           onToggle={onToggle}
           onToggleAll={onToggleAll}
           columns={MEMBER_COLS}
           emptyText="Chưa có thành viên — chạy Quét thành viên ở mục Quét nhóm."
         />
       </TableCard>
-    </MasterDetail>
+    </PickerLayout>
   );
 }
 
@@ -421,7 +440,7 @@ export default function FollowerPickerModal({ initial, onClose, onConfirm }) {
       }),
     [],
   );
-  const tabProps = { selected, onToggle, onToggleAll };
+  const tabProps = { selected, setSelected, onToggle, onToggleAll };
   const activeTab = TABS.find((t) => t.id === tab);
 
   return createPortal(
@@ -461,11 +480,12 @@ export default function FollowerPickerModal({ initial, onClose, onConfirm }) {
         </div>
 
         {/* Giữ cả 2 tab trong cây (ẩn tab không xem): đổi tab không tải lại, không mất trang / bộ lọc đang xem */}
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          <div hidden={tab !== "followers"}>
+        {/* Không cuộn tổng thể: nội dung vừa khít hộp, chỉ danh sách danh mục và phần dòng của bảng tự cuộn */}
+        <div className="min-h-0 flex-1 overflow-hidden p-5">
+          <div className={tab === "followers" ? "h-full" : "hidden"}>
             <FollowersTab {...tabProps} />
           </div>
-          <div hidden={tab !== "members"}>
+          <div className={tab === "members" ? "h-full" : "hidden"}>
             <MembersTab {...tabProps} />
           </div>
         </div>

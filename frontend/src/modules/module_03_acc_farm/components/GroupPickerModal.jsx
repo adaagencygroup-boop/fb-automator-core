@@ -8,14 +8,10 @@ import Pagination from "@/components/ui/pagination";
 import { cn } from "@/lib/utils";
 import { getPickerGroupCategories, getPickerGroups, pickerErrorMessage } from "../service";
 import { parseFbLink } from "./ScenarioConfig";
+import usePickerMultiSelect from "./usePickerMultiSelect";
 
 const ALL_ID = "cat-all";
 const PAGE_SIZE = 10;
-const TYPE_OPTIONS = [
-  { value: "all", label: "Loại nhóm: Tất cả" },
-  { value: "public", label: "Công khai" },
-  { value: "private", label: "Riêng tư" },
-];
 // Giống bộ lọc Thành viên của Module 10
 const MEMBER_OPTIONS = [
   { value: "all", label: "Thành viên: Tất cả" },
@@ -23,10 +19,8 @@ const MEMBER_OPTIONS = [
   { value: "50k_200k", label: "50K - 200K" },
   { value: "over200k", label: "Trên 200K" },
 ];
-const TYPE_BADGE = {
-  public: { label: "Công khai", className: "border-emerald-200 bg-emerald-50 text-emerald-700" },
-  private: { label: "Riêng tư", className: "border-amber-200 bg-amber-50 text-amber-700" },
-};
+const groupKey = (g) => g.key;
+const groupUrl = (g) => g.url;
 
 const inCategory = (g, cat) =>
   cat.id === ALL_ID || g.categoryId === cat.id || (g.category_name || "").toLowerCase() === (cat.name || "").toLowerCase();
@@ -55,7 +49,6 @@ export default function GroupPickerModal({ initial, onClose, onConfirm }) {
   const [activeId, setActiveId] = useState(ALL_ID);
   const [catSearch, setCatSearch] = useState("");
   const [search, setSearch] = useState("");
-  const [type, setType] = useState("all");
   const [members, setMembers] = useState("all");
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState(() => new Map(initial)); // key nhóm -> url
@@ -105,17 +98,18 @@ export default function GroupPickerModal({ initial, onClose, onConfirm }) {
     const q = search.trim().toLowerCase();
     return groups.filter((g) => {
       if (!inCategory(g, activeCat)) return false;
-      if (type !== "all" && g.type !== type) return false;
       if (!matchMembers(g.membersCount, members)) return false;
       if (!q) return true;
       return [g.name, g.keyword, g.url, g.group_id].some((v) => String(v || "").toLowerCase().includes(q));
     });
-  }, [groups, activeCat, type, members, search]);
+  }, [groups, activeCat, members, search]);
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
   const rows = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
   const allChecked = filtered.length > 0 && filtered.every((g) => selected.has(g.key));
   const changed = selected.size !== initial.size || [...selected.keys()].some((key) => !initial.has(key));
+
+  const { setContainer, rowProps } = usePickerMultiSelect({ rows, getKey: groupKey, getUrl: groupUrl, selected, setSelected });
 
   const toggle = (g) =>
     setSelected((prev) => {
@@ -213,11 +207,10 @@ export default function GroupPickerModal({ initial, onClose, onConfirm }) {
                   className="h-9 w-full rounded-lg border border-slate-200 pl-8 pr-2 text-xs focus:border-primary focus:outline-none"
                 />
               </div>
-              <CustomSelect className="w-44" value={type} onChange={filterBy(setType)} options={TYPE_OPTIONS} />
               <CustomSelect className="w-44" value={members} onChange={filterBy(setMembers)} options={MEMBER_OPTIONS} />
             </div>
 
-            <div className="mt-3 min-h-0 flex-1 overflow-auto rounded-xl border border-slate-200">
+            <div ref={setContainer} className="mt-3 min-h-0 flex-1 overflow-auto rounded-xl border border-slate-200">
               <table className="w-full text-left text-xs">
                 <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] font-bold uppercase tracking-wide text-slate-500">
                   <tr className="border-b border-slate-200">
@@ -227,7 +220,6 @@ export default function GroupPickerModal({ initial, onClose, onConfirm }) {
                     <th className="w-12 px-3 py-2.5 text-center">STT</th>
                     <th className="w-28 px-3 py-2.5">Từ khóa</th>
                     <th className="px-3 py-2.5">Tên nhóm</th>
-                    <th className="w-24 whitespace-nowrap px-3 py-2.5 text-center">Loại nhóm</th>
                     <th className="w-24 px-3 py-2.5 text-right">Thành viên</th>
                     <th className="w-60 px-3 py-2.5">Liên kết / URL nhóm</th>
                   </tr>
@@ -235,44 +227,37 @@ export default function GroupPickerModal({ initial, onClose, onConfirm }) {
                 <tbody className="divide-y divide-slate-100">
                   {loading ? (
                     <tr>
-                      <td colSpan={7} className="py-16 text-center text-slate-400">
+                      <td colSpan={6} className="py-16 text-center text-slate-400">
                         <Loader2 className="mx-auto mb-2 h-6 w-6 animate-spin text-primary" /> Đang tải danh sách nhóm...
                       </td>
                     </tr>
                   ) : error ? (
                     <tr>
-                      <td colSpan={7} className="py-16 text-center text-rose-500">{error}</td>
+                      <td colSpan={6} className="py-16 text-center text-rose-500">{error}</td>
                     </tr>
                   ) : rows.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-16 text-center text-slate-400">
+                      <td colSpan={6} className="py-16 text-center text-slate-400">
                         {groups.length ? "Không có nhóm nào khớp bộ lọc." : "Chưa có nhóm đã quét — chạy Quét nhóm trước."}
                       </td>
                     </tr>
                   ) : (
                     rows.map((g, idx) => {
                       const on = selected.has(g.key);
-                      const badge = TYPE_BADGE[g.type];
                       return (
                         <tr
                           key={g.id}
-                          onClick={(e) => !e.target.closest("a") && toggle(g)}
-                          className={cn("cursor-pointer transition-colors", on ? "bg-blue-50/60" : "hover:bg-slate-50")}
+                          {...rowProps(g, idx)}
+                          className={cn("cursor-pointer select-none transition-colors", on ? "bg-blue-50/60" : "hover:bg-slate-50")}
                         >
-                          <td className="px-3 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
+                          {/* Ô tick chỉ bật / tắt đúng dòng này; bấm phần còn lại của dòng = chọn kiểu bảng (Ctrl / Shift / kéo) */}
+                          <td className="px-3 py-2.5 text-center" data-no-row-selection>
                             <input type="checkbox" checked={on} onChange={() => toggle(g)} className="size-3.5 cursor-pointer rounded" />
                           </td>
                           <td className="px-3 py-2.5 text-center font-semibold text-slate-500">{(currentPage - 1) * PAGE_SIZE + idx + 1}</td>
                           <td className="max-w-[120px] truncate px-3 py-2.5 font-medium text-slate-700">{g.keyword || "—"}</td>
                           <td className="max-w-[280px] truncate px-3 py-2.5 font-semibold text-slate-900" title={g.name}>
                             {g.name}
-                          </td>
-                          <td className="px-3 py-2.5 text-center">
-                            {badge ? (
-                              <span className={cn("inline-block whitespace-nowrap rounded-md border px-2 py-0.5 text-[11px] font-semibold", badge.className)}>{badge.label}</span>
-                            ) : (
-                              <span className="text-slate-400">—</span>
-                            )}
                           </td>
                           <td className="px-3 py-2.5 text-right font-semibold text-slate-800">{g.members || "—"}</td>
                           <td className="max-w-[240px] px-3 py-2.5">
