@@ -161,7 +161,9 @@ export default function GroupScanInfoPage() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const { setUnsavedChanges } = useUnsavedChanges();
-  const [hasSavedShared, setHasSavedShared] = useState(false);
+  const [hasSavedShared, setHasSavedShared] = useState(() => Boolean(draft.hasSavedShared));
+  // Phiên quét gần nhất: chuyển màn khác rồi quay lại → lấy lại kết quả của phiên đó từ Engine (giữ 2 giờ)
+  const [lastJobId, setLastJobId] = useState(() => draft.lastJobId || "");
 
   const [method, setMethod] = useState(draft.method || "keyword");
   const [keywordInput, setKeywordInput] = useState(draft.keywordInput || "");
@@ -233,11 +235,18 @@ export default function GroupScanInfoPage() {
       delayMax,
       minMembers,
       minMembersEnabled,
+      lastJobId,
+      hasSavedShared,
     });
   }, [
     selectedUids, method, keywordInput, keywords, quotas, keywordStats, linkText, linkQuotas,
-    fileData, fileQuotas, fileFilter, delayMin, delayMax, minMembers, minMembersEnabled,
+    fileData, fileQuotas, fileFilter, delayMin, delayMax, minMembers, minMembersEnabled, lastJobId, hasSavedShared,
   ]);
+
+  // Ghi nhớ phiên quét đang theo dõi (bắt đầu / chạy tiếp / gắn lại) để quay lại màn này còn lấy lại được kết quả
+  useEffect(() => {
+    if (checkJobId) setLastJobId(checkJobId);
+  }, [checkJobId]);
 
   // Cảnh báo chưa lưu kết quả quét khi dùng phương thức Nhập link hoặc Tải tệp
   useEffect(() => {
@@ -267,6 +276,7 @@ export default function GroupScanInfoPage() {
       }
       setMethod(newMethod);
       setResults([]);
+      setLastJobId("");
       setSelectedRows(new Set());
       setHasSavedShared(false);
       setUnsavedChanges(false);
@@ -671,10 +681,27 @@ export default function GroupScanInfoPage() {
   useEffect(() => {
     let cancelled = false;
     getActiveGroupScan()
-      .then((res) => {
-        if (cancelled || !res?.job_id) return;
-        setCheckJobId(res.job_id);
-        setRunState("running");
+      .then(async (res) => {
+        if (cancelled) return;
+        if (res?.job_id) {
+          setCheckJobId(res.job_id);
+          setRunState("running");
+          return;
+        }
+        // Không còn phiên đang chạy: phiên gần nhất đã xong lúc người dùng ở màn khác → hiện lại kết quả của nó
+        const jobId = draft.lastJobId;
+        if (!jobId) return;
+        try {
+          const status = await getCheckStatus({ jobId });
+          if (cancelled || !status) return;
+          const groups = Array.isArray(status.groups) ? status.groups : [];
+          if (groups.length) setResults(groups.map(mapGroupRow));
+          const remoteLogs = Array.isArray(status.logs) ? status.logs : [];
+          if (remoteLogs.length) setLogs((current) => [...current, ...remoteLogs].slice(-150));
+        } catch (err) {
+          // Engine không còn giữ phiên (quá 2 giờ / vừa khởi động lại) → bỏ, màn hình về trống như cũ
+          if (err?.status === 404 && !cancelled) setLastJobId("");
+        }
       })
       .catch(() => {});
     return () => {
