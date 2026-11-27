@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { BarChart2, CheckCircle2, CircleStop, Clock, Download, ExternalLink, Eye, FileSpreadsheet, Loader2, Play, ScrollText, Search, X } from "lucide-react";
 
 import { Checkbox } from "@/components/ui/checkbox";
+import { refreshMiniProgress } from "@/components/MiniProgress";
 import CustomSelect from "@/components/ui/custom-select";
 import { toast } from "@/lib/toast";
 import { LiveLogConsole, Pager, notifyExportResult } from "@/modules/module_11_page_scanner/_shared";
@@ -301,6 +302,7 @@ export default function ProfileScanHistory() {
       await controlScan(s.id, "resume");
       toast.success("Đã chạy tiếp phiên quét", { key: "m13-history-action" });
       loadSessions({ silent: true });
+      refreshMiniProgress(); // thẻ tiến độ góc màn hình hiện ngay
     } catch (err) {
       toast.error(`Không chạy tiếp được: ${err.message}`, { key: "m13-history-action" });
     }
@@ -359,7 +361,7 @@ export default function ProfileScanHistory() {
                 <th className={TH}>Tài khoản</th>
                 <th className={TH}>Thời gian</th>
                 <th className={TH}>Trạng thái</th>
-                <th className={`${TH} w-24 text-center`}>Thao tác</th>
+                <th className={`${TH} sticky right-0 z-[1] shadow-[-6px_0_8px_-6px_rgba(15,23,42,0.15)] w-24 bg-[#F8FAFC] text-center`}>Thao tác</th>
               </tr>
             </thead>
             <tbody className={`divide-y divide-[#F1F5F9] ${loading && sessions.length ? "opacity-60" : ""}`}>
@@ -385,7 +387,7 @@ export default function ProfileScanHistory() {
                   const target = targetOf(s);
                   const accounts = s.account_uids || [];
                   return (
-                    <tr key={s.id} className={`transition-colors hover:bg-slate-50 ${s.status === "FAILED" ? "bg-red-50/20" : ""}`}>
+                    <tr key={s.id} className={`group transition-colors hover:bg-slate-50 ${s.status === "FAILED" ? "bg-red-50/20" : ""}`}>
                       <td className="py-3 pl-4">
                         <Checkbox checked={selected.has(s.id)} onCheckedChange={() => toggleOne(s)} aria-label={`Chọn phiên #${s.id}`} />
                       </td>
@@ -411,7 +413,8 @@ export default function ProfileScanHistory() {
                       <td className="px-3 py-3" title={s.message || ""}>
                         <StatusBadge status={s.status} />
                       </td>
-                      <td className="px-3 py-3">
+                      {/* Cột thao tác cố định bên phải khi bảng cuộn ngang */}
+                      <td className="sticky right-0 z-[1] shadow-[-6px_0_8px_-6px_rgba(15,23,42,0.15)] bg-white px-3 py-3 transition-colors group-hover:bg-slate-50">
                         <div className="flex items-center justify-center gap-1">
                           <button type="button" title="Xem chi tiết" aria-label="Xem chi tiết" onClick={() => setDetail(s)} className="rounded-lg p-1.5 text-[#64748B] hover:bg-slate-100 hover:text-[#2563EB]">
                             <Eye className="size-4" />

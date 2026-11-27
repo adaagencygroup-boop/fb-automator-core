@@ -86,6 +86,11 @@ export async function stopScanSession(sessionId) {
   return api.post(`/api/page-scanner/sessions/${sessionId}/stop`);
 }
 
+/** Chạy tiếp phiên đã dừng / lỗi (Lịch sử): phiên mới cùng cấu hình, chỉ quét các Page còn lại → { session_id, remaining_pages } */
+export async function continueScanSession(sessionId) {
+  return api.post(`/api/page-scanner/sessions/${sessionId}/continue`);
+}
+
 export async function pauseScanSession(sessionId) {
   return api.post(`/api/page-scanner/sessions/${sessionId}/pause`);
 }

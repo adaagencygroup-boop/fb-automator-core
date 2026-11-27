@@ -10,6 +10,26 @@ const POST_TYPE_LABELS = { status: "Status", reels: "Reels", story: "Story" };
 const isPath = (pathname, path) => pathname === path || pathname === `${path}/`;
 const percentOf = (done, total) => Math.min(100, Math.round((done / Math.max(1, total)) * 100));
 
+/** Gọi sau khi vừa khởi chạy 1 phiên (vd. "Chạy tiếp" ở Lịch sử) → thẻ tiến độ hiện ngay, không chờ nhịp hỏi */
+export const MINI_PROGRESS_REFRESH = "fb-automator.mini-progress.refresh";
+export function refreshMiniProgress() {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(MINI_PROGRESS_REFRESH));
+}
+
+/** Dòng log cuối của phiên Module 11 (cột logs: JSON [{ts, level, message}]) */
+function lastLogLine(session) {
+  let logs = session?.logs;
+  if (typeof logs === "string") {
+    try {
+      logs = JSON.parse(logs);
+    } catch {
+      return "";
+    }
+  }
+  const last = Array.isArray(logs) ? logs[logs.length - 1] : null;
+  return String(last?.message || "").replace(/\s+/g, " ").trim();
+}
+
 // Module 11: mỗi loại job có trang giám sát riêng
 const PAGE_SCANNER_JOBS = [
   { jobType: "DISCOVERY", label: "Quét thông tin page", path: "/scanner/search" },
@@ -75,6 +95,8 @@ const SOURCES = [
           const done = Math.min(total, sessions.reduce((n, s) => n + (Number(s.total_unique) || 0), 0));
           const paused = data.status === "PAUSED";
           const running = sessions.filter((s) => s.status === "RUNNING" || s.status === "PAUSED").length;
+          const top = sessions.find((s) => s.id === data.primary_session_id) || sessions[sessions.length - 1];
+          const unit = job.jobType === "FOLLOW" ? "UID" : job.jobType === "POST_SCAN" ? "bài" : "page";
           return {
             key: `page-scanner:${job.jobType}:${data.primary_session_id}`,
             title: `${paused ? "Tạm dừng" : "Đang"} ${job.label.charAt(0).toLowerCase()}${job.label.slice(1)}`,
@@ -82,7 +104,11 @@ const SOURCES = [
             done,
             total,
             percent: percentOf(done, total),
-            activity: sessions.length > 1 ? `${running}/${sessions.length} phiên đang chạy` : "Đang quét...",
+            // Giống thẻ đăng bài Module 3: hiện việc đang làm (dòng log mới nhất) thay vì chữ chung chung
+            activity:
+              sessions.length > 1
+                ? `${running}/${sessions.length} phiên đang chạy · ${done} ${unit}`
+                : lastLogLine(top) || `Phiên #${top?.id ?? ""} đang quét...`,
             path: job.path,
             hidden: (pathname) => isPath(pathname, job.path),
           };
@@ -105,7 +131,7 @@ const SOURCES = [
         done,
         total: s.total || 0,
         percent: percentOf(done, s.total || 0),
-        activity: `Đã quét ${s.done || 0} · lỗi ${s.failed || 0} · còn ${s.pending || 0}`,
+        activity: `Phiên #${s.id} · đã quét ${s.done || 0} · bỏ qua ${s.skipped || 0} · lỗi ${s.failed || 0} · còn ${s.pending || 0}`,
         path: "/profile-scan/info",
         hidden: (pathname) => isPath(pathname, "/profile-scan/info"),
       }];
@@ -135,9 +161,17 @@ function useSourceSessions(source) {
       if (!ignore && !blocked.current) timer = setTimeout(tick, source.interval);
     };
     tick();
+    // Có phiên mới vừa chạy → hỏi lại ngay (kể cả khi trước đó đang không có phiên)
+    const now = () => {
+      if (blocked.current || ignore) return;
+      clearTimeout(timer);
+      tick();
+    };
+    window.addEventListener(MINI_PROGRESS_REFRESH, now);
     return () => {
       ignore = true;
       clearTimeout(timer);
+      window.removeEventListener(MINI_PROGRESS_REFRESH, now);
     };
   }, [source]);
 

@@ -10,6 +10,7 @@ import {
   Download,
   ExternalLink,
   Loader2,
+  Play,
   BarChart2,
   X,
   BadgeCheck,
@@ -17,6 +18,7 @@ import {
 } from "lucide-react";
 
 import { Checkbox } from "@/components/ui/checkbox";
+import { refreshMiniProgress } from "@/components/MiniProgress";
 import CustomSelect from "@/components/ui/custom-select";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "@/lib/toast";
@@ -30,6 +32,7 @@ import {
   getScanSessions,
   getScanSessionDetail,
   stopScanSession,
+  continueScanSession,
   getScannedPages,
   getSessionFollowerPages,
   getSessionPostPages,
@@ -98,6 +101,11 @@ const fmtNum = (n) => Number(n || 0).toLocaleString("vi-VN");
 /** page_key "id:123" / "user:abc" → "123" / "abc" */
 const bareKey = (key) => String(key || "").replace(/^(id|user):/, "");
 const isLive = (s) => s.status === "RUNNING" || s.status === "PAUSED";
+/** Chạy tiếp được: quét followers / bài viết / thông tin Page (link, tệp) đã dừng, lỗi hoặc dừng giữa chừng */
+const canContinue = (s) =>
+  ["FOLLOW", "POST_SCAN", "DETAIL"].includes(s.job_type) &&
+  ["STOPPED", "FAILED", "PARTIAL"].includes(s.status) &&
+  s.stop_reason !== "TARGET_REACHED";
 const isPageJob = (s) => s.job_type !== "FOLLOW" && s.job_type !== "POST_SCAN";
 const unitOf = (s) => (s.job_type === "FOLLOW" ? "UID" : s.job_type === "POST_SCAN" ? "bài viết" : "Page");
 const typeLabel = (s) =>
@@ -206,6 +214,7 @@ export default function PageScannerHistoryModule() {
   const [selected, setSelected] = useState(() => new Map());
   const [exporting, guardExport, exportingApi] = useActionLock();
   const [isStopping, guardStop] = useActionLock();
+  const [isContinuing, guardContinue] = useActionLock();
 
   /* Detail panel */
   const [detailOpen, setDetailOpen] = useState(false);
@@ -460,6 +469,24 @@ export default function PageScannerHistoryModule() {
     }
   };
 
+  const handleContinue = async (session) => {
+    const ok = await askConfirm({
+      title: "Chạy tiếp phiên quét",
+      description: `Chạy tiếp phiên #${session.id} (${targetText(session)})? Hệ thống tạo phiên mới cùng cấu hình và tài khoản, quét tiếp từ Page đang dở — dữ liệu đã lưu sẽ được bỏ qua.`,
+      confirmText: "Chạy tiếp",
+    });
+    if (!ok) return;
+    try {
+      const res = await continueScanSession(session.id);
+      toast.success(`Đã tạo phiên #${res?.session_id} chạy tiếp ${fmtNum(res?.remaining_pages)} Page còn lại`, { key: "m11-history-continue" });
+      setDetailOpen(false);
+      loadSessions({ silent: true });
+      refreshMiniProgress(); // thẻ tiến độ góc màn hình hiện ngay
+    } catch (err) {
+      toast.error(`Không chạy tiếp được: ${err?.message || err}`, { key: "m11-history-continue" });
+    }
+  };
+
   return (
     <div className="pb-8">
       <h1 className="font-heading text-xl font-bold text-[#0F172A]">Lịch sử quét page</h1>
@@ -519,7 +546,7 @@ export default function PageScannerHistoryModule() {
                 <th className={TH}>Kết quả thu thập</th>
                 <th className={TH}>Thời gian</th>
                 <th className={TH}>Trạng thái</th>
-                <th className={`${TH} w-24 text-center`}>Thao tác</th>
+                <th className={`${TH} sticky right-0 z-[1] shadow-[-6px_0_8px_-6px_rgba(15,23,42,0.15)] w-24 bg-[#F8FAFC] text-center`}>Thao tác</th>
               </tr>
             </thead>
             <tbody className={`divide-y divide-[#F1F5F9] ${loading && sessions.length ? "opacity-60" : ""}`}>
@@ -545,7 +572,7 @@ export default function PageScannerHistoryModule() {
                   const target = targetOf(s);
                   const result = resultOf(s);
                   return (
-                    <tr key={s.id} className={`transition-colors hover:bg-slate-50 ${s.status === "FAILED" ? "bg-red-50/20" : ""}`}>
+                    <tr key={s.id} className={`group transition-colors hover:bg-slate-50 ${s.status === "FAILED" ? "bg-red-50/20" : ""}`}>
                       <td className="py-3 pl-4">
                         <Checkbox checked={selected.has(s.id)} onCheckedChange={() => toggleOne(s)} aria-label={`Chọn phiên #${s.id}`} />
                       </td>
@@ -575,7 +602,8 @@ export default function PageScannerHistoryModule() {
                       <td className="px-3 py-3" title={s.error_message || STOP_REASONS[s.stop_reason]?.label || ""}>
                         <StatusBadge status={s.status} />
                       </td>
-                      <td className="px-3 py-3">
+                      {/* Cột thao tác cố định bên phải khi bảng cuộn ngang */}
+                      <td className="sticky right-0 z-[1] shadow-[-6px_0_8px_-6px_rgba(15,23,42,0.15)] bg-white px-3 py-3 transition-colors group-hover:bg-slate-50">
                         <div className="flex items-center justify-center gap-1">
                           <button
                             type="button"
@@ -596,6 +624,18 @@ export default function PageScannerHistoryModule() {
                               className="rounded-lg p-1.5 text-red-500 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
                             >
                               <CircleStop className="size-4" />
+                            </button>
+                          )}
+                          {canContinue(s) && (
+                            <button
+                              type="button"
+                              title="Chạy tiếp các Page còn lại"
+                              aria-label="Chạy tiếp"
+                              onClick={() => guardContinue(() => handleContinue(s))}
+                              disabled={isContinuing}
+                              className="rounded-lg p-1.5 text-[#059669] hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <Play className="size-4" />
                             </button>
                           )}
                         </div>
@@ -652,14 +692,26 @@ export default function PageScannerHistoryModule() {
                   <span className="text-[11px] text-slate-400">{formatDt(detail.started_at)}</span>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={closeDetail}
-                aria-label="Đóng"
-                className="shrink-0 rounded-lg p-1.5 hover:bg-slate-100"
-              >
-                <X className="size-4 text-slate-500" />
-              </button>
+              <div className="flex shrink-0 items-center gap-2">
+                {canContinue(detail) && (
+                  <button
+                    type="button"
+                    onClick={() => guardContinue(() => handleContinue(detail))}
+                    disabled={isContinuing}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                  >
+                    <Play className="size-3.5" /> Chạy tiếp
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={closeDetail}
+                  aria-label="Đóng"
+                  className="rounded-lg p-1.5 hover:bg-slate-100"
+                >
+                  <X className="size-4 text-slate-500" />
+                </button>
+              </div>
             </div>
 
             {/* Stats row */}
