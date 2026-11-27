@@ -193,6 +193,8 @@ class PostRunner:
         self._paused_seconds: float = 0.0
         self._logs: List[Dict[str, Any]] = []
         self._log_listeners: List[Callable[[Dict[str, Any]], None]] = []
+        # Khoảng nghỉ giữa 2 bài của phiên hiện tại (để ước tính giờ xong)
+        self._delay_range: Tuple[int, int] = (600, 900)
 
     def _pause_clock_reset(self) -> None:
         self._paused_at = None
@@ -628,6 +630,42 @@ class PostRunner:
                 "recent_logs": list(self._logs[-50:])
             }
 
+    # Thời gian ước tính cho 1 bài (mở Chrome, đăng nhập, đăng) — chưa tính thời gian nghỉ giữa 2 bài
+    ESTIMATED_SECONDS_PER_POST = 120
+
+    def is_busy(self) -> bool:
+        """Có phiên đang chạy / đang chờ giờ hẹn (chưa dừng, chưa xong hết luồng)."""
+        with self._lock:
+            return (
+                self._active_session_id is not None
+                and not self._stop_event.is_set()
+                and self._finished_thread_count < self._total_thread_count
+            )
+
+    def active_session_id(self) -> Optional[str]:
+        with self._lock:
+            return self._active_session_id
+
+    def estimate_remaining_seconds(self) -> Optional[int]:
+        """Ước tính số giây còn lại của phiên đang chạy (bài chờ + đang chạy, chia theo số luồng)."""
+        with self._lock:
+            sid = self._active_session_id
+            threads = max(1, self._total_thread_count)
+            running = int(self._metrics.get("running") or 0)
+            lo, hi = self._delay_range
+        if not sid:
+            return None
+        try:
+            pending = int(post_repository.count_pending_posts(sid))
+        except Exception:
+            return None
+        remaining = pending + min(running, threads)
+        if remaining <= 0:
+            return 0
+        rounds = -(-remaining // threads)
+        per_post = self.ESTIMATED_SECONDS_PER_POST + (min(lo, hi) + max(lo, hi)) / 2
+        return int(rounds * per_post)
+
     def start_session(
         self,
         post_type: str,
@@ -739,6 +777,7 @@ class PostRunner:
             self._progress_order.clear()
             self._finished_thread_count = 0
             self._total_thread_count = max(1, thread_count)
+            self._delay_range = (int(min_delay or 0), int(max_delay or 0))
             self._schedule_enabled = is_scheduled and (delay_seconds > 0)
             self._scheduled_time_str = schedule_time if self._schedule_enabled else None
 

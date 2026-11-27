@@ -46,6 +46,7 @@ from modules.module_03_acc_farm.compose_service import (
     MIN_IMAGES_PER_POST,
     parse_compose_text,
 )
+from modules.module_03_acc_farm import post_now_service
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +86,25 @@ class ScanFolderPayload(BaseModel):
     accounts: List[Dict[str, Any]]
     post_type: str = "reels"
 
+MAX_COMPOSE_CHARS = 5_000_000
+MAX_POOL_IMAGES = 2000
+
+
+class ComposeContentPayload(BaseModel):
+    """Nội dung ô soạn bài chung: các bài tách bằng dòng "---" + kho ảnh chung."""
+    content_text: str = Field("", max_length=MAX_COMPOSE_CHARS)
+    content_mode: str = "MULTI"
+    image_mode: str = "NONE"
+    image_paths: List[str] = Field(default_factory=list, max_length=MAX_POOL_IMAGES)
+    min_images: int = Field(1, ge=MIN_IMAGES_PER_POST, le=MAX_IMAGES_PER_POST)
+    max_images: int = Field(1, ge=MIN_IMAGES_PER_POST, le=MAX_IMAGES_PER_POST)
+
+
 class StartPostPayload(BaseModel):
     post_type: str
     accounts: List[Dict[str, Any]]
+    # Status từ ô soạn bài chung (FE mới). Không gửi = luồng cũ theo bài nháp từng nick.
+    compose: Optional[ComposeContentPayload] = None
     thread_count: Optional[int] = 1
     min_delay: Optional[int] = 600
     max_delay: Optional[int] = 900
@@ -459,18 +476,10 @@ def remove_draft(id: Optional[str] = Query(None), account_uid: Optional[str] = Q
 # ==============================================================================
 
 POST_TYPE_PATTERN = "^(status|reels|story)$"
-MAX_COMPOSE_CHARS = 5_000_000
-MAX_POOL_IMAGES = 2000
 
 
-class ComposeDraftPayload(BaseModel):
+class ComposeDraftPayload(ComposeContentPayload):
     post_type: str = Field("status", pattern=POST_TYPE_PATTERN)
-    content_text: str = Field("", max_length=MAX_COMPOSE_CHARS)
-    content_mode: str = "MULTI"
-    image_mode: str = "NONE"
-    image_paths: List[str] = Field(default_factory=list, max_length=MAX_POOL_IMAGES)
-    min_images: int = Field(1, ge=MIN_IMAGES_PER_POST, le=MAX_IMAGES_PER_POST)
-    max_images: int = Field(1, ge=MIN_IMAGES_PER_POST, le=MAX_IMAGES_PER_POST)
 
 
 class ComposeGeneratePayload(BaseModel):
@@ -764,7 +773,13 @@ def start_posting(payload: StartPostPayload):
     1. Tạo session_id trong DB
     2. Commit toàn bộ bài viết (PENDING) vào DB trước
     3. Chỉ sau khi DB đã sẵn sàng mới kích hoạt runner threads
+
+    Status kèm `compose` (ô soạn bài chung) = "Đăng ngay": chia bài/ảnh cho từng nick, không hẹn giờ
+    (hẹn giờ nhiều khung = tạo chiến dịch).
     """
+    if payload.compose is not None:
+        return _start_status_post_now(payload)
+
     # ── Bước 1: Tạo session ──
     session_id = post_repository.create_post_session(payload.post_type)
     logger.info(f"[START] Đã tạo session {session_id}, chuẩn bị insert {len(payload.accounts)} bài vào DB...")
@@ -923,6 +938,32 @@ def start_posting(payload: StartPostPayload):
     )
 
     return {"success": True, "session_id": session_id, "inserted_count": inserted_count}
+
+
+def _start_status_post_now(payload: StartPostPayload) -> Dict[str, Any]:
+    if payload.post_type != "status":
+        raise HTTPException(status_code=400, detail="Ô soạn bài chung hiện chỉ dùng cho Status.")
+    if payload.schedule_enabled:
+        raise HTTPException(status_code=400, detail="Đăng hẹn giờ hãy dùng \"Tạo chiến dịch\". \"Đăng ngay\" không nhận giờ hẹn.")
+    compose = payload.compose
+    try:
+        return post_now_service.start_status_post_now(
+            runner,
+            payload.accounts,
+            post_now_service.ComposeInput(
+                content_text=compose.content_text,
+                content_mode=compose.content_mode,
+                image_mode=compose.image_mode,
+                image_paths=compose.image_paths,
+                min_images=compose.min_images,
+                max_images=compose.max_images,
+            ),
+            thread_count=payload.thread_count or 1,
+            min_delay=payload.min_delay if payload.min_delay is not None else 600,
+            max_delay=payload.max_delay if payload.max_delay is not None else 900,
+        )
+    except post_now_service.PostNowError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
 
 @router.post("/pause")
