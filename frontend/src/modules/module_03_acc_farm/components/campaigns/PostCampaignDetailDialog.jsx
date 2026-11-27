@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Activity, Loader2, Pencil, Play, RotateCcw, Square, Trash2 } from "lucide-react";
+import { Activity, History, Loader2, Pencil, Play, RotateCcw, Square, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -229,6 +229,15 @@ export function PostCampaignDetailDialog({ campaignId, open, onOpenChange, onSto
                               Xem tiến trình
                             </Button>
                           ) : null}
+                          {slot.session_id && slot.status !== "RUNNING" && rerunSlotId !== slot.id && (
+                            <button
+                              type="button"
+                              onClick={() => router.push(`/interact/history?campaign=${data.id}&slot=${slot.id}`)}
+                              className="ml-2 text-[11px] font-semibold text-slate-500 hover:text-blue-600 hover:underline"
+                            >
+                              Xem bài
+                            </button>
+                          )}
                         </TableCell>
                       </TableRow>
                     );
@@ -243,6 +252,16 @@ export function PostCampaignDetailDialog({ campaignId, open, onOpenChange, onSto
             </div>
 
             <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => router.push(`/interact/history?campaign=${data.id}`)}
+                className="mr-auto gap-1.5"
+              >
+                <History className="size-3.5" />
+                Xem bài đã đăng
+              </Button>
               <Button
                 type="button"
                 variant="outline"

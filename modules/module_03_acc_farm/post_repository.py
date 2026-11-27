@@ -749,10 +749,20 @@ def get_post_history(
     date: Optional[str] = None,
     account_uid: Optional[str] = None,
     limit: int = 50,
-    offset: int = 0
+    offset: int = 0,
+    campaign_id: Optional[str] = None,
+    slot_id: Optional[str] = None,
 ) -> tuple:
     conditions = ["owner_key = %s", "status IN ('PUBLISHED', 'FAILED', 'STOPPED', 'BLOCKED', 'DIE')"]
     params = [owner]
+
+    # Bài của 1 chiến dịch / 1 khung giờ (Quản lý chiến dịch → Xem bài đã đăng)
+    if campaign_id:
+        conditions.append("campaign_id = %s")
+        params.append(campaign_id)
+    if slot_id:
+        conditions.append("slot_id = %s")
+        params.append(slot_id)
 
     if post_type and post_type != "all":
         conditions.append("post_type = %s")
@@ -797,8 +807,33 @@ def get_post_history(
         ORDER BY created_at DESC
         LIMIT %s OFFSET %s;
     """
-    rows = db.fetch_all(data_sql, tuple(params + [limit, offset]))
-    return rows or [], total
+    rows = db.fetch_all(data_sql, tuple(params + [limit, offset])) or []
+    _attach_campaign_info(rows)
+    return rows, total
+
+
+def _attach_campaign_info(rows: List[Dict[str, Any]]) -> None:
+    """Gắn tên chiến dịch + giờ khung cho bài thuộc chiến dịch (chiến dịch đã xoá → campaign_name None)."""
+    campaign_ids = sorted({str(r["campaign_id"]) for r in rows if r.get("campaign_id")})
+    slot_ids = sorted({str(r["slot_id"]) for r in rows if r.get("slot_id")})
+    if not campaign_ids:
+        return
+    try:
+        names = {
+            str(r["id"]): r["name"]
+            for r in db.fetch_all("SELECT id, name FROM post_campaigns WHERE id::text = ANY(%s)", (campaign_ids,))
+        }
+        slots = {
+            str(r["id"]): r["run_at"]
+            for r in db.fetch_all("SELECT id, run_at FROM post_campaign_slots WHERE id::text = ANY(%s)", (slot_ids,))
+        } if slot_ids else {}
+    except Exception as e:  # bảng chiến dịch chưa có: vẫn trả lịch sử
+        logger.debug("Không đọc được tên chiến dịch cho lịch sử: %s", e)
+        return
+    for r in rows:
+        if r.get("campaign_id"):
+            r["campaign_name"] = names.get(str(r["campaign_id"]))
+            r["slot_run_at"] = slots.get(str(r.get("slot_id") or ""))
 
 
 def list_post_history_accounts(owner: str) -> list:

@@ -20,7 +20,9 @@ import {
   Terminal,
   Image as ImageIcon,
 } from "lucide-react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { api } from "@/services/api";
+import { listPostCampaigns } from "../service";
 import CustomSelect from "@/components/ui/custom-select";
 import Pagination from "@/components/ui/pagination";
 import { Badge } from "@/components/ui/badge";
@@ -148,7 +150,20 @@ const CLEANUP_OPTIONS = [
   { value: 0, label: "Xóa toàn bộ lịch sử" },
 ];
 
+function campaignSlotLabel(runAt) {
+  if (!runAt) return "";
+  const d = new Date(runAt);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 export function HistoryView() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  // ?campaign=<id>[&slot=<id>] — từ Quản lý chiến dịch → Xem bài đã đăng
+  const [selectedCampaign, setSelectedCampaign] = useState(() => searchParams?.get("campaign") || "all");
+  const [selectedSlot, setSelectedSlot] = useState(() => searchParams?.get("slot") || "");
+  const [campaignOptions, setCampaignOptions] = useState([{ value: "all", label: "Tất cả chiến dịch" }]);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedAccountUid, setSelectedAccountUid] = useState("all");
   const [selectedFormat, setSelectedFormat] = useState("all");
@@ -264,6 +279,36 @@ export function HistoryView() {
     };
   }, [reloadCounter]);
 
+  // ── Danh sách chiến dịch cho bộ lọc ──
+  useEffect(() => {
+    let ignore = false;
+    listPostCampaigns()
+      .then((list) => {
+        if (ignore) return;
+        const opts = [
+          { value: "all", label: "Tất cả chiến dịch" },
+          ...(list || []).map((c) => ({ value: String(c.id), label: c.name })),
+        ];
+        if (selectedCampaign !== "all" && !opts.some((o) => o.value === selectedCampaign)) {
+          opts.push({ value: selectedCampaign, label: "Chiến dịch đã xoá" });
+        }
+        setCampaignOptions(opts);
+      })
+      .catch(() => {});
+    return () => {
+      ignore = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadCounter]);
+
+  const changeCampaignFilter = (val, slot = "") => {
+    setSelectedCampaign(val);
+    setSelectedSlot(slot);
+    setCurrentPage(1);
+    const qs = val && val !== "all" ? `?campaign=${val}${slot ? `&slot=${slot}` : ""}` : "";
+    router.replace(`/interact/history${qs}`);
+  };
+
   // ── Tải dữ liệu lịch sử từ API ──
   useEffect(() => {
     let ignore = false;
@@ -282,6 +327,8 @@ export function HistoryView() {
         if (selectedFormat !== "all") params.post_type = selectedFormat;
         if (selectedStatus !== "all") params.status = selectedStatus;
         if (selectedDate) params.date = selectedDate;
+        if (selectedCampaign && selectedCampaign !== "all") params.campaign_id = selectedCampaign;
+        if (selectedSlot) params.slot_id = selectedSlot;
 
         const res = await api.get("/api/post/history", { params });
         if (ignore) return;
@@ -308,6 +355,8 @@ export function HistoryView() {
     selectedFormat,
     selectedStatus,
     selectedDate,
+    selectedCampaign,
+    selectedSlot,
     reloadCounter,
   ]);
 
@@ -543,6 +592,28 @@ export function HistoryView() {
           buttonClassName="h-10 rounded-lg border-border text-xs text-slate-700 font-medium"
         />
 
+        {/* Dropdown: Chiến dịch (đăng Status nhiều khung giờ) */}
+        <CustomSelect
+          value={selectedCampaign}
+          onChange={(val) => changeCampaignFilter(val)}
+          options={campaignOptions}
+          className="min-w-[180px] max-w-[260px]"
+          buttonClassName="h-10 rounded-lg border-border text-xs text-slate-700 font-medium"
+        />
+        {selectedSlot && (
+          <span className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 text-xs font-semibold text-blue-700">
+            Chỉ 1 khung giờ
+            <button
+              type="button"
+              onClick={() => changeCampaignFilter(selectedCampaign)}
+              className="rounded p-0.5 hover:bg-blue-100"
+              aria-label="Bỏ lọc khung giờ"
+            >
+              ✕
+            </button>
+          </span>
+        )}
+
         {/* Ngày */}
         <div className="relative flex items-center">
           <input
@@ -680,6 +751,17 @@ export function HistoryView() {
                             <p className="text-xs text-slate-600 line-clamp-2 max-w-xs md:max-w-md pt-0.5 leading-relaxed" title={row.content}>
                               {row.content}
                             </p>
+                          )}
+                          {row.campaign_id && (
+                            <button
+                              type="button"
+                              onClick={() => changeCampaignFilter(String(row.campaign_id))}
+                              className="text-[11px] font-medium text-slate-400 hover:text-blue-600 hover:underline"
+                              title="Lọc bài của chiến dịch này"
+                            >
+                              Chiến dịch: {row.campaign_name || "đã xoá"}
+                              {row.slot_run_at ? ` · khung ${campaignSlotLabel(row.slot_run_at)}` : ""}
+                            </button>
                           )}
                         </div>
                       </td>

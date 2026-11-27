@@ -17,6 +17,7 @@ import mimetypes
 from concurrent.futures import ThreadPoolExecutor
 from config.constants import UPLOADS_DIR
 from typing import Dict, Any, List, Optional
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -912,7 +913,9 @@ def get_history(
     date: Optional[str] = Query(None),
     account_uid: Optional[str] = Query(None),
     limit: int = Query(50),
-    offset: int = Query(0)
+    offset: int = Query(0),
+    campaign_id: Optional[UUID] = Query(None),
+    slot_id: Optional[UUID] = Query(None),
 ):
     rows, total = post_repository.get_post_history(
         _history_owner(),
@@ -923,7 +926,9 @@ def get_history(
         date=date,
         account_uid=account_uid,
         limit=limit,
-        offset=offset
+        offset=offset,
+        campaign_id=str(campaign_id) if campaign_id else None,
+        slot_id=str(slot_id) if slot_id else None,
     )
     return {"success": True, "data": rows, "total": total}
 
