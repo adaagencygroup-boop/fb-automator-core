@@ -42,6 +42,9 @@ MAX_POSTS = 20
 QUOTA_LIMITS = {"like": 10000, "comment": 5000}
 FLUSH_EVERY = 25
 MIN_DELAY_SEC = 3.0
+# Trần Delay giống giao diện: cả Min và Max tối đa 120 giây
+MAX_DELAY_MIN_SEC = 120.0
+MAX_DELAY_MAX_SEC = 120.0
 
 _jobs: dict[str, dict[str, Any]] = {}
 _jobs_lock = threading.Lock()
@@ -249,7 +252,7 @@ def start_scan(owner: str, uids: list[Any], posts: list[Any], *, delay_min: floa
     if not any(t["like_quota"] or t["comment_quota"] for t in targets):
         raise ValueError("Số lượng quét Like / Bình luận đều bằng 0.")
     lo, hi = max(MIN_DELAY_SEC, float(delay_min or 0)), max(MIN_DELAY_SEC, float(delay_max or 0))
-    lo, hi = min(lo, hi, 3600.0), min(max(lo, hi), 3600.0)
+    lo, hi = min(lo, hi, MAX_DELAY_MIN_SEC), min(max(lo, hi), MAX_DELAY_MAX_SEC)
     job_id = _new_job(owner, "scan", uids, targets, delay_min=lo, delay_max=hi)
     request = {"uids": uids, "posts": targets, "delay_min": lo, "delay_max": hi}
     try:

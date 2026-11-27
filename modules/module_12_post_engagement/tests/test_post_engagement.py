@@ -499,6 +499,14 @@ class JobTests(unittest.TestCase):
                                                      "like_quota": 5}], delay_min=20, delay_max=1)
         self.assertEqual((res["delay_min"], res["delay_max"]), (3.0, 20.0))
 
+    def test_scan_delay_ceiling(self):
+        """Min và Max tối đa 120 giây (giống giao diện)."""
+        with mock.patch.object(models, "create_session", lambda *a, **k: None), \
+                mock.patch.object(models, "save_resume_state", lambda *a, **k: None):
+            res = jobs.start_scan("alice", ["1"], [{"post_url": "https://www.facebook.com/groups/1/posts/1111111111/",
+                                                     "like_quota": 5}], delay_min=500, delay_max=3600)
+        self.assertEqual((res["delay_min"], res["delay_max"]), (120.0, 120.0))
+
     def test_parallel_split_and_account_handoff(self):
         posts = [f"https://www.facebook.com/groups/1/posts/{1000000 + i}/" for i in range(5)]
         done_by = {}
