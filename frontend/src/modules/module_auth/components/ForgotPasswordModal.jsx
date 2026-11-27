@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { ExternalLink, MessageSquare, Send, X } from "lucide-react";
+import { SUPPORT } from "@/config/support";
 
 export function ForgotPasswordModal({ isOpen, onClose }) {
   const dialog = useRef(null);
@@ -29,8 +30,8 @@ export function ForgotPasswordModal({ isOpen, onClose }) {
         <button type="button" aria-label="Đóng popup" onClick={onClose} className="absolute top-3 right-3 p-1.5 text-slate-500 hover:text-slate-900"><X className="size-4" /></button>
         <h3 id="forgot-title" className="text-center pt-1 px-4 font-bold text-sm">Vui lòng liên hệ với admin để lấy lại mật khẩu!</h3>
         {[
-          { href: "https://zalo.me", Icon: MessageSquare, title: "Hỗ trợ Zalo CSKH", description: "Quét mã QR / Nhắn tin Zalo trực tiếp" },
-          { href: "https://t.me", Icon: Send, title: "Kỹ thuật viên Telegram", description: "Nhắn tin @admin_support (24/7)" },
+          { href: SUPPORT.zalo.url, Icon: MessageSquare, title: "Hỗ trợ Zalo CSKH", description: `Nhắn tin Zalo ${SUPPORT.zalo.display}` },
+          { href: SUPPORT.telegram.url, Icon: Send, title: "Kỹ thuật viên Telegram", description: `Nhắn tin ${SUPPORT.telegram.display} (24/7)` },
         ].map(({ href, Icon, title, description }) => (
           <a key={title} href={href} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 p-4 rounded-2xl bg-[#f1f5ff] border border-[#dbe5fa] hover:border-[#245ff4]/70">
             <div className="size-10 rounded-xl bg-[#e8efff] border border-[#dbe5fa] grid place-items-center"><Icon className="size-5 text-blue-600" /></div>

@@ -8,6 +8,7 @@ import {
   Copy,
   Check,
 } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 
 
 export function PendingSupportCards({
@@ -18,6 +19,8 @@ export function PendingSupportCards({
   copiedTele,
   onCopyPhone,
   onCopyTele,
+  zaloUrl = `https://zalo.me/${rawZaloPhone}`,
+  telegramUrl = `https://t.me/${String(telegramHandle || "").replace(/^@/, "")}`,
 }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-5 w-full mt-6 sm:mt-8">
@@ -42,59 +45,7 @@ export function PendingSupportCards({
         <div className="flex items-center gap-4">
           {/* QR Box */}
           <div className="p-2.5 rounded-2xl bg-white flex flex-col items-center justify-center flex-shrink-0 shadow-md w-[112px]">
-            <svg
-              viewBox="0 0 100 100"
-              className="w-20 h-20"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              {/* Top Left Finder */}
-              <rect x="5" y="5" width="28" height="28" rx="4" fill="#090E1C" />
-              <rect x="10" y="10" width="18" height="18" rx="2" fill="#FFFFFF" />
-              <rect x="14" y="14" width="10" height="10" rx="1.5" fill="#090E1C" />
-
-              {/* Top Right Finder */}
-              <rect x="67" y="5" width="28" height="28" rx="4" fill="#090E1C" />
-              <rect x="72" y="10" width="18" height="18" rx="2" fill="#FFFFFF" />
-              <rect x="76" y="14" width="10" height="10" rx="1.5" fill="#090E1C" />
-
-              {/* Bottom Left Finder */}
-              <rect x="5" y="67" width="28" height="28" rx="4" fill="#090E1C" />
-              <rect x="10" y="72" width="18" height="18" rx="2" fill="#FFFFFF" />
-              <rect x="14" y="76" width="10" height="10" rx="1.5" fill="#090E1C" />
-
-              {/* QR Code Dots Matrix */}
-              <rect x="38" y="8" width="6" height="6" rx="1" fill="#090E1C" />
-              <rect x="50" y="8" width="8" height="6" rx="1" fill="#090E1C" />
-              <rect x="38" y="20" width="8" height="6" rx="1" fill="#090E1C" />
-              <rect x="52" y="20" width="6" height="6" rx="1" fill="#090E1C" />
-
-              <rect x="8" y="38" width="6" height="8" rx="1" fill="#090E1C" />
-              <rect x="20" y="38" width="8" height="6" rx="1" fill="#090E1C" />
-              <rect x="70" y="38" width="8" height="6" rx="1" fill="#090E1C" />
-              <rect x="84" y="38" width="8" height="6" rx="1" fill="#090E1C" />
-
-              <rect x="38" y="72" width="8" height="6" rx="1" fill="#090E1C" />
-              <rect x="52" y="72" width="6" height="8" rx="1" fill="#090E1C" />
-              <rect x="72" y="70" width="6" height="6" rx="1" fill="#090E1C" />
-              <rect x="84" y="70" width="8" height="8" rx="1" fill="#090E1C" />
-              <rect x="70" y="84" width="8" height="8" rx="1" fill="#090E1C" />
-              <rect x="84" y="84" width="8" height="8" rx="1" fill="#090E1C" />
-
-              {/* Center Zalo Badge */}
-              <circle cx="50" cy="50" r="14" fill="#1B72E8" />
-              <text
-                x="50"
-                y="55"
-                fill="#FFFFFF"
-                fontSize="14"
-                fontWeight="bold"
-                textAnchor="middle"
-                fontFamily="Arial, sans-serif"
-              >
-                Z
-              </text>
-            </svg>
+            <QRCodeSVG value={zaloUrl} size={80} level="M" fgColor="#2442bc" title={`Mã QR ${zaloUrl}`} />
             <span className="font-bold text-[9px] text-slate-800 tracking-wider uppercase mt-1">
               QUÉT MÃ ZALO
             </span>
@@ -119,7 +70,7 @@ export function PendingSupportCards({
         {/* Action Buttons */}
         <div className="flex items-center gap-2.5 pt-1">
           <a
-            href={`https://zalo.me/${rawZaloPhone}`}
+            href={zaloUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="group/btn flex-1 h-10 rounded-xl bg-[#245ff4] hover:bg-[#155fc7] text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md transition-all active:scale-[0.98] cursor-pointer"
@@ -169,55 +120,7 @@ export function PendingSupportCards({
         <div className="flex items-center gap-4">
           {/* QR Box */}
           <div className="p-2.5 rounded-2xl bg-white flex flex-col items-center justify-center flex-shrink-0 shadow-md w-[112px]">
-            <svg
-              viewBox="0 0 100 100"
-              className="w-20 h-20"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              {/* Top Left Finder */}
-              <rect x="5" y="5" width="28" height="28" rx="4" fill="#090E1C" />
-              <rect x="10" y="10" width="18" height="18" rx="2" fill="#FFFFFF" />
-              <rect x="14" y="14" width="10" height="10" rx="1.5" fill="#090E1C" />
-
-              {/* Top Right Finder */}
-              <rect x="67" y="5" width="28" height="28" rx="4" fill="#090E1C" />
-              <rect x="72" y="10" width="18" height="18" rx="2" fill="#FFFFFF" />
-              <rect x="76" y="14" width="10" height="10" rx="1.5" fill="#090E1C" />
-
-              {/* Bottom Left Finder */}
-              <rect x="5" y="67" width="28" height="28" rx="4" fill="#090E1C" />
-              <rect x="10" y="72" width="18" height="18" rx="2" fill="#FFFFFF" />
-              <rect x="14" y="76" width="10" height="10" rx="1.5" fill="#090E1C" />
-
-              {/* QR Code Dots Matrix */}
-              <rect x="38" y="8" width="6" height="6" rx="1" fill="#090E1C" />
-              <rect x="50" y="8" width="8" height="6" rx="1" fill="#090E1C" />
-              <rect x="38" y="20" width="8" height="6" rx="1" fill="#090E1C" />
-              <rect x="52" y="20" width="6" height="6" rx="1" fill="#090E1C" />
-
-              <rect x="8" y="38" width="6" height="8" rx="1" fill="#090E1C" />
-              <rect x="20" y="38" width="8" height="6" rx="1" fill="#090E1C" />
-              <rect x="70" y="38" width="8" height="6" rx="1" fill="#090E1C" />
-              <rect x="84" y="38" width="8" height="6" rx="1" fill="#090E1C" />
-
-              <rect x="38" y="72" width="8" height="6" rx="1" fill="#090E1C" />
-              <rect x="52" y="72" width="6" height="8" rx="1" fill="#090E1C" />
-              <rect x="72" y="70" width="6" height="6" rx="1" fill="#090E1C" />
-              <rect x="84" y="70" width="8" height="8" rx="1" fill="#090E1C" />
-              <rect x="70" y="84" width="8" height="8" rx="1" fill="#090E1C" />
-              <rect x="84" y="84" width="8" height="8" rx="1" fill="#090E1C" />
-
-              {/* Center Telegram Badge */}
-              <circle cx="50" cy="50" r="14" fill="#00A3E0" />
-              <path
-                d="M44 50L49 55L57 43"
-                stroke="#FFFFFF"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
+            <QRCodeSVG value={telegramUrl} size={80} level="M" fgColor="#0095b6" title={`Mã QR ${telegramUrl}`} />
             <span className="font-bold text-[9px] text-slate-800 tracking-wider uppercase mt-1">
               QUÉT TELEGRAM
             </span>
@@ -241,7 +144,7 @@ export function PendingSupportCards({
         {/* Action Buttons */}
         <div className="flex items-center gap-2.5 pt-1">
           <a
-            href="https://t.me/admin_support"
+            href={telegramUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="group/btn flex-1 h-10 rounded-xl bg-[#0099CC] hover:bg-[#0088B5] text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md transition-all active:scale-[0.98] cursor-pointer"
