@@ -3,6 +3,7 @@
 import React, { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Copy, ExternalLink, MapPin } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
+import CustomSelect from "@/components/ui/custom-select";
 import { toast } from "@/lib/toast";
 import { Pager } from "@/modules/module_11_page_scanner/_shared";
 import useDragRowSelect from "@/modules/module_11_page_scanner/shared/useDragRowSelect";
@@ -10,7 +11,10 @@ import ProfileAvatar from "../shared/ProfileAvatar";
 import { jobText } from "../shared/exportProfiles";
 import { fmtNum, shortFbUrl } from "../utils.mjs";
 
-const PAGE_SIZE = 10; // QA: 10 dòng / trang, bảng có thanh cuộn riêng
+// Số dòng / trang người dùng chọn (mặc định 10, bảng có thanh cuộn riêng). Giữ ở cấp module để đổi nguồn /
+// bộ lọc (bảng được mount lại theo key) vẫn giữ lựa chọn trong phiên làm việc.
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100].map((n) => ({ value: n, label: String(n) }));
+let rememberedPageSize = 10;
 const TINTS = ["bg-[#FEE2E2] text-[#DC2626]", "bg-[#FEF3C7] text-[#B45309]", "bg-[#E0E7FF] text-[#4338CA]", "bg-[#E0F2FE] text-[#0369A1]"];
 
 export const rowId = (r) => `${r.sourceKey || ""}|${r.uid}`;
@@ -18,6 +22,12 @@ export const rowId = (r) => `${r.sourceKey || ""}|${r.uid}`;
 /** onSelect null → không có cột chọn */
 export default function ProfileTable({ rows: input, selected, onSelect, emptyText = "Chưa có profile trong kết quả." }) {
   const [wanted, setPage] = useState(1);
+  const [pageSize, setPageSizeState] = useState(rememberedPageSize);
+  const setPageSize = (n) => {
+    rememberedPageSize = n;
+    setPageSizeState(n);
+    setPage(1);
+  };
   const [sort, setSort] = useState(null); // null | desc | asc theo số bạn bè
   const rows = useMemo(() => {
     if (!sort) return input;
@@ -26,10 +36,10 @@ export default function ProfileTable({ rows: input, selected, onSelect, emptyTex
     return [...input].sort((a, b) => (a.friends == null) - (b.friends == null) || ((a.friends ?? 0) - (b.friends ?? 0)) * dir);
   }, [input, sort]);
   const SortIcon = sort === "asc" ? ArrowUp : sort === "desc" ? ArrowDown : ArrowUpDown;
-  const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize));
   const page = Math.min(wanted, pages);
-  const start = (page - 1) * PAGE_SIZE;
-  const shown = rows.slice(start, start + PAGE_SIZE);
+  const start = (page - 1) * pageSize;
+  const shown = rows.slice(start, start + pageSize);
   const allOn = rows.length > 0 && rows.every((r) => selected.has(rowId(r)));
 
   const toggle = (list, on) => {
@@ -61,9 +71,10 @@ export default function ProfileTable({ rows: input, selected, onSelect, emptyTex
       .catch(() => toast.error("Không thể sao chép"));
 
   return (
-    <div className="min-w-0 overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
+    // Không overflow-hidden: menu chọn số dòng / trang mở lên trên sẽ bị cắt khi bảng ít dòng — bo góc đặt ở khung con
+    <div className="min-w-0 rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
       {/* Cuộn trong khung (dọc + ngang), tiêu đề cột đứng yên */}
-      <div ref={onSelect ? drag.setContainer : undefined} className={`max-h-[640px] overflow-auto custom-scrollbar ${onSelect ? "select-none" : ""}`}>
+      <div ref={onSelect ? drag.setContainer : undefined} className={`max-h-[640px] overflow-auto rounded-t-xl custom-scrollbar ${onSelect ? "select-none" : ""}`}>
         <table className="w-full min-w-[1760px] text-left text-xs">
           <thead className="sticky top-0 z-10 border-b border-[#E2E8F0] bg-[#F8FAFC] text-[11px] uppercase tracking-[0.5px] text-[#475569] [&_th]:whitespace-nowrap [&_th]:px-3 [&_th]:py-3 [&_th]:font-bold">
             <tr>
@@ -130,8 +141,13 @@ export default function ProfileTable({ rows: input, selected, onSelect, emptyTex
           </tbody>
         </table>
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3 text-xs text-[#64748B]">
-        <span>Hiển thị <b className="text-[#0F172A]">{shown.length ? start + 1 : 0} - {start + shown.length}</b> trong tổng số <b className="text-[#0F172A]">{fmtNum(rows.length)}</b> profile</span>
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-b-xl border-t border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3 text-xs text-[#64748B]">
+        <div className="flex flex-wrap items-center gap-2">
+          <span>Hiển thị</span>
+          <CustomSelect className="w-16" size="sm" direction="up" value={pageSize} onChange={setPageSize} options={PAGE_SIZE_OPTIONS} />
+          <span>dòng / trang ·</span>
+          <span><b className="text-[#0F172A]">{shown.length ? start + 1 : 0} - {start + shown.length}</b> trong tổng số <b className="text-[#0F172A]">{fmtNum(rows.length)}</b> profile</span>
+        </div>
         <Pager page={page} totalPages={pages} onChange={setPage} />
       </div>
     </div>

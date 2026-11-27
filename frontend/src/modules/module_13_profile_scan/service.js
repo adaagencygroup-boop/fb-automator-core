@@ -33,7 +33,9 @@ export const createProfileCategory = ({ name, color }) => api.post(`${BASE}/cate
 export const updateProfileCategory = (key, { name, color }) => api.put(`${BASE}/categories/${categoryId(key)}`, { name, color });
 /** Xóa danh mục: profile bên trong về "Chưa có danh mục" */
 export const deleteProfileCategory = (key) => api.delete(`${BASE}/categories/${categoryId(key)}`);
-export const moveProfiles = (fromKey, toKey, uids) => api.post(`${BASE}/members/move`, { key: fromKey, to_key: toKey, uids });
+/** exclusive: bỏ profile khỏi các danh mục khác đang chứa (chuyển hẳn) */
+export const moveProfiles = (fromKey, toKey, uids, { exclusive = false } = {}) =>
+  api.post(`${BASE}/members/move`, { key: fromKey, to_key: toKey, uids, exclusive });
 export const deleteProfiles = (key, uids) => api.post(`${BASE}/members/delete`, { key, uids });
 
 // ── Nguồn: nhóm (kho Module 10) ──

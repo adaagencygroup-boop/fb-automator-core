@@ -13,6 +13,7 @@ import {
   getTikTokDownloadStatus,
   logoutTikTok,
   openTikTokLogin,
+  openTikTokScannedItem,
   pickVideoFolder,
   saveTikTokConfig,
   startTikTokDownload,
@@ -73,13 +74,39 @@ function StatusPill({ on, children }) {
   );
 }
 
-function CaptionCell({ video }) {
+// Bấm để engine mở thư mục / file .txt trên máy (web lẫn desktop đều đi qua engine local).
+function useOpenScannedItem() {
+  const [openingKey, setOpeningKey] = useState(null);
+  const open = useCallback(async (video, target) => {
+    const key = `${video.id}:${target}`;
+    setOpeningKey(key);
+    try {
+      await openTikTokScannedItem(video.id, target);
+    } catch (err) {
+      toast.error(err?.message || "Không mở được trên máy này.", target === "caption" ? "KHÔNG MỞ ĐƯỢC FILE" : "KHÔNG MỞ ĐƯỢC THƯ MỤC");
+    } finally {
+      setOpeningKey((current) => (current === key ? null : current));
+    }
+  }, []);
+  return { open, isOpening: (video, target) => openingKey === `${video.id}:${target}` };
+}
+
+const LINK_BUTTON =
+  "inline-flex max-w-[220px] items-center gap-1.5 rounded font-mono text-xs cursor-pointer hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] disabled:cursor-wait";
+
+function CaptionCell({ video, onOpen, opening }) {
   if (video.captionFile) {
     return (
-      <span title={video.caption} className="inline-flex items-center gap-1.5 font-mono text-xs text-[#059669]">
-        <FileText className="size-3.5" />
-        {video.captionFile}
-      </span>
+      <button
+        type="button"
+        onClick={() => onOpen(video, "caption")}
+        disabled={opening}
+        title={`${video.caption ? `${video.caption}\n\n` : ""}Bấm để mở file ${video.captionFile}`}
+        className={cn(LINK_BUTTON, "text-[#059669]")}
+      >
+        {opening ? <Loader2 className="size-3.5 shrink-0 animate-spin" /> : <FileText className="size-3.5 shrink-0" />}
+        <span className="truncate">{video.captionFile}</span>
+      </button>
     );
   }
   return video.status === "downloading" ? (
@@ -89,8 +116,9 @@ function CaptionCell({ video }) {
   );
 }
 
-function VideoRow({ video, index }) {
+function VideoRow({ video, index, onOpen, isOpening }) {
   const status = VIDEO_STATUS[video.status] || VIDEO_STATUS.waiting;
+  const openingFolder = isOpening(video, "folder");
   return (
     <tr className="border-t border-[#E2E8F0] text-xs">
       <td className="px-4 py-3 font-mono text-[#94A3B8]">{String(index + 1).padStart(2, "0")}</td>
@@ -103,10 +131,20 @@ function VideoRow({ video, index }) {
         </div>
       </td>
       <td className="px-4 py-3">
-        <span title={video.folder} className="inline-flex max-w-[220px] items-center gap-2 font-mono text-[#475569]">
-          <Folder className={cn("size-4 shrink-0", status.folder)} />
+        <button
+          type="button"
+          onClick={() => onOpen(video, "folder")}
+          disabled={openingFolder}
+          title={`${video.folder}\n\nBấm để mở thư mục`}
+          className={cn(LINK_BUTTON, "gap-2 text-[#475569] hover:text-[#2563EB]")}
+        >
+          {openingFolder ? (
+            <Loader2 className="size-4 shrink-0 animate-spin text-[#2563EB]" />
+          ) : (
+            <Folder className={cn("size-4 shrink-0", status.folder)} />
+          )}
           <span className="truncate">{video.folder}</span>
-        </span>
+        </button>
       </td>
       <td className="px-4 py-3">
         <a href={video.url} target="_blank" rel="noreferrer" title={video.url} className="inline-flex max-w-[220px] items-center gap-1.5 text-[#2563EB] hover:underline">
@@ -114,7 +152,7 @@ function VideoRow({ video, index }) {
           <ExternalLink className="size-3 shrink-0" />
         </a>
       </td>
-      <td className="px-4 py-3"><CaptionCell video={video} /></td>
+      <td className="px-4 py-3"><CaptionCell video={video} onOpen={onOpen} opening={isOpening(video, "caption")} /></td>
       <td className="px-4 py-3">
         <span title={video.error || undefined} className={cn("inline-block whitespace-nowrap rounded-full px-2.5 py-0.5 font-semibold", status.pill)}>
           {status.label}{video.status === "downloading" && video.percent != null ? ` ${video.percent}%` : ""}
@@ -133,6 +171,7 @@ function VideoRow({ video, index }) {
 export default function TikTokDownloadView() {
   const [auth, setAuth] = useState({ loading: true, connected: false });
   const [opening, setOpening] = useState(false);
+  const openItem = useOpenScannedItem();
   const [loggingOut, setLoggingOut] = useState(false);
   const [keywordText, setKeywordText] = useState("");
   const [folder, setFolder] = useState("");
@@ -520,7 +559,9 @@ export default function TikTokDownloadView() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((video, index) => <VideoRow key={video.id} video={video} index={first + index} />)}
+                  {rows.map((video, index) => (
+                    <VideoRow key={video.id} video={video} index={first + index} onOpen={openItem.open} isOpening={openItem.isOpening} />
+                  ))}
                   {!rows.length && (
                     <tr><td colSpan={6} className="py-10 text-center text-xs text-[#94A3B8]">{running ? "Đang tìm video…" : "Chưa có video nào được quét."}</td></tr>
                   )}
