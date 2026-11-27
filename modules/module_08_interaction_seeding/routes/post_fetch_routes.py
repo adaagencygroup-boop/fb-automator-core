@@ -35,6 +35,7 @@ class StartFetchRequest(BaseModel):
     source_url: str = Field(..., max_length=2000)
     account_uid: str = Field(..., max_length=50)
     rotate_after_posts: int = Field(0, ge=0, le=1000)
+    reset_results: bool = False
 
 
 class AddFetchedRequest(BaseModel):
@@ -175,6 +176,7 @@ def start_post_fetch(
         source_key,
         account.uid,
         body.rotate_after_posts,
+        reset_results=body.reset_results,
     )
     return {"job": post_fetcher.job_to_dict(job)}
 

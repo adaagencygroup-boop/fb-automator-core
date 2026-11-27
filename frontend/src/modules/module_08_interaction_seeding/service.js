@@ -174,11 +174,12 @@ export const seedingApi = {
 
 // ── Lấy bài viết từ page / trang cá nhân (job chạy nền, không giới hạn số bài) ──
 export const postFetchApi = {
-  startJob: (sourceUrl, accountUid, rotateAfterPosts = 0) =>
+  startJob: (sourceUrl, accountUid, rotateAfterPosts = 0, { resetResults = false } = {}) =>
     api.post("/api/seeding/post-fetch/jobs", {
       source_url: sourceUrl,
       account_uid: accountUid,
       rotate_after_posts: rotateAfterPosts,
+      reset_results: resetResults,
     }),
   // Lượt đang chạy; không có thì lượt gần nhất → { job | null }
   getActiveJob: () => api.get("/api/seeding/post-fetch/jobs/active"),

@@ -477,12 +477,16 @@ export default function PostSourceFetcher({
         return;
       }
       listSeq.current += 1;
+      loadingListRef.current = false;
+      listRefreshPendingRef.current = false;
       listItemsRef.current = [];
       setList({ items: [], total: 0, available: true });
       setSel(emptySelection());
       const eligibleCount = selectedUids.filter((uid) => accounts.some((account) => account.uid === uid)).length;
       const rotateAfterPosts = eligibleCount > 1 ? 100 : 0;
-      const res = await postFetchApi.startJob(sourceUrl.trim(), accountUid, rotateAfterPosts);
+      const res = await postFetchApi.startJob(sourceUrl.trim(), accountUid, rotateAfterPosts, {
+        resetResults: true,
+      });
       if (eligibleCount > 0) {
         const nextCursor = (fetchAccountCursor + 1) % eligibleCount;
         setFetchAccountCursor(nextCursor);

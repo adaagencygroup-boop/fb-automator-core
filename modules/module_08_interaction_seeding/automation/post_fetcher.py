@@ -1231,10 +1231,13 @@ def start_fetch_thread(
     source_key: str,
     account_uid: str,
     rotate_after_posts: int = 0,
+    *,
+    reset_results: bool = False,
 ) -> None:
     """Job phải được try_register_job trước. Chạy trong thread riêng (không chiếm threadpool của FastAPI)."""
     with _jobs_lock:
         stop = _running_jobs[job_id]["stop"]
+    fetched_posts_store.begin(owner_id, source_key, job_id, reset=reset_results)
     threading.Thread(
         target=_run_fetch_job,
         args=(job_id, owner_id, owner_identifiers, source_url, source_key, account_uid, stop, rotate_after_posts),
@@ -1334,7 +1337,6 @@ def _run_fetch_job(
         return is_checkpoint_url(current) or path == "/login" or path.startswith("/login/") or path.startswith("/login.php")
 
     try:
-        fetched_posts_store.begin(owner_id, source_key, job_id)
         with _session() as s:
             account = (
                 s.query(Account)

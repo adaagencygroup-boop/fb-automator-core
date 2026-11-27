@@ -158,10 +158,14 @@ def _int(value: Any) -> int:
         return 0
 
 
-def begin(owner_id: int, source_key: str, job_id: Optional[int]) -> None:
-    """Bắt đầu 1 lượt lấy bài: cùng nguồn thì gộp tiếp vào bài đã có, nguồn khác thì bắt đầu kho mới."""
+def begin(owner_id: int, source_key: str, job_id: Optional[int], *, reset: bool = False) -> None:
+    """Bắt đầu kho mới khi reset; lượt đổi tài khoản cùng nguồn tiếp tục dùng kho hiện tại."""
     with _lock:
-        state = _state_for(owner_id, source_key, job_id)
+        if reset:
+            state = _new_state(source_key, job_id)
+            _mem[owner_id] = state
+        else:
+            state = _state_for(owner_id, source_key, job_id)
         state["job_id"] = job_id
         state["updated"] = time.time()
         state["dirty"] = True
