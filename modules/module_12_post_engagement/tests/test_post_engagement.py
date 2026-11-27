@@ -387,6 +387,19 @@ class RecordingDB:
 
 
 class ModelTests(unittest.TestCase):
+    def test_list_posts_most_sorts_by_facebook_totals(self):
+        """Xếp "Nhiều tương tác nhất" theo tổng trên Facebook (số hiện trên thẻ bài), không theo số đã quét."""
+        seen = []
+
+        class SortDB(RecordingDB):
+            def fetch_all(self, sql, params=()):
+                seen.append(" ".join(sql.split()))
+                return []
+
+        with mock.patch.object(models, "db", SortDB()):
+            models.list_posts("alice", sort="most")
+        self.assertIn("ORDER BY (fb_like_count + fb_comment_count + fb_share_count) DESC", seen[0])
+
     def test_fold_strips_vietnamese_marks(self):
         self.assertEqual(models.fold("  Phú   Thọ Đẹp "), "phu tho dep")
 

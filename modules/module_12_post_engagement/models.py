@@ -318,7 +318,8 @@ def list_posts(owner: Optional[str], *, search: str = "", source: str = "all", s
             cond.append("search_fold LIKE ?")
             params.append(_like(word))
     order = {
-        "most": "(like_count + comment_count + fb_share_count) DESC, scanned_at DESC",
+        # Nhiều tương tác nhất = tổng TRÊN FACEBOOK (đúng 3 số hiện trên thẻ bài), không phải số người đã quét được
+        "most": "(fb_like_count + fb_comment_count + fb_share_count) DESC, scanned_at DESC",
         "oldest": "scanned_at ASC",
     }.get(sort, "scanned_at DESC")
     where = " AND ".join(cond)
