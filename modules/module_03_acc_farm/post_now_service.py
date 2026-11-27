@@ -28,8 +28,8 @@ from modules.module_03_acc_farm.compose_service import (
 
 logger = logging.getLogger(__name__)
 
-# Chặn 2 yêu cầu "Đăng ngay" cùng lúc lọt qua bước kiểm tra runner bận
-_start_lock = threading.Lock()
+# Chặn 2 yêu cầu (Đăng ngay / khung chiến dịch) cùng lúc lọt qua bước kiểm tra runner bận
+start_lock = threading.Lock()
 
 
 class PostNowError(Exception):
@@ -133,7 +133,7 @@ def start_status_post_now(
     if not check.ok:
         raise PostNowError(" ".join(check.errors), errors=check.errors)
 
-    with _start_lock:
+    with start_lock:
         busy = busy_message(runner)
         if busy:
             raise PostNowError(busy, status_code=409)

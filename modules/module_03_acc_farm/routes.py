@@ -1523,9 +1523,20 @@ async def on_startup(ws_manager):
             logger.info(f"Đã chép chủ của {filled} nhóm / người từ lịch sử cũ vào bảng chia đích")
     except Exception as e:
         logger.warning(f"Không chép được chủ nhóm / người từ lịch sử cũ: {e}")
+    try:
+        # Chiến dịch đăng bài nhiều khung giờ (Tab 2): chạy khung đến giờ, đánh dấu khung bị lỡ
+        from modules.module_03_acc_farm.campaign_scheduler import start_scheduler
+        start_scheduler()
+    except Exception as e:
+        logger.warning(f"Không khởi động được bộ lập lịch chiến dịch đăng bài: {e}")
 
 
 async def on_shutdown():
+    try:
+        from modules.module_03_acc_farm.campaign_scheduler import stop_scheduler
+        stop_scheduler()
+    except Exception:
+        pass
     if _control is not None and _state["running"]:
         _control.stop()
     await asyncio.to_thread(repository.writer.stop)

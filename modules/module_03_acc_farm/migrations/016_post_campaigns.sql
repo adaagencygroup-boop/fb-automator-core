@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS public.post_compose_drafts (
 CREATE TABLE IF NOT EXISTS public.post_campaigns (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   owner_key TEXT NOT NULL DEFAULT '',
+  -- Máy tạo chiến dịch (profile Chrome của nick nằm trên máy này) — chỉ máy này chạy các khung giờ
+  machine_id TEXT NOT NULL DEFAULT '',
   name TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 200),
   post_type TEXT NOT NULL DEFAULT 'status' CHECK (post_type IN ('status', 'reels', 'story')),
   status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'STOPPED', 'COMPLETED')),

@@ -299,7 +299,9 @@ def create_post(
     status: str = 'PENDING',
     session_id: Optional[str] = None,
     account_id: Optional[str] = None,
-    schedule_time: Optional[str] = None
+    schedule_time: Optional[str] = None,
+    campaign_id: Optional[str] = None,
+    slot_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     post_id = str(uuid.uuid4())
     paths = normalize_image_paths(image_paths, image_path)
@@ -310,15 +312,16 @@ def create_post(
             id, session_id, account_id, account_uid, account_name,
             post_type, content, hashtags, image_path, image_paths, media_path,
             thumbnail_path, media_hash, schedule_time, status, owner_key,
-            created_at, updated_at
+            campaign_id, slot_id, created_at, updated_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
         RETURNING *;
     """
     params = (
         post_id, session_id, account_id, account_uid, account_name,
         post_type, content, hashtags, primary, paths_json, media_path,
-        thumbnail_path, media_hash, schedule_time, status, owner_context.get()
+        thumbnail_path, media_hash, schedule_time, status, owner_context.get(),
+        campaign_id, slot_id,
     )
     res = db.fetch_one(sql, params)
     return res or {}

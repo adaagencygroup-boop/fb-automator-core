@@ -1152,3 +1152,10 @@ async def pick_folder():
     selected_path = await loop.run_in_executor(None, _native_folder_dialog)
     return {"success": bool(selected_path), "path": selected_path or ""}
 
+
+# ==============================================================================
+# CHIẾN DỊCH ĐĂNG BÀI NHIỀU KHUNG GIỜ (/api/post/campaigns, /api/post/compose/check)
+# ==============================================================================
+from modules.module_03_acc_farm.campaign_routes import router as _campaign_router  # noqa: E402
+
+router.include_router(_campaign_router)
