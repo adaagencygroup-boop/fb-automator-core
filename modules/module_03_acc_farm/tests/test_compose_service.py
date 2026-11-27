@@ -10,7 +10,9 @@ from modules.module_03_acc_farm.compose_service import (
     IMAGE_SINGLE,
     MAX_POST_CHARS,
     allocate_round,
+    append_posts,
     parse_compose_text,
+    sanitize_post,
     text_key,
     validate_plan,
 )
@@ -65,6 +67,20 @@ class ParseTests(unittest.TestCase):
     def test_single_mode_does_not_split(self):
         parsed = parse_compose_text("A\n---\nB", CONTENT_SINGLE)
         self.assertEqual(parsed.posts, ["A\n---\nB"])
+
+    def test_append_posts(self):
+        self.assertEqual(append_posts("", ["A", "B"]), "A\n---\nB")
+        self.assertEqual(append_posts("X\n", ["A"]), "X\n---\nA")
+        # Dấu tách thừa ở cuối ô không sinh bài rỗng
+        merged = append_posts("X\n---\n  \n---  \n", ["A"])
+        self.assertEqual(merged, "X\n---\nA")
+        self.assertEqual(parse_compose_text(merged, CONTENT_MULTI).empty_dropped, 0)
+        self.assertEqual(append_posts("X", ["  ", ""]), "X")
+
+    def test_sanitize_removes_inner_separator(self):
+        merged = append_posts("X", ["Mở bài\n---\nThân bài"])
+        self.assertEqual(parse_compose_text(merged, CONTENT_MULTI).posts, ["X", "Mở bài\n\nThân bài"])
+        self.assertEqual(sanitize_post("  giá --- rẻ \r\n"), "giá --- rẻ")
 
     def test_too_long(self):
         parsed = parse_compose_text("ok\n---\n" + "x" * (MAX_POST_CHARS + 1), CONTENT_MULTI)

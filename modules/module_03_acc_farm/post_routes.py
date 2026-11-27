@@ -19,7 +19,7 @@ from config.constants import UPLOADS_DIR
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, UploadFile, File
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from modules.module_02_account_manager.api.router import scoped_owner
 from modules.module_02_account_manager.context import owner_context
@@ -40,6 +40,12 @@ from modules.module_03_acc_farm.content_service import (
     save_optimized_image,
 )
 from modules.module_03_acc_farm.post_runner import runner
+from modules.module_03_acc_farm import compose_jobs, compose_repository
+from modules.module_03_acc_farm.compose_service import (
+    MAX_IMAGES_PER_POST,
+    MIN_IMAGES_PER_POST,
+    parse_compose_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -446,6 +452,160 @@ def remove_draft(id: Optional[str] = Query(None), account_uid: Optional[str] = Q
     elif account_uid:
         post_repository.delete_drafts_by_account(account_uid, post_type)
     return {"success": True, "message": "Đã xóa bài nháp thành công."}
+
+
+# ==============================================================================
+# 3b. Ô SOẠN BÀI CHUNG (NHÁP TỰ LƯU) + AI TẠO BÀI CHẠY NGẦM
+# ==============================================================================
+
+POST_TYPE_PATTERN = "^(status|reels|story)$"
+MAX_COMPOSE_CHARS = 5_000_000
+MAX_POOL_IMAGES = 2000
+
+
+class ComposeDraftPayload(BaseModel):
+    post_type: str = Field("status", pattern=POST_TYPE_PATTERN)
+    content_text: str = Field("", max_length=MAX_COMPOSE_CHARS)
+    content_mode: str = "MULTI"
+    image_mode: str = "NONE"
+    image_paths: List[str] = Field(default_factory=list, max_length=MAX_POOL_IMAGES)
+    min_images: int = Field(1, ge=MIN_IMAGES_PER_POST, le=MAX_IMAGES_PER_POST)
+    max_images: int = Field(1, ge=MIN_IMAGES_PER_POST, le=MAX_IMAGES_PER_POST)
+
+
+class ComposeGeneratePayload(BaseModel):
+    post_type: str = Field("status", pattern=POST_TYPE_PATTERN)
+    prompt: str = Field(..., min_length=1, max_length=5000)
+    count: int = Field(..., ge=1, le=compose_jobs.MAX_GENERATE_COUNT)
+    with_images: bool = False
+    api_key_source: Optional[str] = None
+    pixabay_key: Optional[str] = None
+    model: Optional[str] = None
+
+
+def _friendly_gemini_error(message: str) -> str:
+    lower = (message or "").lower()
+    if "401" in message or "api key not valid" in lower or "unauthenticated" in lower:
+        return "Gemini API Key không hợp lệ hoặc đã hết hạn (HTTP 401). Hãy tạo key mới tại Google AI Studio rồi chọn lại."
+    if "429" in message or "resource_exhausted" in lower:
+        return "Gemini bị giới hạn tốc độ (HTTP 429). Thử lại sau hoặc thêm API Key."
+    return message
+
+
+def _resolve_gemini_keys(api_key_source: Optional[str], settings: Optional[Dict[str, Any]]) -> List[str]:
+    keys = parse_user_gemini_keys(api_key_source) if api_key_source else []
+    if not keys and settings:
+        keys = parse_user_gemini_keys(settings.get("gemini_api_keys"))
+    if not keys and settings and settings.get("api_key_file_path"):
+        keys = load_gemini_keys(settings["api_key_file_path"])
+    return keys
+
+
+def _compose_response(post_type: str, draft: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    draft = draft or compose_repository.get_compose_draft(post_type)
+    parsed = parse_compose_text(draft.get("content_text"), draft.get("content_mode"))
+    info = parsed.to_dict()
+    info.pop("posts", None)
+    job = compose_jobs.latest_job(owner_context.get() or "", post_type)
+    return {
+        "success": True,
+        "data": draft,
+        "parsed": info,
+        "generate_job": job.to_dict() if job else None,
+    }
+
+
+def _ensure_draft_unlocked(post_type: str) -> None:
+    job = compose_jobs.active_job(owner_context.get() or "", post_type)
+    if job:
+        raise HTTPException(
+            status_code=409,
+            detail=f"AI đang tạo bài ({job.done + job.failed}/{job.total}). Đợi xong hoặc huỷ rồi mới sửa ô soạn.",
+        )
+
+
+@router.get("/compose/draft", dependencies=[Depends(scoped_owner)])
+def get_compose_draft(post_type: str = Query("status", pattern=POST_TYPE_PATTERN)):
+    """Nháp ô soạn bài + số bài đã nhận + job AI gần nhất (để FE nối lại tiến trình sau khi tải lại trang)."""
+    return _compose_response(post_type)
+
+
+@router.put("/compose/draft", dependencies=[Depends(scoped_owner)])
+def save_compose_draft(payload: ComposeDraftPayload):
+    """Tự lưu nháp ô soạn bài (FE gọi sau khi người dùng ngừng gõ)."""
+    _ensure_draft_unlocked(payload.post_type)
+    draft = compose_repository.save_compose_draft(
+        payload.post_type,
+        content_text=payload.content_text,
+        content_mode=payload.content_mode,
+        image_mode=payload.image_mode,
+        image_paths=payload.image_paths,
+        min_images=payload.min_images,
+        max_images=min(MAX_IMAGES_PER_POST, max(payload.min_images, payload.max_images)),
+    )
+    return _compose_response(payload.post_type, draft)
+
+
+@router.delete("/compose/draft", dependencies=[Depends(scoped_owner)])
+def clear_compose_draft(post_type: str = Query("status", pattern=POST_TYPE_PATTERN)):
+    """Nút "Xoá tất cả": xoá nội dung và kho ảnh, giữ lựa chọn chế độ."""
+    _ensure_draft_unlocked(post_type)
+    return _compose_response(post_type, compose_repository.clear_compose_draft(post_type))
+
+
+@router.post("/compose/generate", dependencies=[Depends(scoped_owner)])
+def start_compose_generate(payload: ComposeGeneratePayload):
+    """Bắt đầu job AI tạo `count` bài (kèm ảnh nếu chọn), mỗi bài xong được thêm ngay vào cuối nháp."""
+    settings = post_repository.get_post_settings(payload.post_type) or {}
+    keys = _resolve_gemini_keys(payload.api_key_source, settings)
+    if not keys:
+        raise HTTPException(status_code=400, detail="Chưa cấu hình Gemini API Key hợp lệ.")
+    pixabay_key = (payload.pixabay_key or settings.get("pixabay_api_key") or "").strip() or None
+    model = payload.model or settings.get("gemini_model") or "gemini-3.8-flash"
+    save_dir = str(UPLOADS_DIR / "posts")
+
+    def generate_text(prompt: str, api_key: str, fallback: List[str], model_name: str):
+        try:
+            result = generate_status_content(prompt=prompt, api_key=api_key, model=model_name, fallback_keys=fallback)
+        except Exception as exc:
+            raise RuntimeError(_friendly_gemini_error(str(exc))) from exc
+        return result if isinstance(result, tuple) else (result, None)
+
+    def fetch_image(keyword: str, pixabay: Optional[str], gemini_keys: List[str]):
+        return crawl_or_fetch_image(keyword, pixabay, save_dir, gemini_keys)
+
+    try:
+        job = compose_jobs.start_generate_job(
+            owner_context.get() or "",
+            payload.post_type,
+            prompt=payload.prompt.strip(),
+            count=payload.count,
+            keys=keys,
+            model=model,
+            with_images=payload.with_images,
+            pixabay_key=pixabay_key,
+            generate_text=generate_text,
+            fetch_image=fetch_image,
+        )
+    except compose_jobs.JobConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"success": True, "job": job.to_dict()}
+
+
+@router.get("/compose/generate/{job_id}", dependencies=[Depends(scoped_owner)])
+def get_compose_generate(job_id: str):
+    job = compose_jobs.get_job(job_id, owner_context.get() or "")
+    if not job:
+        raise HTTPException(status_code=404, detail="Không tìm thấy lượt AI tạo bài (có thể backend đã khởi động lại).")
+    return {"success": True, "job": job.to_dict()}
+
+
+@router.post("/compose/generate/{job_id}/cancel", dependencies=[Depends(scoped_owner)])
+def cancel_compose_generate(job_id: str):
+    job = compose_jobs.cancel_job(job_id, owner_context.get() or "")
+    if not job:
+        raise HTTPException(status_code=404, detail="Không tìm thấy lượt AI tạo bài.")
+    return {"success": True, "job": job.to_dict()}
 
 
 # ==============================================================================

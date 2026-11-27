@@ -116,6 +116,27 @@ def parse_compose_text(text: Optional[str], content_mode: str = CONTENT_MULTI) -
     return result
 
 
+POST_SEPARATOR = "---"
+# Các dòng "---" thừa ở cuối ô (người dùng gõ sẵn dấu tách) — bỏ để không sinh bài rỗng
+_TRAILING_SEPARATORS_RE = re.compile(r"(?:(?:^|\n)[ \t]*---[ \t]*\s*)+$")
+
+
+def sanitize_post(text: Optional[str]) -> str:
+    """Làm sạch 1 bài trước khi đưa vào ô soạn: bỏ dòng "---" bên trong để bài không bị tách đôi."""
+    raw = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    return _SEPARATOR_RE.sub("", raw).strip()
+
+
+def append_posts(existing: Optional[str], posts: Iterable[str]) -> str:
+    """Thêm bài vào cuối ô soạn, mỗi bài cách nhau bằng dòng "---"."""
+    new_posts = [p for p in (sanitize_post(p) for p in posts) if p]
+    if not new_posts:
+        return existing or ""
+    base = _TRAILING_SEPARATORS_RE.sub("", (existing or "").rstrip()).rstrip()
+    joined = f"\n{POST_SEPARATOR}\n".join(new_posts)
+    return f"{base}\n{POST_SEPARATOR}\n{joined}" if base else joined
+
+
 def normalize_pool_images(paths: Optional[Iterable[str]]) -> List[str]:
     """Kho ảnh chung: bỏ trống / trùng, giữ thứ tự."""
     out: List[str] = []
