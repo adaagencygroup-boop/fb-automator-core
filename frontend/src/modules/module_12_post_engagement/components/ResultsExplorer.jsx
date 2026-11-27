@@ -258,6 +258,15 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
     selected,
     onChange: setSelected,
   });
+  // Bảng cuộn trong khung (cao tối đa 640px, bằng cột bài viết bên trái): đổi trang / tab / bài thì về dòng đầu
+  const tableBoxRef = useRef(null);
+  const setTableBox = useCallback((el) => {
+    tableBoxRef.current = el;
+    setContainer(el);
+  }, [setContainer]);
+  useEffect(() => {
+    if (tableBoxRef.current) tableBoxRef.current.scrollTop = 0;
+  }, [page, pageSize, tab, selectedKey]);
   const allOnPage = data.rows.length > 0 && data.rows.every((r) => selected.has(r.id));
   const someOnPage = !allOnPage && data.rows.some((r) => selected.has(r.id));
   const toggleAllOnPage = () => {
@@ -306,8 +315,10 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
       </div>
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
-        {/* ---------------- Cột trái: danh mục bài viết ---------------- */}
-        <div className="min-w-0">
+        {/* ---------------- Cột trái: danh mục bài viết ----------------
+            Màn rộng: cột trái KHÔNG tự quyết chiều cao (contain:size) mà kéo bằng cột phải (lưới tự giãn),
+            danh sách bài cuộn bên trong → đáy 2 cột luôn thẳng hàng; tối thiểu 480px khi cột phải ngắn. */}
+        <div className="flex min-w-0 flex-col lg:min-h-[480px] lg:[contain:size]">
           <p className="mb-3 flex items-center gap-2 text-[13px] font-bold uppercase text-[#0F172A]">
             <List className="size-4 text-[#2563EB]" /> Danh mục bài viết đã quét
             <span className="text-[#2563EB]">({nf(postTotal)})</span>
@@ -327,7 +338,7 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
               <CustomSelect value={sort} onChange={setSort} options={SORT_OPTIONS} size="sm" />
             </div>
           </div>
-          <div className="mt-3 max-h-[640px] space-y-3 overflow-y-auto pr-1">
+          <div className="mt-3 max-h-[640px] min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 lg:max-h-none">
             {loadingPosts && !posts.length ? (
               <p className="flex items-center justify-center gap-2 py-10 text-sm text-slate-400">
                 <Loader2 className="size-4 animate-spin" /> Đang tải…
@@ -448,9 +459,9 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
               Mẹo: giữ chuột trái và kéo để chọn nhiều tài khoản liên tiếp · Ctrl + click chọn riêng lẻ · Shift + click chọn cả khoảng.
             </p>
           )}
-          <div ref={setContainer} className="overflow-x-auto rounded-xl border border-[#E2E8F0]">
+          <div ref={setTableBox} className="max-h-[640px] overflow-auto overscroll-contain rounded-xl border border-[#E2E8F0]">
             <table className={`w-full text-left text-[13px] ${tab === "comment" ? "min-w-[860px]" : "min-w-[680px]"}`}>
-              <thead className="border-b border-[#E2E8F0] bg-[#F8FAFC] text-[11px] font-bold uppercase text-[#475569]">
+              <thead className="sticky top-0 z-10 border-b border-[#E2E8F0] bg-[#F8FAFC] text-[11px] font-bold uppercase text-[#475569] shadow-[0_1px_0_0_#E2E8F0]">
                 <tr>
                   <th className="w-10 px-3 py-3 text-center">
                     <input
