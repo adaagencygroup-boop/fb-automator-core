@@ -1,6 +1,6 @@
 {
   "name": "fb-automator-core",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Facebook Automator Pro - Enterprise Tauri + PyInstaller Sidecar",
   "scripts": {
     "start": "python ../start.py",
