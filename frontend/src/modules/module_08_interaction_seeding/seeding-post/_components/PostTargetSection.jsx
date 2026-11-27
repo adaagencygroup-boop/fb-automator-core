@@ -34,6 +34,7 @@ export default function PostTargetSection({
   const [isFetchOpen, setIsFetchOpen] = useState(false);
   const [fetchRunning, setFetchRunning] = useState(false);
   const [fetchBusy, setFetchBusy] = useState(false);
+  const openFetchTimerRef = useRef(null);
   const stopFetchRef = useRef(null);
   const registerFetchStop = useCallback((handler) => {
     stopFetchRef.current = handler;
@@ -48,6 +49,10 @@ export default function PostTargetSection({
   const handleConfirmStopFetch = useCallback(async () => {
     if (!stopFetchRef.current) return false;
     return stopFetchRef.current();
+  }, []);
+
+  useEffect(() => () => {
+    if (openFetchTimerRef.current) window.clearTimeout(openFetchTimerRef.current);
   }, []);
   const [textInput, setTextInput] = useState("");
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
@@ -338,9 +343,15 @@ export default function PostTargetSection({
             type="button"
             aria-haspopup="dialog"
             onClick={() => {
-              if (isRunning) return;
-              toast.info("Đang mở danh sách bài viết…", "THÔNG BÁO");
-              window.setTimeout(() => setIsFetchOpen(true), 250);
+              if (isRunning || isFetchOpen || openFetchTimerRef.current) return;
+              toast.info("Đang mở danh sách bài viết…", {
+                title: "THÔNG BÁO",
+                key: "module8-open-post-fetch",
+              });
+              openFetchTimerRef.current = window.setTimeout(() => {
+                openFetchTimerRef.current = null;
+                setIsFetchOpen(true);
+              }, 250);
             }}
             disabled={isRunning}
             title={isRunning ? "Đang chạy seeding, không thể lấy bài viết từ page" : undefined}

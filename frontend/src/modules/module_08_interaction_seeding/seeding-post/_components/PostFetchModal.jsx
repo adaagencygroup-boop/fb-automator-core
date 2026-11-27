@@ -11,6 +11,7 @@ import Toaster from "@/components/Toaster";
 
 export default function PostFetchModal({ open, running = false, canStop = false, onStop, onClose, title = "Lấy bài viết từ page/ trang cá nhân", children }) {
   const dialog = useRef(null);
+  const confirmDialog = useRef(null);
   const titleId = useId();
   const [confirmStopOpen, setConfirmStopOpen] = useState(false);
   const [stoppingOnClose, setStoppingOnClose] = useState(false);
@@ -48,6 +49,13 @@ export default function PostFetchModal({ open, running = false, canStop = false,
     if (!open && el.open) el.close();
   }, [open]);
 
+  useEffect(() => {
+    const el = confirmDialog.current;
+    if (!el) return;
+    if (confirmStopOpen && !el.open) el.showModal();
+    if (!confirmStopOpen && el.open) el.close();
+  }, [confirmStopOpen]);
+
   return (
     <dialog
       ref={dialog}
@@ -59,7 +67,7 @@ export default function PostFetchModal({ open, running = false, canStop = false,
       onClick={(event) => {
         if (event.target === event.currentTarget) requestClose();
       }}
-      className="fixed inset-0 m-auto max-h-[90vh] w-[95vw] max-w-4xl overflow-y-auto overscroll-contain rounded-2xl border border-slate-200 bg-white p-0 text-gray-800 shadow-2xl backdrop:bg-slate-900/60"
+      className="fixed inset-0 m-auto max-h-[92vh] w-[97vw] max-w-7xl overflow-hidden overscroll-contain rounded-2xl border border-slate-200 bg-white p-0 text-gray-800 shadow-2xl backdrop:bg-slate-900/45 backdrop:backdrop-blur-sm"
     >
       <header className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-slate-100 bg-white px-5 py-3 sm:px-6">
         <h2 id={titleId} className="text-base font-bold text-gray-900">
@@ -77,18 +85,23 @@ export default function PostFetchModal({ open, running = false, canStop = false,
       <Toaster />
       {children}
       {confirmStopOpen && (
-        <div
-          className="fixed inset-0 z-[100002] flex h-full w-full items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm"
+        <dialog
+          ref={confirmDialog}
+          onCancel={(event) => {
+            event.preventDefault();
+            if (!stoppingOnClose) setConfirmStopOpen(false);
+          }}
           onClick={(event) => {
             if (event.target === event.currentTarget && !stoppingOnClose) setConfirmStopOpen(false);
           }}
+          className="fixed left-1/2 top-1/2 m-0 w-[min(440px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 overflow-visible border-0 bg-transparent p-0 shadow-none backdrop:bg-slate-900/60 backdrop:backdrop-blur-sm"
         >
           <section
             role="alertdialog"
             aria-modal="true"
             aria-labelledby={`${titleId}-stop-title`}
             aria-describedby={`${titleId}-stop-description`}
-            className="relative w-full max-w-[440px] rounded-2xl border border-amber-200 bg-white p-6 text-slate-900 shadow-2xl"
+            className="relative w-full rounded-2xl border border-amber-200 bg-white p-6 text-slate-900 shadow-2xl"
           >
             <div className="flex items-start gap-4">
               <div className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-amber-200 bg-amber-50 text-amber-600">
@@ -123,7 +136,7 @@ export default function PostFetchModal({ open, running = false, canStop = false,
               </button>
             </div>
           </section>
-        </div>
+        </dialog>
       )}
     </dialog>
   );

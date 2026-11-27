@@ -118,7 +118,9 @@ export default function CampaignDetailModal({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const tasks = data.tasks || [];
+  const tasksReady = Array.isArray(data.tasks);
+  const tasks = tasksReady ? data.tasks : [];
+  const successfulTasks = tasks.filter((t) => t.status === "SUCCESS");
   const failedTasks = tasks.filter((t) => t.status === "FAILED");
 
   // Thống kê 3 mục tương tác bài viết (Like, Bình luận, Chia sẻ)
@@ -247,13 +249,13 @@ export default function CampaignDetailModal({
                 </div>
 
                 <div className="p-3.5 rounded-xl bg-emerald-50/60 border border-emerald-100 space-y-1">
-                  <span className="text-emerald-600 font-medium">Thành công</span>
-                  <p className="text-sm font-bold text-emerald-800">{data.total_success} lượt</p>
+                  <span className="text-emerald-600 font-medium">Thao tác thành công</span>
+                  <p className="text-sm font-bold text-emerald-800">{tasksReady ? successfulTasks.length : "—"} thao tác</p>
                 </div>
 
                 <div className="p-3.5 rounded-xl bg-rose-50/60 border border-rose-100 space-y-1">
-                  <span className="text-rose-600 font-medium">Thất bại</span>
-                  <p className="text-sm font-bold text-rose-800">{data.total_failed} lượt</p>
+                  <span className="text-rose-600 font-medium">Thao tác thất bại</span>
+                  <p className="text-sm font-bold text-rose-800">{tasksReady ? failedTasks.length : "—"} thao tác</p>
                 </div>
               </div>
 
@@ -410,23 +412,29 @@ export default function CampaignDetailModal({
                   <div className="flex items-center gap-2 text-rose-900 font-bold text-xs">
                     <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
                     <span>
-                      Danh sách lỗi & không thành công ({failedTasks.length} tài khoản):
+                      Danh sách thao tác lỗi & không thành công ({failedTasks.length} thao tác):
                     </span>
                   </div>
 
-                  <div className="space-y-1.5 pl-1 text-xs">
-                    {failedTasks.map((t, idx) => (
-                      <div
-                        key={`failed-${t.id || t.task_id || t.account_uid || idx}`}
-                        className="flex items-start gap-2 px-3 py-1.5 rounded-lg border border-rose-200/70 bg-white/90 text-rose-900"
-                      >
-                        <XCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />
-                        <div>
-                          <strong>{t.account_name || t.account_uid}:</strong>{" "}
-                          <span>{taskErrorMessage(t)}</span>
+                  <div className="max-h-[270px] overflow-y-auto space-y-1.5 pl-1 pr-1 text-xs">
+                    {failedTasks.map((t, idx) => {
+                      const accountName = t.account_name || t.account_uid;
+                      const actionName = t.action_display || t.action || "Thao tác";
+                      const errorMessage = taskErrorMessage(t);
+                      return (
+                        <div
+                          key={`failed-${t.id || t.task_id || t.account_uid || idx}`}
+                          title={`${accountName} · ${actionName}: ${errorMessage}`}
+                          className="flex h-12 shrink-0 items-center gap-2 overflow-hidden px-3 rounded-lg border border-rose-200/70 bg-white/90 text-rose-900"
+                        >
+                          <XCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                          <div className="min-w-0 flex-1 leading-4">
+                            <div className="truncate font-semibold">{accountName} · {actionName}</div>
+                            <div className="truncate">{errorMessage}</div>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -436,10 +444,10 @@ export default function CampaignDetailModal({
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
                     <User className="w-4 h-4 text-blue-600" />
-                    <span>Chi tiết từng tài khoản Facebook thực thi ({tasks.length})</span>
+                    <span>Chi tiết từng thao tác thực thi ({tasksReady ? tasks.length : "…"})</span>
                   </h3>
                   <span className="text-[11px] text-gray-500">
-                    Theo dõi trạng thái và thông báo riêng của từng nick
+                    Theo dõi trạng thái và kết quả riêng của từng thao tác
                   </span>
                 </div>
 

@@ -31,14 +31,50 @@ const PRIMARY =
 const CHECKBOX =
   "size-4 shrink-0 cursor-pointer appearance-none rounded-full border-2 border-slate-300 bg-white checked:border-blue-600 checked:bg-blue-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:opacity-50 disabled:checked:border-slate-400 disabled:checked:bg-slate-400 disabled:checked:opacity-100";
 const fmt = (n) => Number(n || 0).toLocaleString("vi-VN");
+function formatRelativeTimeVi(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/(?:hôm\s*qua|trước|phút|giờ|ngày|tuần|tháng|năm)/i.test(raw)) return raw;
+  if (/^just\s*now$/i.test(raw)) return "Vừa xong";
+  if (/^yesterday$/i.test(raw)) return "Hôm qua";
+  const match = raw.match(/^(a|an|\d+)\s*(minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|months?|years?|y)(?:\s*ago)?$/i);
+  if (!match) return "";
+  const amount = /^(?:a|an)$/i.test(match[1]) ? 1 : Number(match[1]);
+  const unit = /^(?:minutes?|mins?|m)$/i.test(match[2]) ? "phút"
+    : /^(?:hours?|hrs?|h)$/i.test(match[2]) ? "giờ"
+      : /^(?:days?|d)$/i.test(match[2]) ? "ngày"
+        : /^(?:weeks?|w)$/i.test(match[2]) ? "tuần"
+          : /^months?$/i.test(match[2]) ? "tháng" : "năm";
+  return `${amount} ${unit} trước`;
+}
+
 function formatDateOnly(value) {
   if (!value) return "";
   const raw = String(value).trim();
+  if (/^(?:maybe an? image of|may be an? image of|maybe a photo of|may be a photo of)\b/i.test(raw)) return "";
+  const relativeTime = formatRelativeTimeVi(raw);
+  if (relativeTime) return relativeTime;
+  if (/(?:\bthứ\s|\bchủ nhật\b|\btháng\b|\blúc\b|\bhôm qua\b|\btrước\b)/i.test(raw)) return raw;
   const exact = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
-  if (exact) return `${exact[1].padStart(2, "0")}-${exact[2].padStart(2, "0")}-${exact[3]}`;
+  if (exact) return raw;
   const date = new Date(raw);
-  if (Number.isNaN(date.getTime())) return "";
-  return `${String(date.getDate()).padStart(2, "0")}-${String(date.getMonth() + 1).padStart(2, "0")}-${date.getFullYear()}`;
+  if (Number.isNaN(date.getTime())) return raw;
+  const parts = new Intl.DateTimeFormat("vi-VN", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    weekday: "long",
+    day: "numeric",
+    month: "numeric",
+    year: "numeric",
+    ...( /T\d{2}:\d{2}|\d{1,2}:\d{2}|\bat\b/i.test(raw)
+      ? { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }
+      : {} ),
+  }).formatToParts(date);
+  const part = (type) => parts.find((entry) => entry.type === type)?.value || "";
+  const weekday = part("weekday");
+  const dateText = `${weekday ? `${weekday[0].toLocaleUpperCase("vi-VN")}${weekday.slice(1)}, ` : ""}${part("day")} Tháng ${part("month")}, ${part("year")}`;
+  return parts.some((entry) => entry.type === "hour")
+    ? `${dateText} lúc ${part("hour")}:${part("minute")}`
+    : dateText;
 }
 
 function ensureSelected(selection, id) {
@@ -101,6 +137,7 @@ export default function PostSourceFetcher({
 }) {
   const [sourceUrl, setSourceUrl] = useState("");
   const [job, setJob] = useState(null);
+  const [dismissedStatusJobId, setDismissedStatusJobId] = useState(null);
   const [restoringSource, setRestoringSource] = useState(true);
   const [fetchAccountCursor, setFetchAccountCursor] = useState(0);
   const [starting, setStarting] = useState(false);
@@ -120,12 +157,20 @@ export default function PostSourceFetcher({
   const loadListRef = useRef(null);
   const loadingListRef = useRef(false);
   const listItemsRef = useRef([]);
+  const startRequestRef = useRef(false);
+  const startUnlockTimerRef = useRef(null);
+  const missingLinkToastShownRef = useRef(false);
+  const missingAccountToastShownRef = useRef(false);
   const dragSelectRef = useRef({ active: false, moved: false, startId: null });
   const terminalToastJobsRef = useRef(new Set());
   const rotationJobsRef = useRef(new Set());
   const sourceKey = job?.source_key || "";
   const running = isActive(job);
   const fetchBusy = running || starting;
+
+  useEffect(() => () => {
+    if (startUnlockTimerRef.current) window.clearTimeout(startUnlockTimerRef.current);
+  }, []);
 
   useEffect(() => {
     try {
@@ -147,6 +192,14 @@ export default function PostSourceFetcher({
   }, [accounts, selectedUids, fetchAccountCursor, job?.account_uid, running]);
   const accountUid = scanAccount?.uid || "";
   const accountLabel = scanAccount ? scanAccount.profile_name || scanAccount.name || scanAccount.uid : "";
+
+  useEffect(() => {
+    if (sourceUrl.trim()) missingLinkToastShownRef.current = false;
+  }, [sourceUrl]);
+
+  useEffect(() => {
+    if (accountUid) missingAccountToastShownRef.current = false;
+  }, [accountUid]);
 
   // Khôi phục lượt lấy bài đang chạy / gần nhất khi mở lại màn
   useEffect(() => {
@@ -342,6 +395,7 @@ export default function PostSourceFetcher({
                     // Giữ luân phiên trong phiên hiện tại nếu storage không khả dụng.
                   }
                   lastFound.current = -1;
+                  setDismissedStatusJobId(null);
                   setJob(started?.job || null);
                   toast.info(`Đủ 100 bài mới; đang chuyển sang tài khoản ${nextUid}.`, "ĐỔI TÀI KHOẢN QUÉT");
                 } catch (err) {
@@ -385,24 +439,31 @@ export default function PostSourceFetcher({
 
   const handleStart = async (event) => {
     event?.preventDefault();
-    if (disabled || running || starting) return;
-    if (!sourceUrl.trim()) {
-      toast.warning("Nhập link page hoặc trang cá nhân Facebook.", "THIẾU LINK");
-      return;
-    }
-    if (!accountUid) {
-      toast.warning(
-        "Hãy tích chọn tài khoản ở mục \"Số lượng tài khoản sử dụng\" — tài khoản quét được lấy từ các tài khoản đã tích chọn.",
-        "CHƯA CHỌN TÀI KHOẢN",
-      );
-      return;
-    }
+    if (disabled || running || starting || restoringSource || startRequestRef.current) return;
+    startRequestRef.current = true;
     setStarting(true);
-    listSeq.current += 1;
-    listItemsRef.current = [];
-    setList({ items: [], total: 0, available: true });
-    setSel(emptySelection());
     try {
+      if (!sourceUrl.trim()) {
+        if (!missingLinkToastShownRef.current) {
+          missingLinkToastShownRef.current = true;
+          toast.warning("Nhập link page hoặc trang cá nhân Facebook.", "THIẾU LINK");
+        }
+        return;
+      }
+      if (!accountUid) {
+        if (!missingAccountToastShownRef.current) {
+          missingAccountToastShownRef.current = true;
+          toast.warning(
+            "Hãy tích chọn tài khoản ở mục \"Số lượng tài khoản sử dụng\" — tài khoản quét được lấy từ các tài khoản đã tích chọn.",
+            "CHƯA CHỌN TÀI KHOẢN",
+          );
+        }
+        return;
+      }
+      listSeq.current += 1;
+      listItemsRef.current = [];
+      setList({ items: [], total: 0, available: true });
+      setSel(emptySelection());
       const eligibleCount = selectedUids.filter((uid) => accounts.some((account) => account.uid === uid)).length;
       const rotateAfterPosts = eligibleCount > 1 ? 100 : 0;
       const res = await postFetchApi.startJob(sourceUrl.trim(), accountUid, rotateAfterPosts);
@@ -416,13 +477,19 @@ export default function PostSourceFetcher({
         }
       }
       lastFound.current = -1;
+      setDismissedStatusJobId(null);
       setJob(res?.job || null);
       toast.info("Đã bắt đầu lấy bài viết — bài sẽ hiện dần bên dưới.", "ĐANG LẤY BÀI");
     } catch (err) {
       loadList(true);
       toast.error(err?.message || "Không bắt đầu lấy bài được.", "LỖI");
     } finally {
-      setStarting(false);
+      if (startUnlockTimerRef.current) window.clearTimeout(startUnlockTimerRef.current);
+      startUnlockTimerRef.current = window.setTimeout(() => {
+        startRequestRef.current = false;
+        startUnlockTimerRef.current = null;
+        setStarting(false);
+      }, 500);
     }
   };
 
@@ -457,6 +524,7 @@ export default function PostSourceFetcher({
       listItemsRef.current = [];
       setList({ items: [], total: 0, available: true });
       setSel(emptySelection());
+      if (job?.id != null) setDismissedStatusJobId(String(job.id));
     } catch (err) {
       if (seq === listSeq.current) toast.error(err?.message || "Không xóa được danh sách bài viết.", "LỖI");
     } finally {
@@ -494,13 +562,16 @@ export default function PostSourceFetcher({
     }
   };
 
-  const line = statusLine(job);
+  const line = dismissedStatusJobId != null && String(dismissedStatusJobId) === String(job?.id) && job?.id != null && !running
+    ? null
+    : statusLine(job);
   const lockInputs = disabled || running || starting || restoringSource;
   const busy = disabled || adding;
 
   return (
     <>
-      <div className="space-y-4 p-5 sm:p-6">
+      <div className="grid grid-cols-1 gap-5 p-5 sm:p-6 lg:grid-cols-[minmax(280px,0.78fr)_minmax(0,1.5fr)]">
+        <section className="min-w-0 space-y-4">
         <form onSubmit={handleStart} className="space-y-3">
           <label className="block space-y-1.5 text-xs text-gray-600">
             <span>Link Page hoặc trang cá nhân Facebook</span>
@@ -567,9 +638,10 @@ export default function PostSourceFetcher({
           </p>
         )}
 
-        {sourceKey && (
-          <>
-            <div className="space-y-3 border-t border-slate-100 pt-4">
+        </section>
+
+        <section className="min-w-0 space-y-3 border-t border-slate-100 pt-4 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
+            <div className="space-y-3">
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-xs font-bold text-gray-900">Danh sách bài viết</h3>
                 <div className="flex items-center gap-2">
@@ -594,6 +666,7 @@ export default function PostSourceFetcher({
                   placeholder="Tìm bài viết theo tiêu đề..."
                   value={qInput}
                   onChange={(e) => setQInput(e.target.value)}
+                  disabled={!sourceKey || restoringSource}
                   className={`${INPUT} min-w-44 flex-1`}
                 />
                 <label className="flex items-center gap-2 text-xs text-gray-500">
@@ -603,7 +676,7 @@ export default function PostSourceFetcher({
                     inputMode="numeric"
                     pattern="[0-9]*"
                     value={firstN}
-                    disabled={busy || fetchBusy}
+                    disabled={busy || fetchBusy || !sourceKey || restoringSource}
                     onChange={(e) => {
                       const value = e.target.value;
                       if (value === "") {
@@ -623,7 +696,7 @@ export default function PostSourceFetcher({
                 <button
                   type="button"
                   onClick={handlePickFirst}
-                  disabled={busy || fetchBusy || !visibleCount || !pickValid}
+                  disabled={busy || fetchBusy || !sourceKey || restoringSource || !visibleCount || !pickValid}
                   className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs text-gray-700 hover:bg-slate-200 disabled:opacity-50"
                 >
                   Chọn {pickValid ? fmt(pickN) : "N"} bài
@@ -636,7 +709,7 @@ export default function PostSourceFetcher({
                     className={CHECKBOX}
                     checked={sel.mode === "all"}
                     onChange={(e) => setSel(e.target.checked ? selectAllMatching() : emptySelection())}
-                    disabled={busy || fetchBusy || !visibleCount}
+                    disabled={busy || fetchBusy || !sourceKey || restoringSource || !visibleCount}
                   />
                   Chọn tất cả kết quả lọc
                 </label>
@@ -651,7 +724,7 @@ export default function PostSourceFetcher({
               </div>
             </div>
 
-            <div className="max-h-[52vh] space-y-2 overflow-y-auto overscroll-contain pr-1">
+            <div className="max-h-[min(30vh,calc(92vh_-_600px))] space-y-2 overflow-y-auto overscroll-contain pr-1 lg:max-h-[min(58vh,calc(92vh_-_320px))]">
               {loadingList && !visibleItems.length ? (
                 <p className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 p-4 text-xs text-gray-500">
                   <Loader2 className="size-4 animate-spin text-blue-600" aria-hidden="true" /> Đang tải bài viết...
@@ -724,24 +797,21 @@ export default function PostSourceFetcher({
                 </div>
               )}
             </div>
-          </>
-        )}
+          </section>
       </div>
 
-      {sourceKey && (
-        <footer className="sticky bottom-0 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 bg-white px-5 py-3 sm:px-6">
-          <div aria-live="polite">
-            <p className="text-xs font-bold text-gray-900">{fmt(chosen)} bài đã chọn</p>
-            <p className="text-xs text-gray-500">
-              Bài viết chỉ lưu tạm — bấm &quot;Thêm bài viết đã chọn&quot; mới lưu vào danh sách seeding
-            </p>
-          </div>
-          <button type="button" disabled={busy || fetchBusy || !chosen} onClick={handleAdd} className={PRIMARY}>
-            {adding ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Check className="size-4" aria-hidden="true" />}
-            {adding ? "Đang thêm bài viết…" : "Thêm bài viết đã chọn"}
-          </button>
-        </footer>
-      )}
+      <footer className="sticky bottom-0 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 bg-white px-5 py-3 sm:px-6">
+        <div aria-live="polite">
+          <p className="text-xs font-bold text-gray-900">{fmt(chosen)} bài đã chọn</p>
+          <p className="text-xs text-gray-500">
+            Bài viết chỉ lưu tạm — bấm &quot;Thêm bài viết đã chọn&quot; mới lưu vào danh sách seeding
+          </p>
+        </div>
+        <button type="button" disabled={busy || fetchBusy || !chosen || !sourceKey || restoringSource} onClick={handleAdd} className={PRIMARY}>
+          {adding ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Check className="size-4" aria-hidden="true" />}
+          {adding ? "Đang thêm bài viết…" : "Thêm bài viết đã chọn"}
+        </button>
+      </footer>
     </>
   );
 }

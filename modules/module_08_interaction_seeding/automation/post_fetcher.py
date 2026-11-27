@@ -257,6 +257,7 @@ const headings = Array.from(document.querySelectorAll('[role="heading"], h1, h2'
 const pagelets = Array.from(document.querySelectorAll('[data-pagelet]'))
   .map((el) => normalize(el.getAttribute('data-pagelet')));
 const bodyText = normalize(document.body?.innerText || '');
+const profileRoute = /^\/profile\.php$/i.test(location.pathname) && Boolean(new URL(location.href).searchParams.get('id'));
 const isProfile = pagelets.some((name) => /profile.*(timeline|feed|comet)|profiletimeline/.test(name))
   || ((headings.some((text) => /personal details|personal information|chi tiết cá nhân|thông tin cá nhân/.test(text))
     || /personal details|personal information|chi tiết cá nhân|thông tin cá nhân/.test(bodyText))
@@ -273,6 +274,15 @@ const controls = Array.from(document.querySelectorAll('[role="tab"], a, button, 
   .filter(visible)
   .map((el) => ({ el, label: normalize(el.getAttribute('aria-label') || el.innerText || el.textContent) }))
   .filter(({ label }) => labels.has(label));
+// Page profiles often call the mixed timeline tab "All" instead of "Posts".
+// Treat it as the post feed only on an explicit profile.php?id route so we
+// don't accidentally scan a Page's Featured or Reels tab.
+if (!controls.length && profileRoute) {
+  const allTab = Array.from(document.querySelectorAll('[role="tab"]'))
+    .filter(visible)
+    .find((el) => ['all', 'tất cả'].includes(normalize(el.getAttribute('aria-label') || el.innerText || el.textContent)));
+  if (allTab) controls.push({ el: allTab, label: 'all' });
+}
 if (postsControl && !controls.some(({ el }) => el === postsControl)) {
   controls.unshift({ el: postsControl, label: 'posts' });
 }
@@ -282,11 +292,12 @@ if (!selected && controls[0].el !== postsHeading) {
   controls[0].el.click();
   return { found: true, selected: false, clicked: true, is_profile: isProfile };
 }
-// Scope scanning to the content under Posts, excluding a Page's Featured area.
+// Scope scanning to the content under Posts/All, excluding a Page's Featured area.
 document.querySelectorAll('[data-m8-posts-scope="1"]').forEach((el) => el.removeAttribute('data-m8-posts-scope'));
-if (postsHeading) {
+const activeFeedControl = postsHeading || selected?.el?.closest('[role="tablist"]') || selected?.el;
+if (activeFeedControl) {
   let scope = null;
-  let current = postsHeading;
+  let current = activeFeedControl;
   for (let depth = 0; current && current !== document.body && depth < 12; depth++, current = current.parentElement) {
     const parent = current.parentElement;
     if (!parent) break;
@@ -303,11 +314,12 @@ if (postsHeading) {
   if (scope) scope.setAttribute('data-m8-posts-scope', '1');
 }
 const scoped = Boolean(document.querySelector('[data-m8-posts-scope="1"]'));
-if (postsHeading && !scoped && !isProfile) return { found: false, selected: Boolean(selected), is_profile: isProfile, posts_heading: true };
-return { found: true, selected: Boolean(selected), is_profile: isProfile, posts_heading: Boolean(postsHeading), scoped };
+if (postsHeading && !scoped && !isProfile && !profileRoute) return { found: false, selected: Boolean(selected), is_profile: isProfile, posts_heading: true };
+return { found: true, selected: Boolean(selected), is_profile: isProfile || profileRoute, posts_heading: Boolean(postsHeading), profile_route: profileRoute, scoped };
 """
 
 _OPEN_REELS_TAB_JS = r"""
+const allowClick = arguments[0];
 const visible = (el) => {
   const rect = el.getBoundingClientRect();
   return rect.width > 0 && rect.height > 0 && getComputedStyle(el).visibility !== 'hidden';
@@ -316,21 +328,63 @@ const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim().toLowerCa
 const controls = Array.from(document.querySelectorAll('[role="tab"], a, button, [role="link"], [role="button"]'))
   .filter(visible)
   .map((el) => ({ el, label: normalize(el.getAttribute('aria-label') || el.innerText || el.textContent), href: el.href || '' }))
-  .filter(({ el, label, href }) => /^(reels?|thước phim)$/.test(label)
-    || ((el.getAttribute('role') === 'tab' || el.closest('[role="navigation"]')) && /\/reels?(?:[/?#]|$)/i.test(href)));
+  .filter(({ el, label, href }) => {
+    if (href) {
+      const url = new URL(href, location.href);
+      if (url.origin === location.origin &&
+        (/^\/.+\/reels\/?$/i.test(url.pathname) ||
+          (/^\/(?:profile\.php|reels\/?)$/i.test(url.pathname) &&
+            (url.searchParams.get('sk') === 'reels' || (url.pathname !== '/profile.php' && url.searchParams.has('id')))))) return true;
+    }
+    return /^(reels?|th\u01b0\u1edbc phim)$/.test(label) &&
+      Boolean(el.closest('[role="tablist"]') || el.matches('[role="tab"]'));
+  });
 if (!controls.length) return { found: false };
-const selected = controls.find(({ el }) => el.getAttribute('aria-selected') === 'true' || el.getAttribute('aria-current') === 'page');
-if (!selected) {
+const route = (href) => {
+  const url = new URL(href, location.href);
+  return [url.origin, url.pathname.replace(/\/$/, ''), url.searchParams.get('id'), url.searchParams.get('sk')].join('|');
+};
+const selected = controls.find(({ el, href }) => el.getAttribute('aria-selected') === 'true' ||
+  el.getAttribute('aria-current') === 'page' || (href && route(href) === route(location.href)));
+if (!selected && allowClick) {
   controls[0].el.click();
-  return { found: true, selected: false, clicked: true };
+  return { found: true, selected: false, href: controls[0].href };
 }
+if (!selected) return { found: true, selected: false };
 document.querySelectorAll('[data-m8-posts-scope="1"]').forEach((el) => el.removeAttribute('data-m8-posts-scope'));
 return { found: true, selected: true };
 """
 
-_MARK_BATCH_JS = r"""
+_IS_REELS_ROUTE_JS = r"""
+const expected = new URL(arguments[0], location.href);
+const actual = new URL(location.href);
+if (expected.origin !== actual.origin ||
+  expected.pathname.replace(/\/$/, '') !== actual.pathname.replace(/\/$/, '') ||
+  ['id', 'sk'].some((key) => expected.searchParams.get(key) !== actual.searchParams.get(key))) return false;
+document.querySelectorAll('[data-m8-posts-scope="1"]').forEach((el) => el.removeAttribute('data-m8-posts-scope'));
+return true;
+"""
+
+_REEL_DOM_JS = r"""
+const reelId = (anchor) => {
+  try {
+    const url = new URL(anchor.href || anchor.getAttribute('href'), location.href);
+    if (!/(^|\.)facebook\.com$/i.test(url.hostname)) return '';
+    return url.pathname.match(/^\/reels?\/(\d+|pfbid[0-9a-z]+)\/?$/i)?.[1] || '';
+  } catch {
+    return '';
+  }
+};
+const isExpandReelLink = (anchor) =>
+  /^(m\u1edf r\u1ed9ng|expand|enlarge)$/i.test((anchor.getAttribute('aria-label') || '').trim()) && Boolean(reelId(anchor));
+const REEL_CAPTION_SEL = '[data-testid="reel-caption"], [data-testid="reels-caption"], [data-testid="video-caption"]';
+const REEL_DATE_RE = /^(?:(?:th\u1ee9\s+(?:hai|ba|t\u01b0|n\u0103m|s\u00e1u|b\u1ea3y)|ch\u1ee7 nh\u1eadt),?\s+)?(\d{1,2})\s+th\u00e1ng\s+(\d{1,2}),?\s+(\d{4})\s+l\u00fac\s+(\d{1,2}):(\d{2})$/i;
+"""
+
+_MARK_BATCH_JS = _REEL_DOM_JS + r"""
 const token = arguments[0];
 const maxN = arguments[1] || 12;
+const scanningReels = arguments[2] === 'reels';
 const MESSAGE_SEL = '[data-ad-rendering-role="story_message"], [data-ad-comet-preview="message"], [data-ad-preview="message"]';
 const LINK_RE = /\/posts\/[^/?#]+|\/permalink(?:\.php)?(?:\/[^/?#]+)?(?:[?#]|$)|\/reels?\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)|[?&]story_fbid=/i;
 const isExcludedVideoUrl = (href) => /\/(?:[^/?#]+\/)?videos?\/[^/?#]+(?:[/?#]|$)/i.test(href || '');
@@ -340,32 +394,35 @@ const hasPostLink = (el) => Array.from(el.querySelectorAll('a[href]')).some((a) 
   const href = a.href || a.getAttribute('href') || '';
   return !isExcludedVideoUrl(href) && LINK_RE.test(href);
 });
-const linkRank = (anchor) => {
+const linkRank = (anchor, card) => {
   const href = anchor.href || anchor.getAttribute('href') || '';
+  if (card.contains(anchor) && isExpandReelLink(anchor)) return -1;
   if (/\/posts\/[^/?#]+/i.test(href)) return 0;
   if (/\/permalink(?:\.php)?(?:\/[^/?#]+)?(?:[?#]|$)/i.test(href) || /[?&]story_fbid=/i.test(href)) return 1;
   if (/\/reels?\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)/i.test(href)) return 2;
   return 3;
 };
 const linksForPost = (el) => {
+  if (el.matches('a[href]') && isExpandReelLink(el)) return [el];
+  const expandReelLink = Array.from(el.querySelectorAll('a[href]')).find(isExpandReelLink);
+  if (expandReelLink) return [expandReelLink];
   const links = [];
   let sharedContext = false;
   let root = el;
   for (let depth = 0; root && root !== document.body && depth < 12 && (scanScope === document || scanScope.contains(root)); depth++, root = root.parentElement) {
     if (depth > 0 && topMessageCount(root) > 1) break;
     if (/\bshared post\b|b\u00e0i vi\u1ebft \u0111\u01b0\u1ee3c chia s\u1ebb|\u0111\u00e3 chia s\u1ebb/i.test(root.innerText || root.textContent || '')) sharedContext = true;
-    const anchors = root.querySelectorAll('a[href]');
+    const anchors = root.matches('a[href]') ? [root] : root.querySelectorAll('a[href]');
     if (anchors.length > 64) break;
     for (const anchor of anchors) {
       const href = anchor.href || anchor.getAttribute('href') || '';
       if (!isExcludedVideoUrl(href) && LINK_RE.test(href) && !links.includes(anchor)) links.push(anchor);
     }
   }
-  if (sharedContext && links.length && links.every((anchor) => linkRank(anchor) >= 2)) return [];
-  return links.sort((a, b) => linkRank(a) - linkRank(b));
+  return sharedContext ? links.filter((anchor) => !reelId(anchor)) : links;
 };
 const postKey = (el) => {
-  const links = linksForPost(el).sort((a, b) => linkRank(a) - linkRank(b));
+  const links = linksForPost(el).sort((a, b) => linkRank(a, el) - linkRank(b, el));
   const isInComment = (anchor) => {
     for (let current = anchor; current && current !== el; current = current.parentElement) {
       const label = [current.getAttribute('aria-label'), current.getAttribute('data-testid'), current.getAttribute('data-pagelet')]
@@ -507,14 +564,40 @@ for (const anchor of scanScope.querySelectorAll(
 )) {
   if (candidates.length >= maxN) break;
   if (!LINK_RE.test(anchor.href || anchor.getAttribute('href') || '') || isCommentLink(anchor)) continue;
+  const reel = reelId(anchor);
+  if (scanningReels && !reel) continue;
+  if (candidates.some((candidate) => candidate.contains(anchor)) || anchor.closest('[data-m8-done], [data-m8-batch]')) continue;
   let current = anchor.parentElement;
+  let bestReelCard = null;
   for (let depth = 0; current && current !== document.body && depth < 24; depth++, current = current.parentElement) {
     if (current.hasAttribute('data-m8-done') || current.hasAttribute('data-m8-batch')) break;
     if (candidates.some((candidate) => candidate.contains(current) || current.contains(candidate))) break;
-    if (!hasPostActions(current)) continue;
-    addCandidate(current);
-    break;
+    const reelLinks = Array.from(current.querySelectorAll('a[href*="/reel/"], a[href*="/reels/"]'))
+      .filter((link) => reelId(link));
+    if (reelLinks.some((link) => reelId(link) !== reel)) break;
+    const multipleMessages = topMessageCount(current) > 1;
+    const hasActions = hasPostActions(current);
+    const hasReelDetails = reel && (
+      current.querySelector(MESSAGE_SEL + ', ' + REEL_CAPTION_SEL) ||
+      Array.from(current.querySelectorAll('div[aria-hidden="true"]'))
+        .some((label) => REEL_DATE_RE.test((label.textContent || '').replace(/\s+/g, ' ').trim())) ||
+      Array.from(current.querySelectorAll('a[aria-label], [title]'))
+        .some((label) => /(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}.*\b\d{4}\b/i.test(label.getAttribute('aria-label') || label.getAttribute('title') || ''))
+    );
+    // A shared post can contain two message roots (outer copy + embedded Reel).
+    // Keep its card when its actions and Reel permalink are in the same wrapper.
+    if ((!multipleMessages || (reel && reelLinks.length > 0 && hasActions)) && (hasActions || hasReelDetails)) {
+      bestReelCard = current;
+    }
+    if (multipleMessages) break;
+    if (current.matches('[role="article"], [data-pagelet*="FeedUnit"]')) {
+      bestReelCard = current;
+      break;
+    }
   }
+  // Capture the enclosing card so caption and date beside the permalink are read together.
+  if (reel && bestReelCard) addCandidate(bestReelCard);
+  else if (reel && (scanningReels || isExpandReelLink(anchor))) addCandidate(anchor);
 }
 
 let marked = 0;
@@ -547,7 +630,7 @@ return {
 """
 
 # Bài riêng cho Module 8: không đọc số lượng tương tác và không lấy text tổng hợp cả article.
-_READ_POST_BATCH_JS = r"""
+_READ_POST_BATCH_JS = _REEL_DOM_JS + r"""
 const selector = arguments[0];
 const MESSAGE_SEL = '[data-ad-rendering-role="story_message"], [data-ad-comet-preview="message"], [data-ad-preview="message"]';
 const result = [];
@@ -559,30 +642,44 @@ const topMessageCount = (root) => Array.from(root.querySelectorAll(MESSAGE_SEL))
 }).length;
 const normalize = (value) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 const cleanTimeText = (value) => normalize(value).replace(/[\u034f\u200b-\u200f\u2060\ufeff]/g, '');
-const isTimeLabel = (value) => /just\s*now|yesterday|ago|h\u00f4m\s*qua|tr\u01b0\u1edbc|\d+\s*(?:minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|months?|years?|y|ph\u00fat|gi\u1edd|ng\u00e0y|tu\u1ea7n|th\u00e1ng|n\u0103m)(?=\s|$|[^a-z])|th\u00e1ng\s*\d|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|january|february|march|april|may|june|july|august|september|october|november|december|\bjan\b|\bfeb\b|\bmar\b|\bapr\b|\bjun\b|\bjul\b|\baug\b|\bsep\b|\boct\b|\bnov\b|\bdec\b/i.test(value || '');
-const isCommentLink = (anchor, postNode) => {
-  if (anchor.closest('[role="navigation"]')) return true;
-  for (let current = anchor; current && current !== postNode; current = current.parentElement) {
+const isTimeLabel = (value) => /just\s*now|yesterday|ago|h\u00f4m\s*qua|tr\u01b0\u1edbc|\d+\s*(?:minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|months?|years?|y|ph\u00fat|gi\u1edd|ng\u00e0y|tu\u1ea7n|th\u00e1ng|n\u0103m)(?=\s|$|[^a-z])|th\u00e1ng\s*\d|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2}(?:,?\s+\d{4})?/i.test(value || '');
+const isCommentElement = (element, postNode) => {
+  if (element?.closest('[role="navigation"]')) return true;
+  for (let current = element; current; current = current.parentElement) {
     const label = [current.getAttribute('aria-label'), current.getAttribute('data-testid'), current.getAttribute('data-pagelet')]
       .filter(Boolean).join(' ').toLowerCase();
     if (/comment|bình luận|phản hồi|reply/.test(label)) return true;
+    if (current === postNode) break;
   }
   return false;
 };
+const isCommentLink = (anchor, postNode) => isCommentElement(anchor, postNode);
 
 const postNodes = Array.from(document.querySelectorAll(selector));
 for (const [candidateIndex, node] of postNodes.entries()) {
+  const markerKey = node.getAttribute('data-m8-post-key') || '';
+  const isReel = /^\/reels?\/[^/?#]+/i.test(markerKey);
+  const linkOnlyReel = isReel && node.matches('a[href]');
+  const reelDomLink = isReel
+    ? (linkOnlyReel ? node : Array.from(node.querySelectorAll('a[href]')).find(isExpandReelLink) || null)
+    : null;
   // Trích xuất CHÍNH XÁC nội dung bài viết qua element [data-ad-comet-preview="message"] / [data-ad-preview="message"] / [data-ad-rendering-role="story_message"]
   // Tuyệt đối KHÔNG đọc nhầm bình luận (bình luận không có các data-ad-* marker này).
   let content = '';
+  const isEmojiAlt = (value) => /^[\p{Extended_Pictographic}\p{Emoji_Component}\uFE0F\u200D\s]+$/u.test(value || '');
   const readCaptionLine = (el) => {
     const copy = el.cloneNode(true);
     // Bỏ nút "Xem thêm" / "See more"
     copy.querySelectorAll('[role="button"], button').forEach((button) => button.remove());
     // Giữ xuống dòng từ <br>
     copy.querySelectorAll('br').forEach((br) => br.replaceWith(document.createTextNode('\n')));
-    // Thay emoji <img> bằng ký tự alt thật
-    copy.querySelectorAll('img[alt]').forEach((img) => img.replaceWith(document.createTextNode(img.getAttribute('alt') || '')));
+    // Keep Facebook-rendered emoji, but never use image accessibility
+    // descriptions such as "May be an image of text" as post content.
+    copy.querySelectorAll('img[alt]').forEach((img) => {
+      const alt = (img.getAttribute('alt') || '').trim();
+      if (isEmojiAlt(alt)) img.replaceWith(document.createTextNode(alt));
+      else img.remove();
+    });
     return (copy.textContent || '').replace(/\u00a0/g, ' ').replace(/[ \t]+/g, ' ').trim();
   };
 
@@ -590,7 +687,9 @@ for (const [candidateIndex, node] of postNodes.entries()) {
   const messageRoot = node.querySelector(`[data-m8-message-root="${node.getAttribute('data-m8-batch')}"]`) ||
     node.querySelector('[data-ad-rendering-role="story_message"]') ||
     node.querySelector('[data-ad-comet-preview="message"]') ||
-    node.querySelector('[data-ad-preview="message"]');
+    node.querySelector('[data-ad-preview="message"]') ||
+    (isReel && Array.from(node.querySelectorAll(REEL_CAPTION_SEL))
+      .find((caption) => !isCommentLink(caption, node)));
 
   if (messageRoot) {
     // Ưu tiên 1: Lấy các div[dir="auto"] bên trong x126k92a (cấu trúc chuẩn của bài viết Facebook Comet)
@@ -621,11 +720,20 @@ for (const [candidateIndex, node] of postNodes.entries()) {
     if (!content) {
       content = readCaptionLine(messageRoot);
     }
-
+  } else if (isReel) {
+    // Some Reel layouts omit Facebook's normal message markers. Read visible
+    // leaf text from this Reel card while excluding comments and timestamp labels.
+    const captionNodes = Array.from(node.querySelectorAll('div[dir="auto"], span[dir="auto"]'))
+      .filter((el) => {
+        if (el.querySelector('div[dir="auto"], span[dir="auto"]')) return false;
+        if (isCommentLink(el, node) || el.closest('div[aria-hidden="true"]')) return false;
+        if (el.closest('[role="button"], button')) return false;
+        return normalize(el.innerText || el.textContent) !== '';
+      });
+    content = [...new Set(captionNodes.map(readCaptionLine).filter(Boolean))].join('\n').trim();
   }
 
-  // NẾU KHÔNG CÓ messageRoot -> Bài viết không có text (chỉ có ảnh/video/share bài khác không kèm caption).
-  // Tuyệt đối KHÔNG fallback sang các div[dir="auto"] ngoài messageRoot vì sẽ bắt nhầm bình luận!
+  // Do not fall back to generic dir="auto" elements outside the caption.
 
   const TIME_SELECTOR = 'abbr[data-utime], time[datetime], [data-utime], [datetime], [data-tooltip-content], [data-time], [title], [aria-label], [aria-labelledby], [aria-description]';
   const timeLabelText = (el) => {
@@ -665,7 +773,7 @@ for (const [candidateIndex, node] of postNodes.entries()) {
   };
   const targetPostIdentity = postIdentityOf(node.getAttribute('data-m8-post-key'));
   const matchingPostLinks = [];
-  if (targetPostIdentity) {
+  if (targetPostIdentity && !linkOnlyReel) {
     let root = node;
     for (let depth = 0; root && root !== document.body && depth < 12; depth++, root = root.parentElement) {
       const anchors = root.querySelectorAll('a[href]');
@@ -684,10 +792,11 @@ for (const [candidateIndex, node] of postNodes.entries()) {
   // Read the post's visible/accessible date before inspecting or resolving its
   // permalink. Facebook may put the label inside the permalink or beside it in
   // a header wrapper, so only inspect links that match this post's stored ID.
-  const permalinkTimeNodes = matchingPostLinks.flatMap((anchor) => {
+  const timeLinks = matchingPostLinks.length ? matchingPostLinks : (reelDomLink ? [reelDomLink] : []);
+  const permalinkTimeNodes = timeLinks.flatMap((anchor) => {
     const nodes = [anchor, ...anchor.querySelectorAll(TIME_SELECTOR)];
     let header = anchor.parentElement;
-    for (let depth = 0; header && depth < 5; depth++, header = header.parentElement) {
+    for (let depth = 0; header && depth < 16; depth++, header = header.parentElement) {
       if (header.querySelectorAll('a[href]').length > 8) break;
       if (header.matches(TIME_SELECTOR)) nodes.push(header);
       nodes.push(...header.querySelectorAll(TIME_SELECTOR));
@@ -695,20 +804,79 @@ for (const [candidateIndex, node] of postNodes.entries()) {
     return nodes;
   });
   const orderedTimeNodes = [...permalinkTimeNodes, ...node.querySelectorAll(TIME_SELECTOR)];
-  const uniqueTimeNodes = [...new Set(orderedTimeNodes)];
+  const uniqueTimeNodes = [...new Set(orderedTimeNodes)].filter((el) => !isCommentElement(el, node));
   // Prefer the readable timestamp attached to this post's exact permalink.
   // Cards can contain an embedded Reel/share with its own data-utime, which
   // must not override the outer post's visible date label.
-  const permalinkDateNode = permalinkTimeNodes.find((el) => isTimeLabel(timeLabelText(el)));
-  const permalinkTimestampNode = permalinkTimeNodes.find((el) => el.hasAttribute('data-utime') || el.hasAttribute('datetime'));
+  const permalinkDateNode = permalinkTimeNodes.find((el) => !isCommentElement(el, node) && isTimeLabel(timeLabelText(el)));
+  const permalinkTimestampNode = permalinkTimeNodes.find((el) => !isCommentElement(el, node) && (el.hasAttribute('data-utime') || el.hasAttribute('datetime')));
   const cardTimestampNode = Array.from(node.querySelectorAll(TIME_SELECTOR))
-    .find((el) => el.hasAttribute('data-utime') || el.hasAttribute('datetime'));
+    .find((el) => !isCommentElement(el, node) && (el.hasAttribute('data-utime') || el.hasAttribute('datetime')));
+  // Facebook may put the exact published date in an aria-hidden div instead
+  // of the permalink's accessible label. Prefer that text verbatim, including
+  // its Vietnamese weekday and time. Ignore dates inside comment cards.
+  let reelDateText = '';
+  const hiddenDateText = (label, scope = node) => {
+    if (!label?.matches('div[aria-hidden="true"]') || isCommentElement(label, scope)) return '';
+    const value = cleanTimeText(label.textContent);
+    return REEL_DATE_RE.test(value) ? value : '';
+  };
+  const linkedLabels = permalinkTimeNodes.flatMap((el) =>
+    ['aria-labelledby', 'aria-describedby', 'aria-details'].flatMap((attr) =>
+      (el.getAttribute(attr) || '').split(/\s+/).filter(Boolean)
+        .map((id) => document.getElementById(id))
+    )
+  );
+  const referencedDates = new Set(linkedLabels.map(hiddenDateText).filter(Boolean));
+  const cardDates = new Set(Array.from(node.querySelectorAll('div[aria-hidden="true"]'), (label) => hiddenDateText(label, node)).filter(Boolean));
+  // The readable Reel timestamp is sometimes rendered beside its permalink in
+  // the post header, just outside the message node marked by the batch scan.
+  // Walk upward from that Reel's own Enlarge link and stop at the post boundary
+  // so a neighboring post or a comment date cannot be mistaken for its date.
+  const dateDomLink = reelDomLink || matchingPostLinks[0] || null;
+  if (dateDomLink && !referencedDates.size && !cardDates.size) {
+    let scope = dateDomLink.parentElement;
+    for (let depth = 0; scope && scope !== document.body && depth < 20; depth++, scope = scope.parentElement) {
+      if (scope.querySelectorAll('a[href]').length > 128) break;
+      const dateLabels = Array.from(scope.querySelectorAll('div[aria-hidden="true"]'))
+        .map((label) => ({ label, value: hiddenDateText(label, scope) }))
+        .filter((entry) => entry.value);
+      if (dateLabels.length) {
+        const distance = (left, right) => {
+          const ancestors = new Map();
+          let current = left;
+          for (let depth = 0; current; depth++, current = current.parentElement) ancestors.set(current, depth);
+          current = right;
+          for (let depth = 0; current; depth++, current = current.parentElement) {
+            if (ancestors.has(current)) return ancestors.get(current) + depth;
+          }
+          return Number.MAX_SAFE_INTEGER;
+        };
+        dateLabels.sort((a, b) => distance(a.label, dateDomLink) - distance(b.label, dateDomLink));
+        cardDates.add(dateLabels[0].value);
+        break;
+      }
+    }
+  }
+  if (referencedDates.size === 1) reelDateText = [...referencedDates][0];
+  else if (referencedDates.size === 0 && cardDates.size === 1) reelDateText = [...cardDates][0];
   const timeNode = permalinkDateNode || permalinkTimestampNode || cardTimestampNode ||
     uniqueTimeNodes.find((el) => isTimeLabel(timeLabelText(el)));
   const utimeRaw = timeNode?.getAttribute('data-utime') || timeNode?.closest('[data-utime]')?.getAttribute('data-utime') || timeNode?.querySelector('[data-utime]')?.getAttribute('data-utime');
   const utime = Number(utimeRaw);
   const rawTimeText = timeNode ? timeLabelText(timeNode) : '';
-  let publishedDate = timeNode?.getAttribute('datetime') ? new Date(timeNode.getAttribute('datetime')) : null;
+  const fullReelDate = reelDateText.match(REEL_DATE_RE);
+  let publishedDate = null;
+  if (fullReelDate) {
+    const [, day, month, year, hour, minute] = fullReelDate.map(Number);
+    const date = new Date(year, month - 1, day, hour, minute);
+    if (date.getDate() === day && date.getMonth() === month - 1 && hour < 24 && minute < 60) {
+      publishedDate = date;
+    }
+  }
+  if (!publishedDate && timeNode?.getAttribute('datetime')) {
+    publishedDate = new Date(timeNode.getAttribute('datetime'));
+  }
   if (!(publishedDate instanceof Date) || Number.isNaN(publishedDate.getTime())) publishedDate = null;
   if (!publishedDate && Number.isFinite(utime) && utime > 0) publishedDate = new Date(utime * 1000);
   if (!publishedDate) {
@@ -716,6 +884,7 @@ for (const [candidateIndex, node] of postNodes.entries()) {
     // absolute date, not "23 months ago".
     const vietnameseDate = rawTimeText.match(/\b(\d{1,2})\s+th\u00e1ng\s+(\d{1,2})(?:[,\s]+(\d{4}))?/i);
     const numericDate = rawTimeText.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b/);
+    const englishDateTime = rawTimeText.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:,?\s+(\d{4}))?\s+at\s+(\d{1,2}):(\d{2})\s*(am|pm)\b/i);
     const englishDate = rawTimeText.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:,?\s+(\d{4}))?\b/i);
     if (vietnameseDate) {
       const year = Number(vietnameseDate[3] || new Date().getFullYear());
@@ -723,6 +892,13 @@ for (const [candidateIndex, node] of postNodes.entries()) {
     } else if (numericDate) {
       const year = Number(numericDate[3].length === 2 ? `20${numericDate[3]}` : numericDate[3]);
       publishedDate = new Date(year, Number(numericDate[2]) - 1, Number(numericDate[1]));
+    } else if (englishDateTime) {
+      const [, month, day, yearText, hourText, minuteText, meridiem] = englishDateTime;
+      const year = yearText || String(new Date().getFullYear());
+      publishedDate = new Date(`${month} ${day} ${year}`);
+      let hour = Number(hourText) % 12;
+      if (meridiem.toLowerCase() === 'pm') hour += 12;
+      publishedDate.setHours(hour, Number(minuteText), 0, 0);
     } else if (englishDate) {
       publishedDate = new Date(`${englishDate[1]} ${englishDate[2]} ${englishDate[3] || new Date().getFullYear()}`);
     } else if (rawTimeText) {
@@ -730,8 +906,8 @@ for (const [candidateIndex, node] of postNodes.entries()) {
       if (!Number.isNaN(parsed.getTime())) publishedDate = parsed;
     }
   }
+  const relative = rawTimeText.match(/(just\s*now|yesterday|h\u00f4m\s*qua|an?\s+(?:minute|hour|day|week|month|year)s?\s+ago|\d+\s*(?:minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|months?|years?|y|ph\u00fat|gi\u1edd|ng\u00e0y|tu\u1ea7n|th\u00e1ng|n\u0103m)(?:\s*(?:ago|tr\u01b0\u1edbc))?)(?=\s|$|[^a-z])/i);
   if (!publishedDate) {
-    const relative = rawTimeText.match(/(just\s*now|yesterday|h\u00f4m\s*qua|an?\s+(?:minute|hour|day|week|month|year)s?\s+ago|\d+\s*(?:minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|months?|years?|y|ph\u00fat|gi\u1edd|ng\u00e0y|tu\u1ea7n|th\u00e1ng|n\u0103m)(?=\s|$|[^a-z]))/i);
     if (relative) {
       const label = relative[0].toLowerCase();
       const amount = Number(label.match(/\d+/)?.[0] || (/^an?\s/.test(label) ? 1 : 0));
@@ -747,17 +923,55 @@ for (const [candidateIndex, node] of postNodes.entries()) {
     }
   }
   // Facebook labels sometimes omit the year; a future date without an explicit year is last year.
-  if (publishedDate && !/\b\d{4}\b/.test(rawTimeText) && publishedDate > new Date()) {
+  if (publishedDate && !fullReelDate && !/\b\d{4}\b/.test(rawTimeText) && publishedDate > new Date()) {
     publishedDate.setFullYear(publishedDate.getFullYear() - 1);
   }
   const publishedAt = publishedDate ? publishedDate.toISOString() : null;
-  const publishedText = publishedDate
-    ? `${String(publishedDate.getDate()).padStart(2, '0')}-${String(publishedDate.getMonth() + 1).padStart(2, '0')}-${publishedDate.getFullYear()}`
-    : null;
+  const formatVietnameseRelative = (value) => {
+    const raw = String(value || '').trim();
+    if (/h\u00f4m\s*qua|tr\u01b0\u1edbc|ph\u00fat|gi\u1edd|ng\u00e0y|tu\u1ea7n|th\u00e1ng|n\u0103m/i.test(raw)) return raw;
+    if (/^just\s*now$/i.test(raw)) return 'V\u1eeba xong';
+    if (/^yesterday$/i.test(raw)) return 'H\u00f4m qua';
+    const match = raw.match(/^(a|an|\d+)\s*(minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|months?|years?|y)(?:\s*ago)?$/i);
+    if (!match) return raw;
+    const amount = /^(?:a|an)$/i.test(match[1]) ? 1 : Number(match[1]);
+    const unit = /^(?:minutes?|mins?|m)$/i.test(match[2]) ? 'ph\u00fat'
+      : /^(?:hours?|hrs?|h)$/i.test(match[2]) ? 'gi\u1edd'
+        : /^(?:days?|d)$/i.test(match[2]) ? 'ng\u00e0y'
+          : /^(?:weeks?|w)$/i.test(match[2]) ? 'tu\u1ea7n'
+            : /^months?$/i.test(match[2]) ? 'th\u00e1ng' : 'n\u0103m';
+    return `${amount} ${unit} tr\u01b0\u1edbc`;
+  };
+  const formatVietnameseDate = (date, includeTime) => {
+    const options = {
+      timeZone: 'Asia/Ho_Chi_Minh', weekday: 'long', day: 'numeric', month: 'numeric', year: 'numeric',
+    };
+    if (includeTime) Object.assign(options, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    const parts = new Intl.DateTimeFormat('vi-VN', options).formatToParts(date);
+    const part = (type) => parts.find((entry) => entry.type === type)?.value || '';
+    const weekday = part('weekday');
+    const capitalizedWeekday = weekday ? weekday[0].toLocaleUpperCase('vi-VN') + weekday.slice(1) : '';
+    const dateText = `${capitalizedWeekday ? `${capitalizedWeekday}, ` : ''}${part('day')} Tháng ${part('month')}, ${part('year')}`;
+    return includeTime ? `${dateText} lúc ${part('hour')}:${part('minute')}` : dateText;
+  };
+  const vietnameseSourceText = reelDateText || rawTimeText;
+  const isVietnameseSourceText = /(?:\bthứ\s|\bchủ nhật\b|\btháng\b|\blúc\b|\bhôm qua\b|\btrước\b)/i.test(vietnameseSourceText);
+  const hasExactTime = Boolean(fullReelDate) || /(?:\b(?:at|lúc)\b[^\n]*\d{1,2}:\d{2}|\d{1,2}:\d{2}\s*(?:am|pm)?)/i.test(rawTimeText) ||
+    /T\d{2}:\d{2}/.test(timeNode?.getAttribute('datetime') || '') || (Number.isFinite(utime) && utime > 0);
+  const publishedText = fullReelDate
+    ? reelDateText
+    : relative
+      ? formatVietnameseRelative(relative[0])
+      : isVietnameseSourceText
+        ? vietnameseSourceText
+        : publishedDate
+          ? formatVietnameseDate(publishedDate, hasExactTime)
+          : rawTimeText || null;
 
   // Resolve the final post URL last, after caption and publish date are read.
   const linkRank = (anchor) => {
     const href = anchor.href || anchor.getAttribute('href') || '';
+    if (node.contains(anchor) && isExpandReelLink(anchor)) return -1;
     if (/\/posts\/[^/?#]+/i.test(href)) return 0;
     if (/\/permalink(?:\.php)?(?:\/[^/?#]+)?(?:[?#]|$)/i.test(href) || /[?&]story_fbid=/i.test(href)) return 1;
     if (/\/reels?\/(?:\d+|pfbid[0-9a-z]+)(?:[/?#]|$)/i.test(href)) return 2;
@@ -765,14 +979,15 @@ for (const [candidateIndex, node] of postNodes.entries()) {
   };
   // A feed card may contain both its own /posts/pfbid... permalink and a
   // shared Reel's /reel/... URL. Collect links in the bounded post wrapper and
-  // prefer the outer post permalink; media links are a fallback for standalone Reels.
+  // prefer Expand for standalone Reels and keep the outer permalink for shared posts.
   const postLinks = [];
+  const expandReelLink = reelDomLink;
   let sharedContext = false;
   let linkRoot = node;
   for (let depth = 0; linkRoot && linkRoot !== document.body && depth < 12; depth++, linkRoot = linkRoot.parentElement) {
     if (depth > 0 && topMessageCount(linkRoot) > 1) break;
     if (/\bshared post\b|b\u00e0i vi\u1ebft \u0111\u01b0\u1ee3c chia s\u1ebb|\u0111\u00e3 chia s\u1ebb/i.test(linkRoot.innerText || linkRoot.textContent || '')) sharedContext = true;
-    const anchors = linkRoot.querySelectorAll('a[href]');
+    const anchors = linkRoot.matches('a[href]') ? [linkRoot] : linkRoot.querySelectorAll('a[href]');
     if (anchors.length > 64) break;
     for (const anchor of anchors) {
       const href = anchor.href || anchor.getAttribute('href') || '';
@@ -781,10 +996,9 @@ for (const [candidateIndex, node] of postNodes.entries()) {
         && !isCommentLink(anchor, linkRoot) && !postLinks.includes(anchor)) postLinks.push(anchor);
     }
   }
-  const outerPostLinks = sharedContext ? postLinks.filter((anchor) => linkRank(anchor) < 2) : postLinks;
+  const outerPostLinks = sharedContext ? postLinks.filter((anchor) => !reelId(anchor)) : postLinks;
   outerPostLinks.sort((a, b) => linkRank(a) - linkRank(b));
-  const postLink = outerPostLinks[0];
-  const markerKey = node.getAttribute('data-m8-post-key') || '';
+  const postLink = linkOnlyReel ? node : expandReelLink || outerPostLinks[0];
   let markerUrl = '';
   try { if (markerKey) markerUrl = new URL(markerKey, location.href).href; } catch {}
   const postUrl = postLink ? (postLink.href || postLink.getAttribute('href') || '') : markerUrl;
@@ -818,7 +1032,7 @@ for (const message of document.querySelectorAll('[data-m8-message-root="' + toke
 }
 for (const [index, el] of Array.from(document.querySelectorAll('[data-m8-batch="' + token + '"]')).entries()) {
   el.removeAttribute('data-m8-batch');
-  if (pendingIndexes.has(index)) {
+  if (pendingIndexes.has(index) && !el.matches('a[href]')) {
     const retries = Number(el.getAttribute('data-m8-pending-retries') || '0');
     el.setAttribute('data-m8-pending-retries', String(retries + 1));
     el.removeAttribute('data-m8-done');
@@ -1060,12 +1274,17 @@ def _select_posts_tab(driver, stop: threading.Event) -> bool:
 def _select_reels_tab(driver, stop: threading.Event) -> bool:
     """Open the dedicated Reels feed when Facebook exposes one on the source."""
     try:
-        state = driver.execute_script(_OPEN_REELS_TAB_JS) or {}
-        if state.get("clicked"):
-            if stop.wait(1.5):
+        state = driver.execute_script(_OPEN_REELS_TAB_JS, True) or {}
+        if not state.get("found"):
+            return False
+        href = state.get("href")
+        for _ in range(12):
+            if state.get("selected") or (href and driver.execute_script(_IS_REELS_ROUTE_JS, href)):
+                return True
+            if stop.wait(0.5):
                 return False
-            state = driver.execute_script(_OPEN_REELS_TAB_JS) or {}
-        return bool(state.get("found") and state.get("selected"))
+            state = driver.execute_script(_OPEN_REELS_TAB_JS, False) or {}
+        return bool(state.get("selected"))
     except Exception as exc:
         logger.debug("Unable to select Facebook Reels tab: %s", exc)
         return False
@@ -1153,17 +1372,19 @@ def _run_fetch_job(
             status, reason = "STOPPED", "USER_STOPPED"
             return
 
+        feed_tabs = ("posts",)
         if not _select_posts_tab(driver, stop):
-            error = "Không tìm thấy mục Bài viết trên trang nguồn; đã dừng để tránh quét mục Đáng chú ý."
-            reason = "POSTS_TAB_NOT_FOUND"
-            return
+            if not stop.is_set():
+                error = "Không tìm thấy luồng Bài viết/All trên trang nguồn; đã dừng để tránh quét nhầm tab Reels hoặc mục Đáng chú ý."
+                reason = "POSTS_TAB_NOT_FOUND"
+                return
 
         name = _source_name(driver)
         if name:
             _update_job(job_id, source_name=name)
         log("info", f"Bắt đầu cuộn feed{(' của ' + name) if name else ''} — lấy tới khi hết bài hoặc bấm Dừng.")
 
-        for feed_tab in ("posts", "reels"):
+        for feed_tab in feed_tabs:
             rounds = idle = errors = 0
             seen_candidate_signatures: set[str] = set()
             unresolved_cards: Dict[str, Dict[str, Any]] = {}
@@ -1180,7 +1401,7 @@ def _run_fetch_job(
                 batch = f"b{rounds}"
                 marked = 0
                 try:
-                    info = driver.execute_script(_MARK_BATCH_JS, batch, BATCH_SIZE) or {}
+                    info = driver.execute_script(_MARK_BATCH_JS, batch, BATCH_SIZE, feed_tab) or {}
                     marked = int(info.get("marked") or 0)
                     height = int(info.get("height") or 0)
                     candidate_signatures = {
@@ -1217,11 +1438,18 @@ def _run_fetch_job(
                                 if previous is None:
                                     posts_by_identity[key] = refreshed
                                     continue
+                                if not previous.get("post_url") and refreshed.get("post_url"):
+                                    previous["post_url"] = refreshed["post_url"]
                                 if not previous.get("published_at") and refreshed.get("published_at"):
                                     previous["published_at"] = refreshed["published_at"]
                                     previous["published_text"] = refreshed.get("published_text")
-                                if len(refreshed.get("content") or "") > len(previous.get("content") or ""):
-                                    previous["content"] = refreshed["content"]
+                                refreshed_content = refreshed.get("content") or ""
+                                previous_content = previous.get("content") or ""
+                                empty_caption = "Bài viết không có nội dung"
+                                if refreshed_content and refreshed_content != empty_caption and (
+                                    previous_content == empty_caption or len(refreshed_content) > len(previous_content)
+                                ):
+                                    previous["content"] = refreshed_content
                                 if not previous.get("post_type") and refreshed.get("post_type"):
                                     previous["post_type"] = refreshed["post_type"]
                             posts = list(posts_by_identity.values())
@@ -1398,13 +1626,6 @@ def _run_fetch_job(
                 bottom_blocked_last_round = bool(scroll_info.get("at_bottom") and not scroll_info.get("moved"))
             else:
                 status, reason = "STOPPED", "USER_STOPPED"
-            can_continue_to_reels = feed_tab == "posts" and not stop.is_set() and (reason == "END_OF_FEED" or reason == "END_OF_FEED_WITH_MISSING_DATES" or reason == "INCOMPLETE_POST_DATA")
-            if can_continue_to_reels:
-                previous_phase = (status, reason, error)
-                if _select_reels_tab(driver, stop):
-                    status, reason, error = "FAILED", "ERROR", None
-                    continue
-                status, reason, error = previous_phase
             break
     except Exception as exc:
         logger.exception(f"[SeedingFetch #{job_id}] lỗi: {exc}")

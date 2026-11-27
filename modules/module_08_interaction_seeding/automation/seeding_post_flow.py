@@ -702,7 +702,8 @@ class PostSeedingFlow:
                 """
                     const button = (() => {""" + PostLocators.JS_FIND_SHARE_BUTTON + """})();
                     const label = (button?.getAttribute('aria-label') || '').trim();
-                    const match = label.match(/^share,\\s*(\\d+)\\s+shares?$/i);
+                    const match = label.match(/^share,\\s*(\\d+)\\s+shares?$/i) ||
+                                  label.match(/^chia sẻ,\\s*(\\d+)\\s+lượt chia sẻ$/i);
                     return match ? Number(match[1]) : null;
                 """
             )
@@ -958,12 +959,13 @@ class PostSeedingFlow:
             share_confirmation_js = """
                 const button = (() => {""" + PostLocators.JS_FIND_SHARE_BUTTON + """})();
                 const label = (button?.getAttribute('aria-label') || '').trim();
-                const match = label.match(/^share,\\s*(\\d+)\\s+shares?$/i);
+                const match = label.match(/^share,\\s*(\\d+)\\s+shares?$/i) ||
+                              label.match(/^chia sẻ,\\s*(\\d+)\\s+lượt chia sẻ$/i);
                 const notices = Array.from(document.querySelectorAll('[role="alert"], [aria-live]'))
                     .map((el) => (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase());
                 return {
                     shareCount: match ? Number(match[1]) : null,
-                    successNotice: notices.some((text) => /shared successfully|your post was shared|post has been shared/.test(text)),
+                    successNotice: notices.some((text) => /shared successfully|your post (?:was|has been) shared|post has been shared|đã chia sẻ|chia sẻ thành công|bài viết.*được chia sẻ/.test(text)),
                 };
             """
             share_confirmed = False

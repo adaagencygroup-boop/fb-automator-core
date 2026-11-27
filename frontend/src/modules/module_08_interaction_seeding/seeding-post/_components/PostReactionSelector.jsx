@@ -341,11 +341,7 @@ export default function PostReactionSelector({
                         <Check className="size-2.5 stroke-[3]" aria-hidden="true" />
                       </span>
                     )}
-                    <span
-                      className={`pointer-events-none transition-transform duration-150 group-hover:scale-110 ${
-                        isSelected ? "" : "opacity-50 grayscale"
-                      }`}
-                    >
+                    <span className="pointer-events-none transition-transform duration-150 group-hover:scale-110">
                       <IconComp className="size-9" />
                     </span>
                     <span className="text-xs font-semibold">{r.label}</span>
