@@ -19,6 +19,7 @@ lưu tại <thư mục gốc>/<tên tài khoản>/<số>/<id>.mp4 để trang Đ
   GET  /api/post/tiktok/status        Tiến độ, bảng video (phân trang) và log
   GET  /api/post/tiktok/history       Video đã tải của người đang đăng nhập (lọc + phân trang)
   POST /api/post/tiktok/history/{id}/open  Mở thư mục chứa video trên máy
+  POST /api/post/tiktok/videos/{video_id}/open?target=folder|caption  Mở thư mục lưu / file caption trong bảng kết quả quét
 """
 import glob
 import json
@@ -537,6 +538,22 @@ def history(
     }
 
 
+def _reveal_in_os(path: str) -> None:
+    """Mở thư mục chứa file và chọn sẵn file đó (Explorer / Finder / trình quản lý file)."""
+    if sys.platform == "win32":
+        subprocess.Popen(f'explorer /select,"{path}"')
+    else:
+        subprocess.Popen(["open", "-R", path] if sys.platform == "darwin" else ["xdg-open", os.path.dirname(path)])
+
+
+def _open_in_os(path: str) -> None:
+    """Mở thư mục, hoặc mở file bằng ứng dụng mặc định (file .txt → Notepad...)."""
+    if sys.platform == "win32":
+        os.startfile(path)  # noqa: S606 — chỉ đường dẫn do engine tự tra, không nhận từ client
+    else:
+        subprocess.Popen(["open", path] if sys.platform == "darwin" else ["xdg-open", path])
+
+
 @router.post("/history/{record_id}/open")
 def open_history_folder(record_id: int):
     row = db.fetch_one(
@@ -546,8 +563,31 @@ def open_history_folder(record_id: int):
     path = os.path.normpath(row["file_path"])
     if not os.path.isfile(path):
         raise HTTPException(404, "Video không còn trên máy này (đã xóa, di chuyển hoặc tải ở máy khác).")
-    if sys.platform == "win32":
-        subprocess.Popen(f'explorer /select,"{path}"')
-    else:
-        subprocess.Popen(["open", "-R", path] if sys.platform == "darwin" else ["xdg-open", os.path.dirname(path)])
+    _reveal_in_os(path)
     return {"success": True}
+
+
+@router.post("/videos/{video_id}/open")
+def open_scanned_video_item(video_id: str, target: str = Query("folder", pattern="^(folder|caption)$")):
+    """Mở thư mục lưu / file caption .txt của một video trong bảng kết quả quét hiện tại.
+
+    Chỉ nhận id video; đường dẫn do engine tự tra trong phiên quét của chính người dùng (không mở đường dẫn tùy ý).
+    """
+    job = _jobs.get(_owner())
+    video = next((v for v in (job.videos if job else []) if str(v.get("id")) == video_id), None)
+    if not video:
+        raise HTTPException(404, "Không tìm thấy video trong phiên quét hiện tại.")
+    folder = os.path.normpath(str(video.get("folder") or ""))
+    if target == "caption":
+        name = str(video.get("captionFile") or "")
+        if not name:
+            raise HTTPException(409, "File caption chưa được tạo.")
+        path = os.path.join(folder, name)
+        if not os.path.isfile(path):
+            raise HTTPException(404, "File caption không còn trên máy này (đã xóa hoặc di chuyển).")
+        _open_in_os(path)
+        return {"success": True, "path": path}
+    if not folder or not os.path.isdir(folder):
+        raise HTTPException(404, "Thư mục chưa được tạo hoặc không còn trên máy này.")
+    _open_in_os(folder)
+    return {"success": True, "path": folder}

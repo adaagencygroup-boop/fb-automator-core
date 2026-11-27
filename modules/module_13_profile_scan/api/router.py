@@ -75,6 +75,8 @@ class MembersIn(BaseModel):
 
 class MoveIn(MembersIn):
     to_key: str = Field(..., max_length=255)
+    # True: chuyển hẳn — bỏ profile khỏi các danh mục khác đang chứa (sau khi người dùng xác nhận cảnh báo trùng)
+    exclusive: bool = False
 
 
 def _session_or_404(session_id: int) -> Dict[str, Any]:
@@ -342,6 +344,8 @@ def _require_collection(key: str) -> None:
 def move_members(body: MoveIn):
     _require_collection(body.key)
     _require_category(body.to_key)
+    if body.exclusive:
+        models.remove_from_categories(_owner(), body.uids, [body.to_key, body.key])
     if body.key.startswith("category:"):
         models.move_profiles(_owner(), body.key, body.to_key, body.uids)
     else:

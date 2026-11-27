@@ -11,6 +11,7 @@ Cung cấp các API:
 """
 import os
 import re
+import sys
 import random
 import logging
 import mimetypes
@@ -841,8 +842,11 @@ if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
     Write-Output $f.FileName
 }}
 """
-        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script]
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-STA", "-Command", ps_script]
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8",
+            creationflags=_CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
         out = proc.stdout.strip()
         if out and os.path.exists(out):
             return os.path.normpath(out)
@@ -851,8 +855,47 @@ if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
     return ""
 
 
+_FOLDER_DIALOG_TITLE = "Chọn thư mục chứa video"
+_CREATE_NO_WINDOW = 0x08000000  # chạy PowerShell không bật cửa sổ console xanh
+
+
+def _modern_folder_dialog_win32() -> str:
+    """Hộp chọn thư mục kiểu Explorer (IFileOpenDialog qua COM) — gọn, có thanh địa chỉ / tìm kiếm.
+    Chạy trên thread riêng để COM có apartment STA sạch, không đụng thread pool của FastAPI."""
+    import threading
+    from modules.module_05_page_manager.picker_helper import pick_folder_win32
+
+    result = {"path": "", "error": None}
+
+    def run():
+        try:
+            result["path"] = pick_folder_win32("", _FOLDER_DIALOG_TITLE) or ""
+        except Exception as e:  # noqa: BLE001
+            result["error"] = e
+
+    t = threading.Thread(target=run, name="folder-dialog", daemon=True)
+    t.start()
+    t.join()
+    if result["error"]:
+        raise result["error"]
+    path = result["path"]
+    return os.path.normpath(path) if path and os.path.isdir(path) else ""
+
+
 def _native_folder_dialog() -> str:
-    """Mở hộp thoại chọn thư mục native trên Windows (Tkinter / PowerShell fallback)."""
+    """Mở hộp thoại chọn thư mục native. Windows: hộp kiểu Explorer, lỗi thì lùi về PowerShell ẩn console."""
+    if sys.platform == "win32":
+        try:
+            return _modern_folder_dialog_win32()
+        except Exception as e:
+            logger.warning(f"Modern folder dialog failed: {e}")
+        try:
+            from modules.module_05_page_manager.picker_helper import pick_folder_powershell
+            return pick_folder_powershell("", _FOLDER_DIALOG_TITLE)
+        except Exception as e:
+            logger.error(f"PowerShell folder dialog failed: {e}")
+        return ""
+
     try:
         import tkinter as tk
         from tkinter import filedialog

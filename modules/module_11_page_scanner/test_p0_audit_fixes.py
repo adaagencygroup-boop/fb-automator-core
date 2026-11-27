@@ -316,5 +316,211 @@ class TestGroupBLocksAndOwners(unittest.TestCase):
         self.assertEqual(resolve_detail_final_status("ERROR", 0, 30), "FAILED")
 
 
+class TestHashtagDetailSync(unittest.TestCase):
+    def test_read_detail_in_verify_tab_matches_paste_link_for_viettel_digital(self):
+        import threading
+        import time
+        from unittest.mock import MagicMock
+        from modules.module_11_page_scanner.scanner import _read_detail_in_verify_tab
+
+        main_header = (
+            "Viettel Digital\n"
+            "13K followers • 15 following\n"
+            "Message\nFollow\nSearch\n"
+            "Tổng Công ty Dịch vụ số Viettel hoạt động chuyên nghiệp trong lĩnh vực Fintech và Big Data.\n"
+            "Information Technology Company\n"
+            " · $$\n"
+            "More\nAll\nAbout\nReels\nPhotos\nFollowers\nMore\n"
+            "Details\n1 review\n$$\nClosing Soon\n"
+            "Keangnam Hanoi Landmark Tower, Phạm Hùng, Mễ Trì, Nam Từ Liêm, Hanoi, Vietnam, 10000\n"
+            "Links\nviettel.vn\nFeatured\n"
+        )
+        main_links = [
+            {"href": "https://l.facebook.com/l.php?u=https%3A%2F%2F360vds.viettel.vn%2F", "text": "viettel.vn"},
+        ]
+        main_panel = [
+            {"section": "details", "heading": "Details", "text": "1 review", "href": "", "icon": "", "row": 1},
+            {"section": "details", "heading": "Details", "text": "$$", "href": "", "icon": "", "row": 1},
+            {"section": "details", "heading": "Details", "text": "Closing Soon", "href": "", "icon": "", "row": 1},
+            {
+                "section": "details",
+                "heading": "Details",
+                "text": "Keangnam Hanoi Landmark Tower, Phạm Hùng, Mễ Trì, Nam Từ Liêm, Hanoi, Vietnam, 10000",
+                "href": "",
+                "icon": "",
+                "row": 1,
+            },
+            {
+                "section": "links",
+                "heading": "Links",
+                "text": "viettel.vn",
+                "href": "https://l.facebook.com/l.php?u=https%3A%2F%2F360vds.viettel.vn%2F",
+                "icon": "",
+                "row": 2,
+            },
+        ]
+        about_page = {
+            "about_text": (
+                "About\nIntro\nCategory\nDetails\nLinks\nContact info\n"
+                "Bio\nTổng Công ty Dịch vụ số Viettel.\n"
+            ),
+            "links": [
+                {"href": "https://www.facebook.com/ViettelDigitalFinance/directory_contact_info", "text": "Contact info"},
+                {"href": "https://www.facebook.com/ViettelDigitalFinance/directory_links", "text": "Links"},
+            ],
+            "panel_items": [],
+            "current_url": "https://www.facebook.com/ViettelDigitalFinance/about",
+        }
+        contact_page = {
+            "about_text": (
+                "About\nIntro\nCategory\nDetails\nLinks\nContact info\n"
+                "Phone\n024 6656 6595\nMobile\n"
+                "Email\ntuyendung.digital@viettel.com.vn\nEmail\n"
+                "Messenger\nViettel Digital\n"
+            ),
+            "links": [
+                {"href": "https://www.facebook.com/messages/t/ViettelDigitalFinance/", "text": "Viettel Digital"},
+            ],
+            "panel_items": [],
+            "current_url": "https://www.facebook.com/ViettelDigitalFinance/directory_contact_info",
+        }
+
+        driver = MagicMock()
+        driver.execute_script.side_effect = [
+            {"has": False, "any": True, "headings": ["details", "links"], "clicked": False},
+            {"header_text": main_header, "links": main_links, "panel_items": main_panel},
+        ]
+
+        def fake_read_about(_drv, url, _ev):
+            if "directory_contact_info" in url:
+                return contact_page
+            return about_page
+
+        with patch("modules.module_11_page_scanner.page_detail_scan._read_about", side_effect=fake_read_about), \
+             patch("modules.module_11_page_scanner.page_detail_scan.dump_debug_text", return_value=None):
+            res = _read_detail_in_verify_tab(
+                driver,
+                "https://www.facebook.com/ViettelDigitalFinance",
+                "Viettel Digital",
+                "user:vietteldigitalfinance",
+                time.time() + 10.0,
+                stop_event=threading.Event(),
+            )
+
+        self.assertEqual(res["detail_status"], "SCANNED")
+        self.assertEqual(res["category"], "Information Technology Company")
+        self.assertEqual(res["phone"], "024 6656 6595")
+        self.assertEqual(res["email"], "tuyendung.digital@viettel.com.vn")
+        self.assertEqual(res["website"], "https://360vds.viettel.vn/")
+        self.assertEqual(
+            res["address"],
+            "Keangnam Hanoi Landmark Tower, Phạm Hùng, Mễ Trì, Nam Từ Liêm, Hanoi, Vietnam, 10000",
+        )
+
+    def test_read_detail_in_verify_tab_keeps_not_scanned_when_empty(self):
+        import threading
+        import time
+        from unittest.mock import MagicMock
+        from modules.module_11_page_scanner.scanner import _read_detail_in_verify_tab
+
+        driver = MagicMock()
+        driver.execute_script.side_effect = [
+            {"has": False, "any": False, "headings": [], "clicked": False},
+            {"has": False, "any": False, "headings": [], "clicked": False},
+            {"has": False, "any": False, "headings": [], "clicked": False},
+            {"header_text": "", "links": [], "panel_items": []},
+        ]
+        with patch("modules.module_11_page_scanner.page_detail_scan._read_about", return_value={}), \
+             patch("modules.module_11_page_scanner.scanner.time.sleep", return_value=None):
+            res = _read_detail_in_verify_tab(
+                driver,
+                "https://www.facebook.com/EmptyPage",
+                "EmptyPage",
+                "user:emptypage",
+                time.time() + 0.5,
+                stop_event=threading.Event(),
+            )
+        self.assertEqual(res["detail_status"], "NOT_SCANNED")
+
+    def test_fetch_about_text_rejects_tab_label_details_as_category(self):
+        import time
+        from unittest.mock import MagicMock
+        from modules.module_11_page_scanner.scanner import _fetch_about_text
+
+        driver = MagicMock()
+        driver.execute_script.side_effect = [
+            None,  # _window_stop
+            {"about_text": "Category\nDetails\nLinks\nContact info", "category": "Details"},
+        ]
+        with patch("modules.module_11_page_scanner.scanner.time.sleep", return_value=None):
+            res = _fetch_about_text(driver, "https://www.facebook.com/Rikkeisoftcareers", time.time() + 5.0)
+        self.assertEqual(res.get("category"), "")
+
+    def test_verify_skips_detail_below_min_followers_and_runs_above(self):
+        from unittest.mock import MagicMock
+        from modules.module_11_page_scanner import scanner
+
+        def _run_with(follower_text: str, min_followers: int):
+            driver = MagicMock()
+            driver.current_window_handle = "main_h"
+            driver.window_handles = ["main_h", "new_h"]
+            header_info = {
+                "page_name": "Viettel Digital",
+                "page_url": "https://www.facebook.com/ViettelDigitalFinance",
+                "header_text": f"Viettel Digital {follower_text}",
+                "header_buttons": ["Message", "Follow"],
+                "header_tabs": ["All", "About"],
+                "follower_text": follower_text,
+                "category": "",
+                "phone": None,
+                "main_sample": "",
+                "is_verified": True,
+                "avatar_url": "https://scontent.xx.fbcdn.net/v/t39.30808-1/av.jpg",
+                "h1_matched_author": True,
+                "readyState": "interactive",
+                "spinner": False,
+                "header_container_selector": "main",
+                "all_h1s": [],
+            }
+            detail_mock = MagicMock(return_value={
+                "category": "Information Technology Company",
+                "phone": "024 6656 6595",
+                "email": "tuyendung.digital@viettel.com.vn",
+                "website": "https://360vds.viettel.vn/",
+                "address": "Keangnam Hanoi Landmark Tower, Hanoi, Vietnam",
+                "description": None,
+                "detail_status": "SCANNED",
+                "detail_scanned_at": "2026-11-27 10:00:00",
+            })
+            with patch.object(scanner, "_open_and_switch_verify_tab", return_value=("new_h", "https://www.facebook.com/ViettelDigitalFinance", {"reason": "ok", "cdp_blocked": True})), \
+                 patch.object(scanner, "_wait_header_ready", return_value=header_info), \
+                 patch.object(scanner, "_safe_current_url", return_value=("https://www.facebook.com/ViettelDigitalFinance", None)), \
+                 patch.object(scanner, "is_valid_profile_header", return_value=(True, "ok")), \
+                 patch.object(scanner, "classify_page_entity", return_value=("PAGE", "fallback_page_no_friend_signal", {})), \
+                 patch.object(scanner, "_read_detail_in_verify_tab", detail_mock), \
+                 patch.object(scanner, "_dump_classify_fixture", return_value=None), \
+                 patch.object(scanner, "_window_stop", return_value=None), \
+                 patch.object(scanner, "_cdp_unblock_resources", return_value=None):
+                out = scanner.verify_and_extract_page_in_new_tab(
+                    driver,
+                    "https://www.facebook.com/ViettelDigitalFinance",
+                    author_name="Viettel Digital",
+                    min_followers=min_followers,
+                )
+            return out, detail_mock.call_count
+
+        out_low, calls_low = _run_with("500 followers", 1000)
+        self.assertEqual(calls_low, 0)
+        self.assertEqual(out_low["detail_status"], "NOT_SCANNED")
+
+        out_ok, calls_ok = _run_with("13K followers", 1000)
+        self.assertEqual(calls_ok, 1)
+        self.assertEqual(out_ok["detail_status"], "SCANNED")
+        self.assertEqual(out_ok["category"], "Information Technology Company")
+        self.assertEqual(out_ok["phone"], "024 6656 6595")
+        self.assertEqual(out_ok["email"], "tuyendung.digital@viettel.com.vn")
+        self.assertEqual(out_ok["website"], "https://360vds.viettel.vn/")
+
+
 if __name__ == "__main__":
     unittest.main()

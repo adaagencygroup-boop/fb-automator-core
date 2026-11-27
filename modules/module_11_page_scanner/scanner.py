@@ -585,12 +585,30 @@ def save_batch_pages(
         SET page_name = COALESCE(EXCLUDED.page_name, scanned_pages.page_name),
             page_url = EXCLUDED.page_url,
             avatar_url = COALESCE(EXCLUDED.avatar_url, scanned_pages.avatar_url),
-            category = COALESCE(NULLIF(EXCLUDED.category, ''), scanned_pages.category),
-            phone = COALESCE(EXCLUDED.phone, scanned_pages.phone),
-            email = COALESCE(EXCLUDED.email, scanned_pages.email),
-            website = COALESCE(EXCLUDED.website, scanned_pages.website),
-            address = COALESCE(EXCLUDED.address, scanned_pages.address),
-            description = COALESCE(EXCLUDED.description, scanned_pages.description),
+            category = CASE
+                WHEN EXCLUDED.detail_status = 'SCANNED' THEN NULLIF(EXCLUDED.category, '')
+                ELSE COALESCE(NULLIF(EXCLUDED.category, ''), scanned_pages.category)
+            END,
+            phone = CASE
+                WHEN EXCLUDED.detail_status = 'SCANNED' THEN EXCLUDED.phone
+                ELSE COALESCE(EXCLUDED.phone, scanned_pages.phone)
+            END,
+            email = CASE
+                WHEN EXCLUDED.detail_status = 'SCANNED' THEN EXCLUDED.email
+                ELSE COALESCE(EXCLUDED.email, scanned_pages.email)
+            END,
+            website = CASE
+                WHEN EXCLUDED.detail_status = 'SCANNED' THEN EXCLUDED.website
+                ELSE COALESCE(EXCLUDED.website, scanned_pages.website)
+            END,
+            address = CASE
+                WHEN EXCLUDED.detail_status = 'SCANNED' THEN EXCLUDED.address
+                ELSE COALESCE(EXCLUDED.address, scanned_pages.address)
+            END,
+            description = CASE
+                WHEN EXCLUDED.detail_status = 'SCANNED' THEN EXCLUDED.description
+                ELSE COALESCE(EXCLUDED.description, scanned_pages.description)
+            END,
             detail_status = CASE
                 WHEN EXCLUDED.detail_status = 'SCANNED' THEN 'SCANNED'
                 ELSE COALESCE(scanned_pages.detail_status, EXCLUDED.detail_status)
@@ -2576,7 +2594,14 @@ def _fetch_about_text(driver, author_url: str, deadline: float) -> Dict[str, Any
         if _deadline_exceeded(deadline):
             return {}
         _window_stop(driver)
-        return driver.execute_script(_VERIFY_ABOUT_TEXT_JS) or {}
+        res = driver.execute_script(_VERIFY_ABOUT_TEXT_JS) or {}
+        if res.get("category"):
+            try:
+                from .page_detail_scan import clean_category
+                res["category"] = clean_category(res.get("category")) or ""
+            except Exception:
+                pass
+        return res
     except Exception as exc:
         if _is_tab_closed_exc(exc):
             raise
@@ -2627,6 +2652,7 @@ for (const el of Array.from(main.querySelectorAll('span, div, h2, h3, [role="hea
   if (/^(thông tin liên hệ|contact info|contact)$/i.test(t)) seen.add('contact');
   else if (/^(chi tiết|details)$/i.test(t)) seen.add('details');
   else if (/^(liên kết|links|trang web và liên kết|websites and social links)$/i.test(t)) seen.add('links');
+  else if (/^(giới thiệu|intro)$/i.test(t)) seen.add('intro');
 }
 const has = seen.has('contact'), any = seen.size > 0, headings = Array.from(seen);
 if (has || !doClick) return { has: has, any: any, headings: headings, clicked: false };
@@ -2650,22 +2676,166 @@ return { has: false, any: any, headings: headings, clicked: true };
 _PANEL_CONTACT_GRACE_SEC = 1.5
 # Đọc lần 2 khi thiếu SĐT + email: tổng chờ thêm so với lần thấy heading đầu + grace không quá chừng này
 _PANEL_RETRY_WAIT_SEC = 1.5
-_PANEL_HEADING_ORDER = ("details", "links", "contact")
+_PANEL_HEADING_ORDER = ("details", "links", "contact", "intro")
+_MAIN_PANEL_SETTLE_GRACE_SEC = 0.8
 
 
 def _bio_phone(header_text: str) -> Optional[str]:
-    """SĐT trong bio/giới thiệu ở header của chính Page (không quét bài đăng); chỉ gồm số."""
+    """SĐT trong bio/giới thiệu ở header của chính Page (không quét bài đăng)."""
     try:
         from .page_detail_scan import find_phone, intro_text
 
-        ph = find_phone(intro_text(header_text or ""))
-        return re.sub(r"[\s.\-]", "", ph) if ph else None
+        return find_phone(intro_text(header_text or ""))
     except Exception:
         return None
 
 
 def _format_panel_headings(seen) -> str:
     return ",".join(h for h in _PANEL_HEADING_ORDER if h in seen)
+
+
+def _read_detail_in_verify_tab(
+    driver,
+    page_url: str,
+    page_name: str,
+    page_key: str,
+    deadline: float,
+    stop_event: Optional[threading.Event] = None,
+) -> Dict[str, Any]:
+    """
+    Đọc đầy đủ thông tin Page ngay trong tab verify (đồng bộ với luồng Dán link):
+    1. Đang ở trang chính: chờ ngắn để cột trái (Details / Links / Intro) kịp render rồi đọc
+       _READ_HEADER_JS (header_text nguyên dòng, links, panel_items, category).
+    2. Gọi page_detail_scan.scan_page_contacts(...) để mở /about → /directory_contact_info
+       (và /directory_links hoặc /about_contact_and_basic_info nếu cần), gộp cùng trang chính.
+    3. Chỉ đặt detail_status='SCANNED' khi thực sự đọc được nội dung (tránh ghi đè rỗng khi lỗi).
+    """
+    result: Dict[str, Any] = {"detail_status": "NOT_SCANNED"}
+    try:
+        from .page_detail_scan import (
+            _EXTRA_DETAIL_FIELDS,
+            _READ_HEADER_JS,
+            clean_category,
+            dump_debug_text,
+            extract_category,
+            extract_contact_info,
+            intro_text,
+            scan_page_contacts,
+        )
+
+        # 1. Chờ ngắn cột trái trên trang chính (tối đa _PANEL_BUDGET_SEC)
+        t0 = time.time()
+        wait_cap = max(0.5, min(_PANEL_BUDGET_SEC, max(0.5, deadline - t0)))
+        t_end = t0 + wait_cap
+        seen: set = set()
+        last_new_at: Optional[float] = None
+        while True:
+            if stop_event and stop_event.is_set():
+                break
+            state = driver.execute_script(_PANEL_STATE_JS, False) or {}
+            now = time.time()
+            new_headings = set(state.get("headings") or []) - seen
+            if new_headings:
+                seen |= new_headings
+                last_new_at = now
+                result["panel_headings"] = _format_panel_headings(seen)
+            if now >= t_end:
+                break
+            if len(seen) >= 2:
+                break
+            if last_new_at is not None and (now - last_new_at) >= _MAIN_PANEL_SETTLE_GRACE_SEC:
+                break
+            time.sleep(_PANEL_POLL_SEC)
+
+        raw_main = driver.execute_script(_READ_HEADER_JS) or {}
+        main_header_text = raw_main.get("header_text") or ""
+        main_links = raw_main.get("links") or []
+        main_panel_items = raw_main.get("panel_items") or []
+        main_category = clean_category(extract_category(main_header_text, page_name=page_name))
+        result["main_header_text"] = main_header_text
+        if main_category:
+            result["category"] = main_category
+
+        # 2. Mở /about -> /directory_contact_info (đồng bộ luồng Dán link)
+        ev = stop_event if stop_event is not None else threading.Event()
+        if ev.is_set():
+            contacts = extract_contact_info(
+                intro_text(main_header_text),
+                main_links,
+                main_panel_items,
+                page_url=page_url,
+                page_name=page_name,
+            )
+            raw_abouts: List[Dict[str, Any]] = []
+        else:
+            contacts = scan_page_contacts(
+                driver,
+                page_url,
+                main_header_text,
+                ev,
+                header_panel_items=main_panel_items,
+                header_links=main_links,
+                page_name=page_name,
+            )
+            raw_abouts = contacts.get("_raw") or []
+
+        has_about_content = any(
+            bool(((r or {}).get("about_text") or "").strip()) for r in raw_abouts
+        )
+        has_any_contact = any(
+            contacts.get(k) for k in ("phone", "email", "website", "address")
+        )
+        if not (has_about_content or main_panel_items or has_any_contact):
+            logger.info(
+                f"[Scanner] detail_not_loaded sau {time.time() - t0:.1f}s ({page_key}) — giữ NOT_SCANNED"
+            )
+            return result
+
+        final_category = main_category or clean_category(contacts.get("category"))
+        extra = {k: contacts.get(k) for k in _EXTRA_DETAIL_FIELDS}
+        result.update(
+            {
+                "category": final_category,
+                "phone": contacts.get("phone") or None,
+                "email": contacts.get("email") or None,
+                "website": contacts.get("website") or None,
+                "address": contacts.get("address") or None,
+                "description": (
+                    json.dumps(extra, ensure_ascii=False)
+                    if any(v is not None for v in extra.values())
+                    else None
+                ),
+                "detail_status": "SCANNED",
+                "detail_scanned_at": datetime.now(timezone.utc)
+                .replace(tzinfo=None)
+                .isoformat(sep=" ", timespec="seconds"),
+            }
+        )
+        if page_key:
+            dump_debug_text(
+                page_key,
+                main_header_text,
+                raw_abouts,
+                {
+                    "page_name": page_name,
+                    "follower_text": None,
+                    "category": final_category,
+                    "phone": result.get("phone"),
+                    "email": result.get("email"),
+                    "website": result.get("website"),
+                    "address": result.get("address"),
+                },
+            )
+        logger.debug(
+            f"[Scanner] detail({page_key}) cat={final_category!r} phone={result['phone']!r}"
+            f" email={result['email']!r} website={result['website']!r} address={result['address']!r}"
+        )
+    except Exception as exc:
+        if _is_tab_closed_exc(exc):
+            raise
+        logger.debug(f"[Scanner] đọc chi tiết trong tab verify lỗi (bỏ qua): {exc}")
+        result = {"detail_status": "NOT_SCANNED", "panel_headings": result.get("panel_headings")}
+    return result
 
 
 def _read_panel_in_verify_tab(driver, deadline: float) -> Dict[str, Any]:
@@ -2905,6 +3075,7 @@ def verify_and_extract_page_in_new_tab(
     deadline_sec: float = VERIFY_AUTHOR_DEADLINE_SEC,
     dump_fixture: bool = True,
     stop_event: Optional[threading.Event] = None,
+    min_followers: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Mở tab verify (window.open), chờ tên+follower rồi classify.
@@ -3256,36 +3427,6 @@ def verify_and_extract_page_in_new_tab(
                             raise
                         pass
 
-        # B. Tầng 3 danh mục: khi entity == "PAGE" và category vẫn rỗng, mở About để lấy category
-        if entity == "PAGE" and not info.get("category") and not _deadline_exceeded(deadline):
-            try:
-                about = _fetch_about_text(driver, cleaned_author, deadline)
-                if about.get("category") and not info.get("category"):
-                    info["category"] = about["category"]
-            except Exception as about_err:
-                logger.debug(f"[Scanner] Tầng 3 fetch about category error: {about_err}")
-
-        # C. Log chẩn đoán: khi category vẫn rỗng sau mọi tầng
-        if entity == "PAGE" and not info.get("category"):
-            hl_items = []
-            if header_buttons:
-                for idx_b, b in enumerate(header_buttons):
-                    if "highlighted details" in str(b).lower():
-                        hl_items = header_buttons[idx_b + 1: idx_b + 10]
-                        break
-            follower_lines = []
-            if header_text:
-                lines = [l.strip() for l in header_text.splitlines() if l.strip()]
-                for idx_l, l in enumerate(lines):
-                    if re.search(r"followers?|người theo dõi", l, re.IGNORECASE):
-                        follower_lines = lines[idx_l + 1: idx_l + 13]
-                        break
-            logger.info(
-                f"[Scanner Diagnostic] Page {page_name!r} ({author_url}) category vẫn rỗng sau mọi tầng! "
-                f"Items sau 'Highlighted details': {hl_items!r} | "
-                f"12 dòng sau dòng follower: {follower_lines!r}"
-            )
-
         # Sau classify PAGE, nếu avatar_url vẫn null: unblock CDP, chờ 1.5s, đọc lại avatar trước khi đóng tab
         if entity == "PAGE" and not info.get("avatar_url"):
             try:
@@ -3301,43 +3442,11 @@ def verify_and_extract_page_in_new_tab(
             except Exception as e:
                 logger.debug(f"[Scanner] late avatar extract error: {e}")
 
-        # Panel Chi tiết / Liên kết / Liên hệ: chỉ PAGE hợp lệ, cùng tab, trước khi đóng tab
-        panel: Dict[str, Any] = {}
-        if entity == "PAGE" and page_name and follower_raw and not _deadline_exceeded(deadline):
-            try:
-                if new_handle and new_handle in list(driver.window_handles or []):
-                    driver.switch_to.window(new_handle)
-            except Exception:
-                pass
-            panel = _read_panel_in_verify_tab(driver, deadline)
-        # Header + panel đã đọc xong → bây giờ mới cắt phần load còn lại (trước đây stop ngay khi đủ header)
-        _window_stop(driver)
-        bio_phone = None
-        if entity == "PAGE" and not panel.get("phone"):
-            bio_phone = _bio_phone(header_text)
-
         if dump_fixture:
             _dump_classify_fixture(info, entity, reason)
 
-        elapsed = time.time() - (deadline - max(5.0, float(deadline_sec or VERIFY_AUTHOR_DEADLINE_SEC)))
-        logger.info(
-            f"[Scanner] classify={entity} reason={reason!r} name={page_name!r}"
-            f" category={info.get('category')!r} phone={info.get('phone')!r}"
-            f" email={'có' if panel.get('email') else 'không'}"
-            f" website={'có' if panel.get('website') else 'không'}"
-            f" address={'có' if panel.get('address') else 'không'}"
-            f" detail={panel.get('detail_status') or 'NOT_SCANNED'}"
-            f" panel_headings={panel.get('panel_headings') or 'không'}"
-            f" avatar={info.get('avatar_url')!r}"
-            f" elapsed={elapsed:.1f}s readyState={info.get('readyState')!r}"
-            f" spinner={info.get('spinner')!r} buttons={header_buttons[:6]!r}"
-            f" follower={follower_raw!r} header_valid={header_ok}"
-            f" friend_zone={debug.get('friend_zone')!r}"
-            f" friend_src={debug.get('friend_signal_source')!r}"
-            f" header={header_text[:120]!r}"
-        )
-
         if entity == "PROFILE":
+            _window_stop(driver)
             out = {
                 "_verify_rejected": True,
                 "reason": f"profile:{reason}",
@@ -3359,6 +3468,7 @@ def verify_and_extract_page_in_new_tab(
             return out
 
         if entity != "PAGE":
+            _window_stop(driver)
             # Header hợp lệ nhưng không đủ tín hiệu → UNKNOWN, không cache, không retry
             return _soft_out(
                 "unknown",
@@ -3377,6 +3487,7 @@ def verify_and_extract_page_in_new_tab(
             )
 
         if not page_name or not follower_raw:
+            _window_stop(driver)
             return _soft_out(
                 "load",
                 "page_missing_name_or_follower",
@@ -3386,22 +3497,78 @@ def verify_and_extract_page_in_new_tab(
 
         page_url = clean_page_url(info.get("page_url") or author_url)
         if is_media_facebook_url(page_url):
+            _window_stop(driver)
             return _soft_out("wrong_url", page_url, header_valid=True)
         page_key, quality = extract_page_identifier(page_url)
         if not page_key or quality == "weak":
+            _window_stop(driver)
             return _soft_out("unknown", "weak_page_key", header_valid=True)
 
         follower_count, follower_text = parse_follower_count(follower_raw)
         if follower_count is None:
+            _window_stop(driver)
             return _soft_out("load", "follower_parse_fail", header_valid=True)
+
+        # Đọc đầy đủ chi tiết (trang chính + /about + /directory_contact_info) đồng bộ luồng Dán link.
+        # Bỏ qua bước mở /about nếu Page không đạt ngưỡng min_followers để giữ tốc độ quét.
+        passes_min_followers = (
+            min_followers is None or int(follower_count) > int(min_followers)
+        )
+        panel: Dict[str, Any] = {}
+        if passes_min_followers and not (stop_event and stop_event.is_set()):
+            try:
+                if new_handle and new_handle in list(driver.window_handles or []):
+                    driver.switch_to.window(new_handle)
+            except Exception:
+                pass
+            panel = _read_detail_in_verify_tab(
+                driver,
+                page_url,
+                page_name,
+                page_key,
+                deadline,
+                stop_event=stop_event,
+            )
+        _window_stop(driver)
+
+        from .page_detail_scan import clean_category, find_phone
+
+        bio_phone = None
+        if not panel.get("phone"):
+            bio_phone = _bio_phone(panel.get("main_header_text") or header_text)
+        info_phone = find_phone(info.get("phone") or "") if info.get("phone") else None
+        final_category = (
+            clean_category(panel.get("category"))
+            or clean_category(info.get("category"))
+            or None
+        )
+        final_phone = panel.get("phone") or bio_phone or info_phone or None
+
+        elapsed = time.time() - (deadline - max(5.0, float(deadline_sec or VERIFY_AUTHOR_DEADLINE_SEC)))
+        logger.info(
+            f"[Scanner] classify={entity} reason={reason!r} name={page_name!r}"
+            f" category={final_category!r} phone={final_phone!r}"
+            f" email={'có' if panel.get('email') else 'không'}"
+            f" website={'có' if panel.get('website') else 'không'}"
+            f" address={'có' if panel.get('address') else 'không'}"
+            f" detail={panel.get('detail_status') or 'NOT_SCANNED'}"
+            f" panel_headings={panel.get('panel_headings') or 'không'}"
+            f" avatar={info.get('avatar_url')!r}"
+            f" elapsed={elapsed:.1f}s readyState={info.get('readyState')!r}"
+            f" spinner={info.get('spinner')!r} buttons={header_buttons[:6]!r}"
+            f" follower={follower_raw!r} header_valid={header_ok}"
+            f" friend_zone={debug.get('friend_zone')!r}"
+            f" friend_src={debug.get('friend_signal_source')!r}"
+            f" header={header_text[:120]!r}"
+        )
 
         out = {
             "page_key": page_key,
             "page_name": page_name,
             "page_url": page_url,
             "avatar_url": info.get("avatar_url"),
-            "category": (info.get("category") or "").strip() or None,
-            "phone": panel.get("phone") or bio_phone or info.get("phone") or None,
+            "category": final_category,
+            "phone": final_phone,
             "email": panel.get("email"),
             "website": panel.get("website"),
             "address": panel.get("address"),
@@ -4199,6 +4366,7 @@ def run_hashtag_search_flow(
                             author_cache=author_verify_cache,
                             deadline_sec=VERIFY_AUTHOR_DEADLINE_SEC,
                             stop_event=stop_event,
+                            min_followers=min_followers,
                         )
                         if (
                             verified
@@ -4214,6 +4382,7 @@ def run_hashtag_search_flow(
                                 author_cache=author_verify_cache,
                                 deadline_sec=VERIFY_AUTHOR_DEADLINE_SEC,
                                 stop_event=stop_event,
+                                min_followers=min_followers,
                             )
 
                     if stop_event.is_set():
