@@ -28,6 +28,9 @@ from modules.module_03_acc_farm.content_service import (
     generate_status_content,
     list_available_gemini_models,
     load_gemini_keys,
+    parse_user_gemini_keys,
+    check_gemini_key,
+    check_pixabay_key,
     search_and_download_pixabay_image,
     crawl_or_fetch_image,
     optimize_pixabay_keyword,
@@ -53,6 +56,8 @@ class SettingsPayload(BaseModel):
     prompt_template: Optional[str] = None
     pixabay_api_key: Optional[str] = None
     pixabay_key: Optional[str] = None  # alias FE
+    # Nội dung Gemini key (dán tay / đọc từ file trên trình duyệt) — lưu mã hóa
+    gemini_api_keys: Optional[str] = None
     master_folder_path: Optional[str] = None
     check_duplicate: Optional[bool] = True
     schedule_enabled: Optional[bool] = False
@@ -250,6 +255,45 @@ def get_available_gemini_models(payload: Optional[ModelListPayload] = None):
     models = list_available_gemini_models(api_key=key, key_source=key_source)
     return {"success": True, "models": models, "count": len(models)}
 
+class CheckKeysPayload(BaseModel):
+    service: str = "gemini"  # gemini | pixabay
+    api_key_source: Optional[str] = None
+    pixabay_key: Optional[str] = None
+
+
+MAX_KEYS_TO_CHECK = 50
+
+
+@router.post("/keys/check")
+def check_api_keys(payload: CheckKeysPayload):
+    """Kiểm tra từng API key còn sống hay đã chết (trả về key đầy đủ để người dùng biết key nào chết)."""
+    service = (payload.service or "gemini").strip().lower()
+    if service == "pixabay":
+        key = (payload.pixabay_key or "").strip()
+        if not key:
+            raise HTTPException(status_code=400, detail="Chưa nhập Pixabay API Key.")
+        results = [check_pixabay_key(key)]
+    elif service == "gemini":
+        keys = parse_user_gemini_keys(payload.api_key_source)
+        if not keys:
+            raise HTTPException(status_code=400, detail="Không đọc được Gemini API Key nào từ nội dung/file đã chọn.")
+        keys = keys[:MAX_KEYS_TO_CHECK]
+        with ThreadPoolExecutor(max_workers=min(8, len(keys))) as pool:
+            results = list(pool.map(check_gemini_key, keys))
+    else:
+        raise HTTPException(status_code=400, detail="service phải là gemini hoặc pixabay")
+
+    live = sum(1 for r in results if r["status"] in ("LIVE", "LIMITED"))
+    return {
+        "success": True,
+        "service": service,
+        "total": len(results),
+        "live": live,
+        "dead": sum(1 for r in results if r["status"] == "DEAD"),
+        "results": results,
+    }
+
+
 @router.get("/gemini-models")
 def get_available_gemini_models_get(key_source: Optional[str] = Query(None)):
     """Lấy danh sách các model Google Gemini qua GET."""
@@ -263,6 +307,8 @@ def generate_drafts(payload: GenerateDraftsPayload):
     if payload.api_key_source:
         keys = load_gemini_keys(payload.api_key_source)
     settings = post_repository.get_post_settings(payload.post_type)
+    if not keys and settings:
+        keys = parse_user_gemini_keys(settings.get('gemini_api_keys'))
     if not keys and settings and settings.get('api_key_file_path'):
         keys = load_gemini_keys(settings['api_key_file_path'])
     if not keys:
@@ -482,6 +528,8 @@ def crawl_image_for_draft(payload: CrawlImagePayload):
     gemini_keys = []
     if payload.api_key_source:
         gemini_keys = load_gemini_keys(payload.api_key_source)
+    if not gemini_keys and settings:
+        gemini_keys = parse_user_gemini_keys(settings.get("gemini_api_keys"))
     if not gemini_keys:
         if settings and settings.get("api_key_file_path"):
             gemini_keys = load_gemini_keys(settings["api_key_file_path"])

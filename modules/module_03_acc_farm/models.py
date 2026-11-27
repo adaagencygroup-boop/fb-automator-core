@@ -164,6 +164,9 @@ ADDED_COLUMNS = [
     ("posts", "image_paths", "TEXT"),
     # Người dùng đã tạo bài (accounts.user_id) — lịch sử chỉ hiện bài của chính người đăng nhập
     ("posts", "owner_key", "TEXT"),
+    # Nội dung Gemini key đã mã hóa (chọn file trên trình duyệt chỉ có tên file) — migrations/015_post_settings_gemini_keys.sql
+    # (SQLite chấp nhận kiểu BYTEA như BLOB)
+    ("post_settings", "gemini_api_keys_enc", "BYTEA"),
 ]
 
 
@@ -238,6 +241,7 @@ TAB2_DDL_STATEMENTS_PG = [
       gemini_model TEXT,
       prompt_template TEXT CHECK (prompt_template IS NULL OR char_length(prompt_template) <= 2000),
       pixabay_api_key_enc BYTEA,
+      gemini_api_keys_enc BYTEA,
       master_folder_path TEXT,
       check_duplicate BOOLEAN NOT NULL DEFAULT TRUE,
       schedule_enabled BOOLEAN NOT NULL DEFAULT FALSE,
@@ -401,6 +405,7 @@ TAB2_DDL_STATEMENTS_SQLITE = [
       gemini_model TEXT,
       prompt_template TEXT CHECK (prompt_template IS NULL OR length(prompt_template) <= 2000),
       pixabay_api_key_enc BLOB,
+      gemini_api_keys_enc BLOB,
       master_folder_path TEXT,
       check_duplicate INTEGER NOT NULL DEFAULT 1,
       schedule_enabled INTEGER NOT NULL DEFAULT 0,

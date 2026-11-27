@@ -5,8 +5,6 @@ import { useRouter } from "next/navigation";
 import {
   Settings,
   Upload,
-  Eye,
-  EyeOff,
   Search,
   Copy,
   Check,
@@ -105,6 +103,76 @@ function AccountAvatar({ url, initial, color }) {
   );
 }
 
+const KEY_STATUS_STYLES = {
+  LIVE: { label: "Sống", className: "bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]" },
+  LIMITED: { label: "Sống (giới hạn)", className: "bg-[#FFFBEB] text-[#B45309] border-[#FDE68A]" },
+  DEAD: { label: "Chết", className: "bg-[#FEF2F2] text-[#B91C1C] border-[#FECACA]" },
+  UNKNOWN: { label: "Không rõ", className: "bg-[#F8FAFC] text-[#475569] border-[#E2E8F0]" },
+};
+
+/** Kết quả kiểm tra key tự động (Sống / Chết / Giới hạn) — ẩn khi chưa kiểm tra. */
+function KeyCheckPanel({ check }) {
+  const { loading, data, error } = check || {};
+  const results = Array.isArray(data?.results) ? data.results : [];
+  const total = data?.total ?? results.length;
+  const live = data?.live ?? 0;
+  const allLive = total > 0 && live === total;
+  const noneLive = total > 0 && live === 0;
+
+  if (!loading && !error && total === 0) return null;
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        {loading && (
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[#2563EB]">
+            <Loader2 size={12} className="animate-spin" />
+            Đang kiểm tra key...
+          </span>
+        )}
+        {total > 0 && !loading && (
+          <ShieldCheck
+            size={12}
+            className={allLive ? "text-[#047857]" : noneLive ? "text-[#B91C1C]" : "text-[#B45309]"}
+          />
+        )}
+        {total > 0 && !loading && (
+          <span
+            className={`text-[11px] font-semibold ${
+              allLive ? "text-[#047857]" : noneLive ? "text-[#B91C1C]" : "text-[#B45309]"
+            }`}
+          >
+            {total === 1
+              ? results[0]?.message
+              : `${live}/${total} key còn sống`}
+          </span>
+        )}
+        {error && !loading && (
+          <span className="text-[11px] font-medium text-red-500">{error}</span>
+        )}
+      </div>
+      {results.length > 1 && !loading && (
+        <ul className="space-y-1 rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] p-2">
+          {results.map((r, idx) => {
+            const style = KEY_STATUS_STYLES[r.status] || KEY_STATUS_STYLES.UNKNOWN;
+            return (
+              <li key={`${r.key}-${idx}`} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]">
+                <span className="font-mono text-[#334155] break-all select-all">{r.key}</span>
+                <span className={`px-1.5 py-0.5 rounded border font-semibold shrink-0 ${style.className}`}>
+                  {style.label}
+                </span>
+                {r.status !== "LIVE" && (
+                  <span className="text-[#64748B]">{r.message}</span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 const accountFilterOptions = [
   { value: "all", label: "Tất cả trạng thái TK" },
   { value: "live", label: "Live" },
@@ -131,7 +199,6 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
   /** true = đã chọn file (hiện chip + nút X); false = nhập đường dẫn/text tay */
   const [keyFromFile, setKeyFromFile] = useState(false);
   const [pixabayKey, setPixabayKey] = useState("");
-  const [showPixabayKey, setShowPixabayKey] = useState(false);
   const [selectedModel, setSelectedModel] = useState("gemini-3.8-flash");
   const [modelOptions, setModelOptions] = useState(DEFAULT_GEMINI_MODELS);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -166,6 +233,37 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
     }
   };
 
+  // ── Kiểm tra API key còn sống / đã chết ──
+  const EMPTY_KEY_CHECK = { loading: false, data: null, error: "" };
+  const [geminiKeyCheck, setGeminiKeyCheck] = useState(EMPTY_KEY_CHECK);
+  const [pixabayKeyCheck, setPixabayKeyCheck] = useState(EMPTY_KEY_CHECK);
+  const keyCheckSeqRef = useRef({});
+
+  // Tự động gọi khi chọn file key / rời ô nhập key. `override` = giá trị mới nhất (state chưa kịp cập nhật).
+  const handleCheckKeys = async (service, override) => {
+    const setCheck = service === "pixabay" ? setPixabayKeyCheck : setGeminiKeyCheck;
+    const body =
+      service === "pixabay"
+        ? { service, pixabay_key: String(override ?? pixabayKey ?? "").trim() }
+        : { service, api_key_source: String(override ?? (apiKeyContent || keyFileName) ?? "").trim() };
+    if (!(body.pixabay_key || body.api_key_source)) {
+      setCheck(EMPTY_KEY_CHECK);
+      return;
+    }
+    // Đổi key/file khi lần kiểm tra trước chưa xong → bỏ kết quả cũ
+    const seq = (keyCheckSeqRef.current[service] || 0) + 1;
+    keyCheckSeqRef.current[service] = seq;
+    const isLatest = () => keyCheckSeqRef.current[service] === seq;
+    setCheck({ loading: true, data: null, error: "" });
+    try {
+      const res = await api.post("/api/post/keys/check", body);
+      const data = res?.data?.results ? res.data : res;
+      if (isLatest()) setCheck({ loading: false, data, error: "" });
+    } catch (err) {
+      if (isLatest()) setCheck({ loading: false, data: null, error: err?.message || "Không kiểm tra được key." });
+    }
+  };
+
   const handleSelectKeyFile = () => {
     // Kích hoạt duy nhất 1 cửa sổ chọn file chuẩn của hệ điều hành
     fileInputRef.current?.click();
@@ -182,6 +280,8 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
           setApiKeyContent(text.trim());
           setKeyFromFile(true);
           fetchGeminiModels(text.trim());
+          handleCheckKeys("gemini", text.trim());
+          handleSaveSettingsToDb({ fromFile: true, name: file.name || "keys.txt", content: text.trim() });
         }
       };
       reader.readAsText(file);
@@ -194,7 +294,9 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
     setKeyFileName("");
     setApiKeyContent("");
     setKeyFromFile(false);
+    setGeminiKeyCheck(EMPTY_KEY_CHECK);
     if (fileInputRef.current) fileInputRef.current.value = "";
+    handleSaveSettingsToDb({ fromFile: false, name: "", content: "" });
   };
 
   // ── Step 2: Account List State (Real DB from Module 02 /api/accounts) ──
@@ -396,9 +498,20 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
         const nextMax = s.max_delay || maxDelay;
         const nextThreads = s.thread_count || threadCount;
 
-        if (s.api_key_file_path) {
+        const savedKeys = String(s.gemini_api_keys || "").trim();
+        if (savedKeys) {
+          // Đã lưu nội dung key (mã hóa) → dùng lại đúng key đó
+          setApiKeyContent(savedKeys);
+          if (s.api_key_file_path) {
+            setKeyFileName(s.api_key_file_path);
+            setKeyFromFile(true);
+          } else {
+            setKeyFileName(savedKeys);
+            setKeyFromFile(false);
+          }
+        } else if (s.api_key_file_path) {
+          // Dữ liệu cũ: chỉ có tên file / key thô trong api_key_file_path
           setKeyFileName(s.api_key_file_path);
-          // Đường dẫn đã lưu từ lần chọn file trước → hiện dạng file chip
           setKeyFromFile(true);
         }
         if (s.gemini_model) setSelectedModel(nextModel);
@@ -411,6 +524,17 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
               ? String(s.pixabay_key)
               : "";
         if (nextPixabay) setPixabayKey(nextPixabay);
+        // Tải lại trang → kiểm tra lại key đã lưu
+        if (savedKeys) handleCheckKeys("gemini", savedKeys);
+        else if (s.api_key_file_path) {
+          // Cấu hình cũ chỉ có tên file, không có nội dung → không đoán key khác, yêu cầu chọn lại
+          setGeminiKeyCheck({
+            loading: false,
+            data: null,
+            error: `Chưa lưu nội dung của file "${s.api_key_file_path}". Bấm Đổi File và chọn lại file key để kiểm tra và lưu.`,
+          });
+        }
+        if (nextPixabay) handleCheckKeys("pixabay", nextPixabay);
         if (s.schedule_enabled !== undefined) setScheduleEnabled(s.schedule_enabled);
         if (s.schedule_time) setScheduleTime(s.schedule_time.slice(0, 5));
         if (s.min_delay) setMinDelay(s.min_delay);
@@ -457,11 +581,18 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
     }
   };
 
-  const handleSaveSettingsToDb = async () => {
+  // `keyOverride` = giá trị key mới nhất khi state chưa kịp cập nhật (vừa chọn file / vừa xóa).
+  const handleSaveSettingsToDb = async (keyOverride) => {
+    const fromFile = keyOverride?.fromFile ?? keyFromFile;
+    const name = keyOverride?.name ?? keyFileName;
+    // Chip file mà không có nội dung (dữ liệu cũ chỉ lưu tên file) → không lấy tên file làm key
+    const content = keyOverride?.content ?? (apiKeyContent || (fromFile ? "" : keyFileName));
     try {
       await api.post("/api/post/settings", {
         post_type: "status",
-        api_key_file_path: keyFileName,
+        // Chỉ lưu tên file khi chọn file; key dán tay lưu mã hóa ở gemini_api_keys (không lưu thô)
+        api_key_file_path: fromFile ? name : "",
+        gemini_api_keys: String(content || "").trim(),
         gemini_model: selectedModel,
         prompt_template: prompt,
         pixabay_api_key: pixabayKey || "",
@@ -1747,10 +1878,16 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
                       setKeyFileName(v);
                       // Cho phép dán key / nhiều dòng key hoặc đường dẫn file
                       setApiKeyContent(v.trim());
+                      setGeminiKeyCheck(EMPTY_KEY_CHECK);
                     }}
                     onBlur={() => {
                       if (String(apiKeyContent || keyFileName || "").trim()) {
                         fetchGeminiModels(apiKeyContent || keyFileName);
+                        // Chỉ kiểm tra + lưu lại khi key đổi (onChange đã xóa kết quả cũ)
+                        if (!geminiKeyCheck.data && !geminiKeyCheck.loading) {
+                          handleCheckKeys("gemini");
+                          handleSaveSettingsToDb();
+                        }
                       }
                     }}
                     placeholder="Dán Gemini API Key hoặc chọn file .txt..."
@@ -1793,6 +1930,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
                   Vui lòng nhập Gemini API Key hoặc chọn file.
                 </p>
               )}
+              <KeyCheckPanel check={geminiKeyCheck} />
             </div>
 
             {/* Pixabay API Key (tùy chọn) */}
@@ -1805,26 +1943,26 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
               </label>
               <div className="relative">
                 <input
-                  type={showPixabayKey ? "text" : "password"}
+                  type="text"
                   name="pixabay_secret_token_no_fill"
                   id="pixabay_secret_token_no_fill"
-                  autoComplete="new-password"
+                  autoComplete="off"
                   data-lpignore="true"
                   data-1p-ignore="true"
                   value={pixabayKey}
-                  onChange={(e) => setPixabayKey(e.target.value)}
-                  onBlur={() => handleSaveSettingsToDb()}
+                  onChange={(e) => {
+                    setPixabayKey(e.target.value);
+                    setPixabayKeyCheck(EMPTY_KEY_CHECK);
+                  }}
+                  onBlur={() => {
+                    handleSaveSettingsToDb();
+                    if (!pixabayKeyCheck.data && !pixabayKeyCheck.loading) handleCheckKeys("pixabay");
+                  }}
                   placeholder="Nhập Pixabay API Key..."
-                  className="w-full h-11 pl-4 pr-11 bg-white border border-[#E2E8F0] rounded-xl text-xs sm:text-sm text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] transition-all font-mono"
+                  className="w-full h-11 px-4 bg-white border border-[#E2E8F0] rounded-xl text-xs sm:text-sm text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] transition-all font-mono"
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowPixabayKey(!showPixabayKey)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#94A3B8] hover:text-[#475569] transition-colors cursor-pointer flex items-center justify-center p-1"
-                >
-                  {showPixabayKey ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
               </div>
+              <KeyCheckPanel check={pixabayKeyCheck} />
             </div>
 
             {/* Model Gemini */}

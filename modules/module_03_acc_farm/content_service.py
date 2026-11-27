@@ -192,6 +192,84 @@ def list_available_gemini_models(api_key: Optional[str] = None, key_source: Opti
     return []
 
 
+def parse_user_gemini_keys(key_source: Optional[str]) -> List[str]:
+    """Chỉ đọc key người dùng nhập/chọn — KHÔNG fallback sang keys.txt trên máy (dùng cho kiểm tra key)."""
+    clean = (key_source or "").strip()
+    if not clean:
+        return []
+    keys: List[str] = []
+    if _looks_like_key_file_path(clean):
+        for path in (clean, os.path.join(os.getcwd(), clean)):
+            keys = _read_keys_from_file(path)
+            if keys:
+                break
+    if not keys:
+        keys = _parse_keys_from_text(clean)
+    return list(dict.fromkeys(keys))
+
+
+def check_gemini_key(key: str) -> Dict[str, str]:
+    """Gọi endpoint liệt kê model (không tốn quota sinh nội dung) để biết key còn sống hay đã chết."""
+    import requests
+    result = {"key": (key or "").strip(), "service": "gemini"}
+    try:
+        resp = requests.get(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            params={"key": key, "pageSize": 1},
+            timeout=10,
+        )
+    except Exception as e:
+        logger.warning(f"Kiểm tra Gemini key lỗi mạng: {e}")
+        return {**result, "status": "UNKNOWN", "message": "Không kết nối được tới Google, thử lại sau."}
+
+    if resp.status_code == 200:
+        return {**result, "status": "LIVE", "message": "Key còn sống"}
+    if resp.status_code == 429:
+        return {**result, "status": "LIMITED", "message": "Key sống nhưng đang bị giới hạn tốc độ / hết quota tạm thời (429)."}
+
+    detail = ""
+    try:
+        detail = str((resp.json().get("error") or {}).get("message") or "")
+    except Exception:
+        detail = resp.text[:200]
+    lower = detail.lower()
+    if resp.status_code in (400, 401, 403):
+        if "expired" in lower:
+            msg = "Key đã hết hạn."
+        elif "leaked" in lower:
+            msg = "Key bị Google khóa do bị lộ."
+        elif "not valid" in lower or "invalid" in lower or resp.status_code == 401:
+            msg = "Key không hợp lệ."
+        elif "has not been used" in lower or "disabled" in lower:
+            msg = "Project của key chưa bật Generative Language API."
+        else:
+            msg = detail or f"Key bị từ chối (HTTP {resp.status_code})."
+        return {**result, "status": "DEAD", "message": msg}
+    return {**result, "status": "UNKNOWN", "message": detail or f"Google trả về HTTP {resp.status_code}."}
+
+
+def check_pixabay_key(key: str) -> Dict[str, str]:
+    import requests
+    result = {"key": (key or "").strip(), "service": "pixabay"}
+    try:
+        resp = requests.get(
+            "https://pixabay.com/api/",
+            params={"key": key, "q": "nature", "per_page": 3},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
+        )
+    except Exception as e:
+        logger.warning(f"Kiểm tra Pixabay key lỗi mạng: {e}")
+        return {**result, "status": "UNKNOWN", "message": "Không kết nối được tới Pixabay, thử lại sau."}
+    if resp.status_code == 200:
+        return {**result, "status": "LIVE", "message": "Key còn sống"}
+    if resp.status_code == 429:
+        return {**result, "status": "LIMITED", "message": "Key sống nhưng đang vượt giới hạn request (429)."}
+    if resp.status_code in (400, 401, 403):
+        return {**result, "status": "DEAD", "message": "Key không hợp lệ hoặc đã bị thu hồi."}
+    return {**result, "status": "UNKNOWN", "message": f"Pixabay trả về HTTP {resp.status_code}."}
+
+
 def generate_status_content(
     prompt: str,
     api_key: Optional[str] = None,
