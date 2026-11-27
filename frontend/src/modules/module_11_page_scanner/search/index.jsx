@@ -313,7 +313,6 @@ export default function PageScannerSearch() {
   const [delayMax, setDelayMax] = useState(10);
   const [applyAllTarget, setApplyAllTarget] = useState(30);
   const [targetPagesCount, setTargetPagesCount] = useState(30);
-  const [publicOnly, setPublicOnly] = useState(true);
   const [keywordTargets, setKeywordTargets] = useState({}); // keyword -> max_results
   const [minFollowersEnabled, setMinFollowersEnabled] = useState(true);
   const [minFollowers, setMinFollowers] = useState(1000);
@@ -796,7 +795,6 @@ export default function PageScannerSearch() {
         if (cfg.delayMax !== undefined) setDelayMax(cfg.delayMax);
         if (cfg.applyAllTarget !== undefined) setApplyAllTarget(cfg.applyAllTarget);
         if (cfg.targetPagesCount !== undefined) setTargetPagesCount(cfg.targetPagesCount);
-        if (cfg.publicOnly !== undefined) setPublicOnly(cfg.publicOnly);
         if (cfg.keywordTargets !== undefined) setKeywordTargets(cfg.keywordTargets);
         if (cfg.minFollowersEnabled !== undefined) setMinFollowersEnabled(cfg.minFollowersEnabled);
         if (cfg.minFollowers !== undefined) setMinFollowers(cfg.minFollowers);
@@ -898,7 +896,6 @@ export default function PageScannerSearch() {
     delayMax,
     applyAllTarget,
     targetPagesCount,
-    publicOnly,
     keywordTargets,
     minFollowersEnabled,
     minFollowers,
@@ -2113,17 +2110,6 @@ export default function PageScannerSearch() {
                   <span className="text-[#64748B]">Page</span>
                 </div>
               </div>
-            )}
-
-            {sourceMode !== "keyword" && (
-              <label className="flex cursor-pointer items-center gap-2 text-xs text-[#0F172A]">
-                <Checkbox
-                  checked={publicOnly}
-                  disabled={isBusy}
-                  onCheckedChange={(c) => setPublicOnly(!!c)}
-                />
-                <span>Chỉ quét nhóm đang ở chế độ công khai</span>
-              </label>
             )}
 
             <div className="flex flex-wrap items-center gap-2 border-t border-[#F1F5F9] pt-3 text-xs font-medium text-[#334155]">
