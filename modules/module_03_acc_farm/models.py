@@ -167,6 +167,9 @@ ADDED_COLUMNS = [
     # Nội dung Gemini key đã mã hóa (chọn file trên trình duyệt chỉ có tên file) — migrations/015_post_settings_gemini_keys.sql
     # (SQLite chấp nhận kiểu BYTEA như BLOB)
     ("post_settings", "gemini_api_keys_enc", "BYTEA"),
+    # Bài thuộc chiến dịch đăng nhiều khung giờ — migrations/016_post_campaigns.sql
+    ("posts", "campaign_id", "UUID"),
+    ("posts", "slot_id", "UUID"),
 ]
 
 
@@ -302,6 +305,8 @@ TAB2_DDL_STATEMENTS_PG = [
       facebook_post_url TEXT,
       error_message TEXT,
       logs JSONB,
+      campaign_id UUID,
+      slot_id UUID,
       published_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -394,6 +399,91 @@ TAB2_DDL_STATEMENTS_PG = [
     );
     """,
     "CREATE INDEX IF NOT EXISTS idx_account_tiktok_videos_owner ON account_tiktok_videos (owner_key, created_at);",
+    # ── Chiến dịch đăng bài nhiều khung giờ (Status) — migrations/016_post_campaigns.sql ──
+    # Nháp ô soạn bài chung (1 nháp / người dùng / loại bài)
+    """
+    CREATE TABLE IF NOT EXISTS post_compose_drafts (
+      owner_key TEXT NOT NULL DEFAULT '',
+      post_type TEXT NOT NULL CHECK (post_type IN ('status', 'reels', 'story')),
+      content_text TEXT NOT NULL DEFAULT '',
+      content_mode TEXT NOT NULL DEFAULT 'MULTI' CHECK (content_mode IN ('SINGLE', 'MULTI')),
+      image_mode TEXT NOT NULL DEFAULT 'NONE' CHECK (image_mode IN ('NONE', 'SINGLE', 'MULTI')),
+      image_paths TEXT,
+      min_images INTEGER NOT NULL DEFAULT 1 CHECK (min_images BETWEEN 1 AND 3),
+      max_images INTEGER NOT NULL DEFAULT 1 CHECK (max_images BETWEEN 1 AND 3),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (owner_key, post_type),
+      CHECK (min_images <= max_images)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS post_campaigns (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      owner_key TEXT NOT NULL DEFAULT '',
+      name TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 200),
+      post_type TEXT NOT NULL DEFAULT 'status' CHECK (post_type IN ('status', 'reels', 'story')),
+      status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'STOPPED', 'COMPLETED')),
+      accounts JSONB NOT NULL DEFAULT '[]'::jsonb,
+      settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+      content_text TEXT NOT NULL DEFAULT '',
+      content_mode TEXT NOT NULL DEFAULT 'MULTI' CHECK (content_mode IN ('SINGLE', 'MULTI')),
+      image_mode TEXT NOT NULL DEFAULT 'NONE' CHECK (image_mode IN ('NONE', 'SINGLE', 'MULTI')),
+      image_paths TEXT,
+      min_images INTEGER NOT NULL DEFAULT 1 CHECK (min_images BETWEEN 1 AND 3),
+      max_images INTEGER NOT NULL DEFAULT 1 CHECK (max_images BETWEEN 1 AND 3),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (min_images <= max_images)
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_post_campaigns_owner ON post_campaigns (owner_key, created_at DESC);",
+    """
+    CREATE TABLE IF NOT EXISTS post_campaign_slots (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      campaign_id UUID NOT NULL REFERENCES post_campaigns(id) ON DELETE CASCADE,
+      run_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL DEFAULT 'WAITING' CHECK (status IN
+        ('WAITING', 'RUNNING', 'DONE', 'MISSED', 'STOPPED', 'FAILED')),
+      session_id UUID REFERENCES post_sessions(id) ON DELETE SET NULL,
+      started_at TIMESTAMPTZ,
+      finished_at TIMESTAMPTZ,
+      total_count INTEGER NOT NULL DEFAULT 0,
+      success_count INTEGER NOT NULL DEFAULT 0,
+      failed_count INTEGER NOT NULL DEFAULT 0,
+      message TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_post_campaign_slots_campaign ON post_campaign_slots (campaign_id, run_at);",
+    "CREATE INDEX IF NOT EXISTS idx_post_campaign_slots_due ON post_campaign_slots (status, run_at);",
+    # Nick nào đã dùng bài (hash nội dung) / ảnh (đường dẫn) nào, ở khung nào — luật không đăng trùng
+    """
+    CREATE TABLE IF NOT EXISTS post_campaign_usage (
+      id BIGSERIAL PRIMARY KEY,
+      campaign_id UUID NOT NULL REFERENCES post_campaigns(id) ON DELETE CASCADE,
+      slot_id UUID NOT NULL REFERENCES post_campaign_slots(id) ON DELETE CASCADE,
+      account_uid TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('TEXT', 'IMAGE')),
+      item_key TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_post_campaign_usage_campaign ON post_campaign_usage (campaign_id, account_uid, kind);",
+    "CREATE INDEX IF NOT EXISTS idx_post_campaign_usage_slot ON post_campaign_usage (slot_id);",
+    "CREATE INDEX IF NOT EXISTS idx_posts_campaign ON posts (campaign_id, slot_id);",
+    """
+    DROP TRIGGER IF EXISTS trg_post_campaigns_updated_at ON post_campaigns;
+    CREATE TRIGGER trg_post_campaigns_updated_at
+      BEFORE UPDATE ON post_campaigns
+      FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+    """,
+    """
+    DROP TRIGGER IF EXISTS trg_post_campaign_slots_updated_at ON post_campaign_slots;
+    CREATE TRIGGER trg_post_campaign_slots_updated_at
+      BEFORE UPDATE ON post_campaign_slots
+      FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+    """,
 ]
 
 TAB2_DDL_STATEMENTS_SQLITE = [
@@ -466,6 +556,8 @@ TAB2_DDL_STATEMENTS_SQLITE = [
       facebook_post_url TEXT,
       error_message TEXT,
       logs TEXT,
+      campaign_id TEXT,
+      slot_id TEXT,
       published_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -517,6 +609,77 @@ TAB2_DDL_STATEMENTS_SQLITE = [
     );
     """,
     "CREATE INDEX IF NOT EXISTS idx_account_tiktok_videos_owner ON account_tiktok_videos (owner_key, created_at);",
+    # ── Chiến dịch đăng bài nhiều khung giờ (Status) ──
+    """
+    CREATE TABLE IF NOT EXISTS post_compose_drafts (
+      owner_key TEXT NOT NULL DEFAULT '',
+      post_type TEXT NOT NULL CHECK (post_type IN ('status', 'reels', 'story')),
+      content_text TEXT NOT NULL DEFAULT '',
+      content_mode TEXT NOT NULL DEFAULT 'MULTI' CHECK (content_mode IN ('SINGLE', 'MULTI')),
+      image_mode TEXT NOT NULL DEFAULT 'NONE' CHECK (image_mode IN ('NONE', 'SINGLE', 'MULTI')),
+      image_paths TEXT,
+      min_images INTEGER NOT NULL DEFAULT 1 CHECK (min_images BETWEEN 1 AND 3),
+      max_images INTEGER NOT NULL DEFAULT 1 CHECK (max_images BETWEEN 1 AND 3),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (owner_key, post_type),
+      CHECK (min_images <= max_images)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS post_campaigns (
+      id TEXT PRIMARY KEY,
+      owner_key TEXT NOT NULL DEFAULT '',
+      name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
+      post_type TEXT NOT NULL DEFAULT 'status' CHECK (post_type IN ('status', 'reels', 'story')),
+      status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'STOPPED', 'COMPLETED')),
+      accounts TEXT NOT NULL DEFAULT '[]',
+      settings TEXT NOT NULL DEFAULT '{}',
+      content_text TEXT NOT NULL DEFAULT '',
+      content_mode TEXT NOT NULL DEFAULT 'MULTI' CHECK (content_mode IN ('SINGLE', 'MULTI')),
+      image_mode TEXT NOT NULL DEFAULT 'NONE' CHECK (image_mode IN ('NONE', 'SINGLE', 'MULTI')),
+      image_paths TEXT,
+      min_images INTEGER NOT NULL DEFAULT 1 CHECK (min_images BETWEEN 1 AND 3),
+      max_images INTEGER NOT NULL DEFAULT 1 CHECK (max_images BETWEEN 1 AND 3),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      CHECK (min_images <= max_images)
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_post_campaigns_owner ON post_campaigns (owner_key, created_at);",
+    """
+    CREATE TABLE IF NOT EXISTS post_campaign_slots (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL REFERENCES post_campaigns(id) ON DELETE CASCADE,
+      run_at DATETIME NOT NULL,
+      status TEXT NOT NULL DEFAULT 'WAITING' CHECK (status IN
+        ('WAITING', 'RUNNING', 'DONE', 'MISSED', 'STOPPED', 'FAILED')),
+      session_id TEXT REFERENCES post_sessions(id) ON DELETE SET NULL,
+      started_at DATETIME,
+      finished_at DATETIME,
+      total_count INTEGER NOT NULL DEFAULT 0,
+      success_count INTEGER NOT NULL DEFAULT 0,
+      failed_count INTEGER NOT NULL DEFAULT 0,
+      message TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_post_campaign_slots_campaign ON post_campaign_slots (campaign_id, run_at);",
+    "CREATE INDEX IF NOT EXISTS idx_post_campaign_slots_due ON post_campaign_slots (status, run_at);",
+    """
+    CREATE TABLE IF NOT EXISTS post_campaign_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id TEXT NOT NULL REFERENCES post_campaigns(id) ON DELETE CASCADE,
+      slot_id TEXT NOT NULL REFERENCES post_campaign_slots(id) ON DELETE CASCADE,
+      account_uid TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('TEXT', 'IMAGE')),
+      item_key TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_post_campaign_usage_campaign ON post_campaign_usage (campaign_id, account_uid, kind);",
+    "CREATE INDEX IF NOT EXISTS idx_post_campaign_usage_slot ON post_campaign_usage (slot_id);",
+    "CREATE INDEX IF NOT EXISTS idx_posts_campaign ON posts (campaign_id, slot_id);",
 ]
 
 
