@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  CloudUpload, Download, FileText, History, Link2, Loader2, MessageCircle, Pause, Play, RotateCcw, Share2, Square, ThumbsUp, Trash2,
+  CloudUpload, Download, FileText, History, Link2, Loader2, MessageCircle, Play, RotateCcw, Share2, ThumbsUp, Trash2,
   Upload, Users, X,
 } from "lucide-react";
 import { toast } from "@/lib/toast";
@@ -11,6 +11,7 @@ import AccountSelectModal, { isScanReady } from "../components/AccountSelectModa
 import DelayRangeInput, { normalizeDelayRange } from "../components/DelayRangeInput";
 import LiveConsole from "../components/LiveConsole";
 import ModulePageHeader from "../components/ModulePageHeader";
+import { EmergencyStopModal } from "../components/EmergencyStopModal";
 import ResultsExplorer from "../components/ResultsExplorer";
 import useRowMultiSelect from "../components/useRowMultiSelect";
 import { INT_INPUT_PROPS, blockNonDigitKey, digitsOnly } from "../utils/intInput";
@@ -39,6 +40,19 @@ const isBlank = (v) => v === "" || v === null || v === undefined;
 const quotaValue = (v) => (isBlank(v) ? null : Number(v)); // null gửi lên Engine = quét toàn bộ
 const countText = (n) => (n === null || n === undefined ? "?" : nf(n)); // ? = Facebook không cho biết số
 const SOURCE_TEXT = { group: "Nhóm", page: "Page", profile: "Cá nhân" };
+
+// Nút điều khiển phiên quét: cùng kiểu Module 11 (shared/ScanActionButtons) / Tab 2 Module 03
+const ACTION_BTN =
+  "flex cursor-pointer items-center justify-center gap-2 text-xs font-bold tracking-wider transition-all active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60";
+
+function StopIcon() {
+  return (
+    <svg className="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <rect x="9" y="9" width="6" height="6" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
 
 function StatusBadge({ status }) {
   const map = {
@@ -111,6 +125,7 @@ export default function PostEngagementScanPage() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [resumable, setResumable] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [confirmStop, setConfirmStop] = useState(false);
   const fileInputRef = useRef(null);
 
   // Màn hình theo bước (giống Tab 1 Module 03): config → chưa bấm gì; check → đã bấm Kiểm tra (hiện terminal);
@@ -893,39 +908,45 @@ export default function PostEngagementScanPage() {
 
       {/* -------------------- Nút điều khiển -------------------- */}
       <div className="space-y-2">
+        {/* Kiểu nút giống các module khác (Module 11 shared/ScanActionButtons, Tab 2 Module 03 đăng bài) */}
         {view === "scan" && !running ? (
           <button type="button" onClick={backToConfig}
-            className="flex h-14 w-full items-center justify-center gap-3 rounded-2xl border border-[#2563EB] bg-white text-base font-bold uppercase tracking-wide text-[#2563EB] hover:bg-blue-50">
-            <RotateCcw className="size-5" />
-            Quay về cấu hình ban đầu
+            className={`${ACTION_BTN} w-full rounded-2xl border border-blue-600 bg-white px-6 py-3 text-blue-600 shadow-2xs hover:bg-blue-50`}>
+            <RotateCcw size={14} />
+            <span>QUAY VỀ CẤU HÌNH BAN ĐẦU</span>
           </button>
         ) : !running ? (
           <button type="button" onClick={runScan} disabled={busy || checking || !picked.length || uncheckedCount > 0}
             title={uncheckedCount > 0 ? "Bấm Kiểm tra & Lọc trùng lặp trước" : !available.length ? "Chưa có bài viết khả dụng" : !picked.length ? "Chọn ít nhất 1 bài viết để quét" : undefined}
-            className="flex h-14 w-full items-center justify-center gap-3 rounded-2xl bg-[#2563EB] text-base font-bold uppercase tracking-wide text-white shadow-[0_8px_20px_rgba(37,99,235,0.25)] hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60">
-            {busy ? <Loader2 className="size-5 animate-spin" /> : <Play className="size-5" />}
-            Bắt đầu thực thi
+            className={`${ACTION_BTN} w-full rounded-xl bg-blue-600 py-3.5 text-white shadow-sm shadow-blue-500/20 hover:bg-blue-700`}>
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} className="fill-white" />}
+            <span>BẮT ĐẦU THỰC THI</span>
           </button>
         ) : (
-          <div className="grid gap-3 sm:grid-cols-[2fr_1fr]">
-            {scanStatus === "paused" ? (
-              <button type="button" onClick={() => control("resume")}
-                className="flex h-14 items-center justify-center gap-2 rounded-2xl bg-[#2563EB] text-base font-bold uppercase text-white hover:bg-blue-700">
-                <Play className="size-5" /> Tiếp tục quét
-              </button>
-            ) : (
-              <button type="button" onClick={() => control("pause")} disabled={scanStatus === "stopping"}
-                className="flex h-14 items-center justify-center gap-2 rounded-2xl bg-amber-500 text-base font-bold uppercase text-white hover:bg-amber-600 disabled:opacity-60">
-                {scanStatus === "stopping" ? <Loader2 className="size-5 animate-spin" /> : <Pause className="size-5" />}
-                {scanStatus === "stopping" ? "Đang dừng…" : "Tạm dừng"}
-              </button>
-            )}
-            <button type="button" onClick={() => control("abort")} disabled={scanStatus === "stopping"}
-              className="flex h-14 items-center justify-center gap-2 rounded-2xl bg-rose-600 text-base font-bold uppercase text-white hover:bg-rose-700 disabled:opacity-60">
-              <Square className="size-5" /> Dừng khẩn cấp
+          <div className="flex items-center gap-3">
+            <button type="button" onClick={() => control(scanStatus === "paused" ? "resume" : "pause")} disabled={scanStatus === "stopping"}
+              className={`${ACTION_BTN} flex-1 rounded-2xl border px-6 py-3 shadow-2xs ${
+                scanStatus === "paused" ? "border-rose-700 bg-rose-700 text-white hover:bg-rose-800" : "border-[#be123c] bg-[#f8f9ff] text-[#881337] hover:bg-rose-50/60"
+              }`}>
+              {scanStatus === "paused" ? <Play size={14} className="fill-white text-white" /> : <StopIcon />}
+              <span>{scanStatus === "paused" ? "TIẾP TỤC CHẠY" : "TẠM DỪNG"}</span>
+            </button>
+            <button type="button" onClick={() => setConfirmStop(true)} disabled={scanStatus === "stopping"}
+              className={`${ACTION_BTN} rounded-2xl bg-[#fcdcdc] px-7 py-3 text-[#881337] shadow-2xs hover:bg-rose-200`}>
+              {scanStatus === "stopping" ? <Loader2 size={14} className="animate-spin" /> : <StopIcon />}
+              <span>{scanStatus === "stopping" ? "ĐANG DỪNG..." : "DỪNG KHẨN CẤP"}</span>
             </button>
           </div>
         )}
+        <EmergencyStopModal
+          isOpen={confirmStop}
+          isStopping={scanStatus === "stopping"}
+          onClose={() => setConfirmStop(false)}
+          onConfirm={async () => {
+            await control("abort");
+            setConfirmStop(false);
+          }}
+        />
         {!running && uncheckedCount > 0 && targets.length > 0 && (
           <p className="text-center text-xs text-amber-700">
             Bấm <b>Kiểm tra &amp; Lọc trùng lặp</b> trước để biết bài nào khả dụng và có bao nhiêu tương tác — còn {uncheckedCount} bài chưa kiểm tra.
