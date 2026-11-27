@@ -57,12 +57,19 @@ def _format_eta(seconds: Optional[int]) -> str:
     return f", dự kiến xong khoảng {finish.strftime('%H:%M')}"
 
 
+# session_id -> khung chiến dịch (None = phiên Đăng ngay). Phiên không bao giờ đổi chiến dịch nên nhớ luôn.
+_session_campaign_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+_SESSION_CACHE_LIMIT = 200
+
+
 def _campaign_slot_for_session(session_id: str) -> Optional[Dict[str, Any]]:
+    if session_id in _session_campaign_cache:
+        return _session_campaign_cache[session_id]
     try:
         from core.database.connection import db
-        return db.fetch_one(
+        row = db.fetch_one(
             """
-            SELECT c.name AS campaign_name, s.run_at
+            SELECT c.id::text AS campaign_id, c.name AS campaign_name, s.id::text AS slot_id, s.run_at
             FROM post_campaign_slots s JOIN post_campaigns c ON c.id = s.campaign_id
             WHERE s.session_id = %s
             LIMIT 1
@@ -72,6 +79,26 @@ def _campaign_slot_for_session(session_id: str) -> Optional[Dict[str, Any]]:
     except Exception as exc:  # bảng chiến dịch chưa tạo / lỗi DB: vẫn báo bận chung
         logger.debug("Không tra được khung chiến dịch của phiên %s: %s", session_id, exc)
         return None
+    if len(_session_campaign_cache) >= _SESSION_CACHE_LIMIT:
+        _session_campaign_cache.clear()
+    _session_campaign_cache[session_id] = row
+    return row
+
+
+def campaign_of_session(session_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Khung chiến dịch của 1 phiên (cho FE: phiên chiến dịch thì trang Status không tự nhảy sang tiến trình)."""
+    if not session_id:
+        return None
+    row = _campaign_slot_for_session(session_id)
+    if not row:
+        return None
+    run_at = row.get("run_at")
+    return {
+        "campaign_id": row.get("campaign_id"),
+        "campaign_name": row.get("campaign_name"),
+        "slot_id": row.get("slot_id"),
+        "run_at": run_at.astimezone().strftime("%H:%M") if isinstance(run_at, datetime) else run_at,
+    }
 
 
 def busy_message(runner) -> Optional[str]:

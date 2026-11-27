@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Settings,
   Upload,
@@ -38,27 +38,24 @@ import {
 import { api } from "@/services/api";
 import { openFilePicker } from "@/lib/file-bridge";
 import { toast } from "@/lib/toast";
-import { PostImageModal, normalizeImagePaths } from "./PostImageModal";
-import { FacebookEmojiMenu } from "./FacebookEmojiModal";
+import { ComposeEditor, PlanCheckNotice } from "./ComposeEditor";
+import { TimeSlotList, slotProblems } from "./TimeSlotList";
+import { useComposeDraft } from "../hooks/useComposeDraft";
+import { parseComposeText, sortSlots } from "../composeText";
 import CustomSelect from "@/components/ui/custom-select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import Image from "next/image";
 import { EmergencyStopModal } from "./EmergencyStopModal";
-import { PastScheduleModal } from "./PastScheduleModal";
 import { PostProgressPreview } from "./PostProgressPreview";
 import { ProgressActivityCell } from "./ProgressPostLink";
-import { useUnsavedChanges } from "@/components/UnsavedChangesContext";
 import {
   mapProgressThreads,
   shouldRestoreProgressView,
 } from "@/modules/module_03_acc_farm/postSessionUi";
 import { useAccountCategories } from "@/modules/module_02_account_manager/hooks/useAccountCategories";
 import { categoryLabelStyle } from "@/modules/module_02_account_manager/components/CategorySelect";
-
-const STATUS_LEAVE_MESSAGE =
-  "Bạn đang có Prompt AI hoặc bài viết trên màn Đăng Status. Nếu rời đi, bài đã lưu sẽ chuyển về chưa lưu và cần Lưu lại lần sau.";
 
 const DEFAULT_GEMINI_MODELS = [
   { value: "gemini-3.8-flash", label: "Gemini 3.8 Flash (Khuyên dùng - Nhanh & Mới nhất)" },
@@ -189,9 +186,6 @@ const loginFilterOptions = [
 export function StatusPostView({ initialState = "config", onHasPostsChange, isActive = true }) {
   const router = useRouter();
   const [viewState, setViewState] = useState(initialState);
-  const [viewingImageCard, setViewingImageCard] = useState(null);
-  const [emojiPickerCard, setEmojiPickerCard] = useState(null);
-  const textareaRefs = useRef({});
 
   // ── Step 1: API Configuration State ──
   const [keyFileName, setKeyFileName] = useState("");
@@ -205,7 +199,6 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
   const [prompt, setPrompt] = useState("");
 
   const fileInputRef = useRef(null);
-  const previewSectionRef = useRef(null);
 
   const fetchGeminiModels = async (sourceOverride) => {
     try {
@@ -313,13 +306,6 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
   );
 
   // ── Drafts State ──
-  const [drafts, setDrafts] = useState([]);
-  const [isGeneratingDrafts, setIsGeneratingDrafts] = useState(false);
-  const [isSavingAll, setIsSavingAll] = useState(false);
-  const [generatingCardUid, setGeneratingCardUid] = useState(null);
-  const [activeDraftPage, setActiveDraftPage] = useState(1);
-
-  // ── Step 3: Trigger & Timing Settings ──
   const [scheduleEnabled, setScheduleEnabled] = useState(true);
   const [scheduleTime, setScheduleTime] = useState("08:00");
   const [threadCount, setThreadCount] = useState(1);
@@ -366,7 +352,6 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
     }
     return updated;
   };
-  const [showPastScheduleModal, setShowPastScheduleModal] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [showConfigErrors, setShowConfigErrors] = useState(false);
 
@@ -396,88 +381,10 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
       threadCount: Number(tc) || 0,
     });
 
-  // Có bài viết (nội dung/ảnh) — kể cả đã lưu
-  const hasDisplayedPosts = useMemo(
-    () =>
-      drafts.some(
-        (d) =>
-          ((d.content || "").trim().length > 0) ||
-          (d.imageCount || 0) > 0 ||
-          (d.imagePaths || []).length > 0,
-      ),
-    [drafts],
-  );
-
-  // Có nhập Khung Prompt AI
-  const hasPromptContent = Boolean(String(prompt || "").trim());
-
-  // Chỉ cảnh báo unsaved trên màn thiết lập Status đang hiện.
-  // Tab Story/Reels (Status ẩn) hoặc đã vào giám sát (nút Quay lại cấu hình) → không hiện modal.
-  const needsLeaveConfirm =
-    isActive && viewState === "config" && (hasDisplayedPosts || hasPromptContent);
-
+  // Nháp ô soạn tự lưu vào DB → không cần hỏi "Rời đi" khi đổi tab / rời trang
   useEffect(() => {
-    onHasPostsChange?.(needsLeaveConfirm);
-    return () => onHasPostsChange?.(false);
-  }, [needsLeaveConfirm, onHasPostsChange]);
-
-  const { setUnsavedChanges } = useUnsavedChanges();
-
-  // Màn giám sát / đăng xong (Quay lại cấu hình): tắt guard ngay, kể cả Status vẫn mounted ẩn
-  useEffect(() => {
-    if (viewState !== "running") return;
-    setUnsavedChanges(false);
     onHasPostsChange?.(false);
-  }, [viewState, setUnsavedChanges, onHasPostsChange]);
-
-  // Option A: bấm "Rời đi" → bỏ trạng thái Đã lưu, lần sau phải Lưu lại
-  useEffect(() => {
-    if (!needsLeaveConfirm) {
-      setUnsavedChanges(false);
-      return;
-    }
-    setUnsavedChanges(
-      true,
-      async () => {
-        const savedDrafts = drafts.filter(
-          (d) =>
-            d.isSaved &&
-            (((d.content || "").trim().length > 0) ||
-              (d.imageCount || 0) > 0 ||
-              (d.imagePaths || []).length > 0),
-        );
-
-        if (savedDrafts.length > 0) {
-          setDrafts((prev) =>
-            prev.map((d) => (d.isSaved ? { ...d, isSaved: false } : d)),
-          );
-        }
-
-        await Promise.all(
-          savedDrafts.map(async (d) => {
-            try {
-              const imgs = normalizeImagePaths(d);
-              await api.post("/api/post/drafts", {
-                id: d.id,
-                account_uid: String(d.accountUid),
-                account_name: d.authorName || "",
-                post_type: "status",
-                content: d.content || "",
-                image_path: imgs[0] || null,
-                image_paths: imgs,
-                status: "DRAFT",
-              });
-            } catch (err) {
-              console.warn("Không thể chuyển draft về DRAFT khi rời trang:", err);
-            }
-          }),
-        );
-      },
-      STATUS_LEAVE_MESSAGE,
-    );
-  }, [needsLeaveConfirm, drafts, setUnsavedChanges]);
-
-  useEffect(() => () => setUnsavedChanges(false), [setUnsavedChanges]);
+  }, [onHasPostsChange]);
 
   // Load Settings from /api/post/settings
   const loadSettingsFromDb = async () => {
@@ -618,64 +525,6 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
     }
   };
 
-  // Tự tick các nick (Live + Đã đăng nhập) đã có draft trong DB, để Khu vực Xem trước
-  // hiện đúng bài đang có — tránh việc modal "Rời đi" bật lên mà người dùng không thấy bài nào.
-  const autoSelectAccountsWithDrafts = (loadedDrafts) => {
-    if (!Array.isArray(loadedDrafts) || loadedDrafts.length === 0) return;
-    // Đang restore phiên chạy → giữ nguyên lựa chọn theo session
-    if (sessionAccountsRef.current?.length > 0) return;
-    const draftUids = new Set(
-      loadedDrafts
-        .filter(
-          (d) =>
-            ((d.content || "").trim().length > 0) ||
-            (d.imageCount || 0) > 0 ||
-            (d.imagePaths || []).length > 0,
-        )
-        .map((d) => String(d.accountUid)),
-    );
-    if (draftUids.size === 0) return;
-    setAccounts((prev) =>
-      prev.map((a) =>
-        draftUids.has(String(a.uid || a.id)) &&
-        a.accountStatusCode === "live" &&
-        a.connectionStatusCode === "logged_in"
-          ? { ...a, selected: true }
-          : a,
-      ),
-    );
-  };
-
-  const loadDraftsFromDb = async () => {
-    try {
-      const res = await api.get("/api/post/drafts?post_type=status");
-      const data = Array.isArray(res) ? res : (res?.data || []);
-      if (Array.isArray(data)) {
-        const mapped = data.map((d) => {
-            const imgs = normalizeImagePaths(d);
-            return {
-              id: d.id,
-              authorName: d.account_name || (d.account_uid ? `Tài khoản ${d.account_uid}` : "Tài khoản"),
-              content: d.content || "",
-              charCount: (d.content || "").length,
-              imagePaths: imgs,
-              imageCount: imgs.length,
-              imagePath: imgs[0] || null,
-              accountUid: String(d.account_uid),
-              selected: true,
-              mediaType: "status",
-              isSaved: d.status === "READY",
-            };
-          });
-        setDrafts(mapped);
-        return mapped;
-      }
-    } catch (err) {
-      console.error("Lỗi khi tải bài nháp từ DB:", err);
-    }
-    return [];
-  };
-
   const loadAccountsFromDb = async () => {
     try {
       setIsLoadingAccounts(true);
@@ -734,6 +583,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
       );
       // Gắn lại nick đã chọn trong phiên (nếu đang restore progress)
       await applySessionAccountSelection(formatted);
+      setAccountsLoaded(true);
     } catch (err) {
       console.error("Lỗi khi tải tài khoản:", err);
     } finally {
@@ -742,6 +592,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
   };
 
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
+  const [accountsLoaded, setAccountsLoaded] = useState(false);
   const sessionAccountsRef = useRef([]);
 
   const applySessionAccountSelection = async (currentAccounts = []) => {
@@ -758,15 +609,16 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
     });
   };
 
-  const checkActiveSessionOnMount = async () => {
+  const checkActiveSessionOnMount = async (openCampaignRun = false) => {
     try {
       const res = await api.get("/api/post/status");
       const d = res?.data ?? res;
       if (!shouldRestoreProgressView(d)) return;
       if (d.post_type && d.post_type !== "status") return;
+      if (d.campaign && !openCampaignRun) return;
 
+      setViewingCampaignRun(Boolean(d.campaign));
       setViewState("running");
-      setUnsavedChanges(false);
       onHasPostsChange?.(false);
       setIsPaused(!!d.is_paused);
       setIsStopped(!!d.is_stopped);
@@ -842,10 +694,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
   }, []);
 
   useEffect(() => {
-    // Chờ cả accounts + drafts tải xong rồi mới tự tick nick có draft
-    Promise.all([loadAccountsFromDb(), loadDraftsFromDb()]).then(([, loadedDrafts]) =>
-      autoSelectAccountsWithDrafts(loadedDrafts),
-    );
+    loadAccountsFromDb();
     loadSettingsFromDb();
     fetchGeminiModels();
   }, []);
@@ -984,654 +833,295 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
   );
   const hasModel = Boolean(String(selectedModel || "").trim());
   const hasPrompt = Boolean(String(prompt || "").trim());
-  const hasRequiredConfig = hasApiKeySource && hasModel && hasPrompt;
-
-  const validateRequiredConfig = () => {
-    setShowConfigErrors(true);
-    if (!hasApiKeySource) {
-      toast.warning(
-        "Vui lòng nhập Gemini API Key hoặc chọn file trước khi thực thi!",
-        "THIẾU GEMINI API KEY",
-      );
-      return false;
-    }
-    if (!hasModel) {
-      toast.warning("Vui lòng chọn Model Gemini trước khi thực thi!", "THIẾU MODEL");
-      return false;
-    }
-    if (!hasPrompt) {
-      toast.warning("Vui lòng nhập Khung Prompt AI trước khi thực thi!", "CHƯA CÓ PROMPT");
-      return false;
-    }
-    return true;
-  };
-
-  // Sinh bài viết AI — trả về true nếu đã gọi API sinh bài
-  const handleGenerateDrafts = async () => {
-    if (!validateRequiredConfig()) {
-      document.getElementById("status-step1-config")?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-      return false;
-    }
-    const selectedAccs = accounts.filter((a) => a.selected);
-    if (selectedAccs.length === 0) {
-      toast.warning("Vui lòng tick chọn ít nhất một tài khoản ở Bước 2 để tạo bài viết!", "CHƯA CHỌN TÀI KHOẢN");
-      return false;
-    }
-
-    try {
-      setIsGeneratingDrafts(true);
-      const res = await api.post("/api/post/drafts/generate", {
-        post_type: "status",
-        prompt: prompt,
-        model: selectedModel,
-        accounts: selectedAccs.map((a) => ({ uid: String(a.uid), name: a.name })),
-        api_key_source: apiKeyContent || keyFileName,
-        pixabay_key: pixabayKey || undefined,
-      }, { timeout: 300000 });
-
-      const rawDrafts = res?.data ?? res;
-      const newDrafts = Array.isArray(rawDrafts) ? rawDrafts : (rawDrafts?.data || []);
-      const imageWarnings = Array.isArray(res?.image_warnings) ? res.image_warnings : [];
-      if (Array.isArray(newDrafts) && newDrafts.length > 0) {
-        const formattedNew = newDrafts.map((d) => {
-          const imgs = normalizeImagePaths(d);
-          return {
-            id: d.id,
-            authorName: d.account_name || `Tài khoản ${d.account_uid}`,
-            accountUid: String(d.account_uid),
-            content: d.content || "",
-            charCount: (d.content || "").length,
-            imagePaths: imgs,
-            imageCount: imgs.length,
-            imagePath: imgs[0] || null,
-            selected: true,
-            mediaType: "status",
-            isSaved: false, // Mặc định bài AI mới sinh ở trạng thái Chưa lưu
-          };
-        });
-        setDrafts((prev) => {
-          const newUids = new Set(formattedNew.map((d) => d.accountUid));
-          return [...prev.filter((d) => !newUids.has(d.accountUid)), ...formattedNew];
-        });
-        setActiveDraftPage(1);
-        toast.success(`Đã thực thi tạo thành công ${newDrafts.length} bài viết AI! Vui lòng xem trước và nhấn Lưu bài viết.`, "TẠO BÀI THÀNH CÔNG");
-        if (imageWarnings.length > 0) {
-          const names = imageWarnings.map((w) => w.name || w.uid).filter(Boolean).join(", ");
-          toast.warning(
-            names
-              ? `Đã thêm nội dung. Không tìm được ảnh cho: ${names}.`
-              : "Đã thêm nội dung. Không tìm được ảnh minh họa.",
-            "THIẾU ẢNH"
-          );
-        }
-      } else {
-        toast.error("Không tạo được bài viết. Vui lòng kiểm tra lại API Key hoặc cấu hình.", "LỖI TẠO BÀI");
-      }
-    } catch (err) {
-      console.error("Lỗi sinh bài viết:", err);
-      toast.error("Lỗi khi gọi AI sinh bài: " + (err.message || "Kiểm tra lại kết nối hoặc API Key."), "LỖI AI");
-      return false;
-    } finally {
-      setIsGeneratingDrafts(false);
-    }
-    return true;
-  };
-
-  // Nút THỰC THI ở Bước 2: gọi AI sinh bài và cuộn tới Khu vực xem trước
-  const handleExecuteGenerate = async () => {
-    const selected = accounts.filter((a) => a.selected);
-    if (selected.length === 0) {
-      toast.warning("Vui lòng tick chọn ít nhất một tài khoản ở Bước 2 trước khi thực thi!", "CHƯA CHỌN TÀI KHOẢN");
-      return;
-    }
-    const ok = await handleGenerateDrafts();
-    if (!ok) return;
-    setTimeout(() => {
-      previewSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 400);
-  };
-
-  const handleGenerateForSingleAccount = async (acc) => {
-    if (!validateRequiredConfig()) return;
-    try {
-      setGeneratingCardUid(acc.uid);
-      const res = await api.post("/api/post/drafts/generate", {
-        post_type: "status",
-        prompt: prompt,
-        model: selectedModel,
-        accounts: [{ uid: String(acc.uid), name: acc.name }],
-        api_key_source: apiKeyContent || keyFileName,
-        pixabay_key: pixabayKey || undefined,
-      }, { timeout: 300000 });
-
-      const raw = res?.data ?? res;
-      const list = Array.isArray(raw) ? raw : (raw?.data || []);
-      const imageWarnings = Array.isArray(res?.image_warnings) ? res.image_warnings : [];
-      if (Array.isArray(list) && list.length > 0) {
-        const d = list[0];
-        const imgs = normalizeImagePaths(d);
-        setDrafts((prev) => {
-          const filtered = prev.filter((item) => String(item.accountUid) !== String(acc.uid));
-          return [
-            ...filtered,
-            {
-              id: d.id,
-              authorName: acc.name,
-              accountUid: String(acc.uid),
-              content: d.content || "",
-              charCount: (d.content || "").length,
-              imagePaths: imgs,
-              imageCount: imgs.length,
-              imagePath: imgs[0] || null,
-              selected: true,
-              mediaType: "status",
-              isSaved: false, // Khi tạo lại, chuyển về Chưa lưu
-            },
-          ];
-        });
-        if (imageWarnings.length > 0) {
-          toast.warning(
-            `Đã thêm nội dung cho ${acc.name}. Không tìm được ảnh minh họa.`,
-            "THIẾU ẢNH"
-          );
-        }
-      }
-    } catch (err) {
-      toast.error("Lỗi khi tạo bài: " + (err.message || err), "LỖI TẠO BÀI");
-    } finally {
-      setGeneratingCardUid(null);
-    }
-  };
-
-  const handleUpdateDraftContent = (accountUid, draftId, newContent) => {
-    const uidStr = String(accountUid);
-    setDrafts((prev) => {
-      const idx = prev.findIndex((d) => String(d.accountUid) === uidStr || (draftId && String(d.id) === String(draftId)));
-      if (idx >= 0) {
-        const updated = [...prev];
-        updated[idx] = {
-          ...updated[idx],
-          accountUid: uidStr,
-          content: newContent,
-          charCount: newContent.length,
-          isSaved: false, // Khi sửa nội dung, tự động đánh dấu Chưa lưu
-        };
-        return updated;
-      }
-      return [
-        ...prev,
-        {
-          id: draftId || `local-${Date.now()}`,
-          authorName: `Tài khoản ${uidStr}`,
-          accountUid: uidStr,
-          content: newContent,
-          charCount: newContent.length,
-          imageCount: 0,
-          selected: true,
-          imagePaths: [],
-          imagePath: null,
-          mediaType: "status",
-          isSaved: false,
-        },
-      ];
-    });
-  };
-
-  // Chèn emoji chuẩn Facebook tại vị trí con trỏ (caret position)
-  const handleInsertEmoji = (emoji) => {
-    if (!emojiPickerCard) return;
-    const { uid, draftId } = emojiPickerCard;
-    const uidStr = uid ? String(uid) : null;
-    const key = `${uidStr}-${draftId}`;
-    const textareaEl = textareaRefs.current[key];
-
-    setDrafts((prev) => {
-      const idx = prev.findIndex(
-        (d) => d.id === draftId || (uidStr && String(d.accountUid) === uidStr)
-      );
-      if (idx >= 0) {
-        const currentContent = prev[idx].content || "";
-        let newContent = "";
-        let insertPos = currentContent.length;
-
-        if (textareaEl) {
-          const start = textareaEl.selectionStart ?? currentContent.length;
-          const end = textareaEl.selectionEnd ?? currentContent.length;
-          newContent = currentContent.slice(0, start) + emoji + currentContent.slice(end);
-          insertPos = start + emoji.length;
-        } else {
-          newContent = currentContent ? `${currentContent} ${emoji}` : emoji;
-          insertPos = newContent.length;
-        }
-
-        const updated = [...prev];
-        updated[idx] = {
-          ...updated[idx],
-          content: newContent,
-          charCount: newContent.length,
-          isSaved: false,
-        };
-
-        setTimeout(() => {
-          if (textareaEl) {
-            textareaEl.focus();
-            try {
-              textareaEl.setSelectionRange(insertPos, insertPos);
-            } catch (e) {
-              // ignore
-            }
-          }
-        }, 10);
-
-        return updated;
-      }
-      return prev;
-    });
-  };
-
-  const handleAddNewManualDraft = () => {
-    const newDraft = {
-      id: `manual-${Date.now()}`,
-      authorName: `Bài nháp tự soạn #${drafts.length + 1}`,
-      content: "",
-      charCount: 0,
-      imageCount: 0,
-      selected: true,
-      imagePaths: [],
-      imagePath: null,
-      mediaType: "status",
-      isSaved: false,
-    };
-    setDrafts((prev) => [newDraft, ...prev]);
-  };
-
-  // Xóa bài viết xem trước: Xóa khỏi drafts và bỏ tick chọn tài khoản ở Bước 2
-  const handleDeleteDraftItem = async (draftId, accountUid) => {
-    const uidStr = accountUid ? String(accountUid) : null;
-    if (draftId) {
-      try {
-        await api.delete(`/api/post/drafts?id=${encodeURIComponent(draftId)}`);
-      } catch { }
-    } else if (uidStr) {
-      try {
-        await api.delete(`/api/post/drafts?account_uid=${encodeURIComponent(uidStr)}`);
-      } catch { }
-    }
-    setDrafts((prev) =>
-      prev.filter(
-        (d) => (draftId ? String(d.id) !== String(draftId) : true) && (uidStr ? String(d.accountUid) !== uidStr : true)
-      )
-    );
-    // Bỏ chọn tài khoản tương ứng ở bảng Bước 2
-    if (uidStr) {
-      setAccounts((prev) =>
-        prev.map((a) => (String(a.uid || a.id) === uidStr ? { ...a, selected: false } : a))
-      );
-    }
-  };
-
-  // Lưu 1 bài viết
-  const handleSaveDraftItem = async (accountUid, draftId, content, showAlert = true) => {
-    const uidStr = String(accountUid);
-    const currentDraft = drafts.find(
-      (d) => String(d.accountUid) === uidStr || (draftId && String(d.id) === String(draftId))
-    );
-    // Đã lưu rồi thì bỏ qua — tránh spam toast / gọi API lại
-    if (currentDraft?.isSaved) return;
-    if (!(content || "").trim()) {
-      if (showAlert) toast.warning("Vui lòng nhập nội dung bài đăng trước khi lưu!", "THIẾU NỘI DUNG");
-      return;
-    }
-
-    try {
-      const targetAcc = accounts.find((a) => String(a.uid) === uidStr);
-      const accName = targetAcc?.name || (uidStr ? `UID: ${uidStr}` : "Tài khoản");
-      const imgs = normalizeImagePaths(currentDraft);
-      const res = await api.post("/api/post/drafts", {
-        id: draftId,
-        account_uid: uidStr,
-        account_name: accName,
-        post_type: "status",
-        content: content || "",
-        image_path: imgs[0] || null,
-        image_paths: imgs,
-        status: "READY",
-      });
-      const savedObj = res?.data?.id ? res.data : (res?.id ? res : (res?.data || {}));
-      const finalId = savedObj.id || draftId || `draft-${Date.now()}`;
-      setDrafts((prev) => {
-        const filtered = prev.filter(
-          (d) => String(d.accountUid) !== uidStr && (!draftId || String(d.id) !== String(draftId))
-        );
-        return [
-          ...filtered,
-          {
-            id: finalId,
-            authorName: accName,
-            accountUid: uidStr,
-            content: content || "",
-            charCount: (content || "").length,
-            imagePaths: imgs,
-            imageCount: imgs.length,
-            imagePath: imgs[0] || null,
-            selected: true,
-            mediaType: "status",
-            isSaved: true,
-          },
-        ];
-      });
-      if (showAlert) toast.success("Đã lưu bài viết thành công!", "LƯU BÀI VIẾT");
-    } catch (err) {
-      console.error("Lỗi khi lưu bài nháp:", err);
-      if (showAlert) toast.error("Lỗi khi lưu bài viết: " + (err.message || "Vui lòng thử lại!"), "LỖI LƯU BÀI");
-    }
-  };
-
-  // Lưu tất cả bài viết trong khu vực xem trước
-  const handleSaveAllDrafts = async () => {
-    const targetCards = previewCards.filter((c) => c.hasContent);
-    if (targetCards.length === 0) {
-      toast.warning("Chưa có bài viết nào để lưu. Vui lòng nhấn nút '▷ THỰC THI' trước!", "CHƯA CÓ BÀI VIẾT");
-      return;
-    }
-    const unsaved = targetCards.filter((c) => !c.isSaved);
-    if (unsaved.length === 0) {
-      toast.info("Tất cả bài viết trong Khu vực xem trước đều đã được lưu!", "THÔNG BÁO");
-      return;
-    }
-    try {
-      setIsSavingAll(true);
-      for (const card of unsaved) {
-        await handleSaveDraftItem(card.account.uid, card.draftId, card.content, false);
-      }
-      toast.success(`Đã lưu thành công toàn bộ ${unsaved.length} bài viết! Nút 'ĐĂNG BÀI' đã sẵn sàng.`, "LƯU TẤT CẢ THÀNH CÔNG");
-    } catch (err) {
-      toast.error("Lỗi khi lưu toàn bộ bài viết: " + (err.message || err), "LỖI LƯU BÀI");
-    } finally {
-      setIsSavingAll(false);
-    }
-  };
-
-  const targetExecutionAccounts = useMemo(() => {
-    return accounts.filter((a) => a.selected);
-  }, [accounts]);
-
-  // Bug 6: chỉ hiện card khi đã có bài hợp lệ (nội dung hoặc ảnh).
-  // Chỉ chọn nick ở Bước 2 mà chưa THỰC THI / chưa có draft → empty state, không hiện card trắng.
-  const previewCards = useMemo(() => {
-    return targetExecutionAccounts
-      .map((acc) => {
-        const accUidStr = String(acc.uid || acc.id);
-        const draft = drafts.find((d) => String(d.accountUid) === accUidStr);
-        const contentStr = draft?.content || "";
-        const imgs = normalizeImagePaths(draft);
-        const hasContent =
-          Boolean(String(contentStr).trim().length > 0) || imgs.length > 0;
-        return {
-          key: `acc-${accUidStr}`,
-          draftId: draft?.id,
-          account: acc,
-          authorName:
-            acc.name && acc.name.trim() !== ""
-              ? acc.name
-              : acc.uid
-                ? `UID: ${acc.uid}`
-                : "Tài khoản",
-          content: contentStr,
-          charCount: contentStr.length,
-          imagePaths: imgs,
-          imageCount: imgs.length,
-          imagePath: imgs[0] || null,
-          isSaved: !!draft?.isSaved,
-          hasContent,
-        };
-      })
-      .filter((card) => card.hasContent);
-  }, [targetExecutionAccounts, drafts]);
-
-  const CARDS_PER_PAGE = 3;
-  const totalDraftPages = Math.ceil(previewCards.length / CARDS_PER_PAGE) || 1;
-  const paginatedCards = useMemo(() => {
-    const start = (activeDraftPage - 1) * CARDS_PER_PAGE;
-    return previewCards.slice(start, start + CARDS_PER_PAGE);
-  }, [previewCards, activeDraftPage]);
-
   const selectedAccs = useMemo(() => accounts.filter((a) => a.selected), [accounts]);
 
-  // Kiểm tra tính hợp lệ của khung giờ đăng (VR-M03-PUB-05, VR-M03-PUB-02)
-  const scheduleTimeInvalid = useMemo(() => {
-    if (!scheduleEnabled) return false;
-    if (!scheduleTime || typeof scheduleTime !== "string") return true;
-    const trimmed = scheduleTime.trim();
-    const regex = /^([01]\d|2[0-3]):([0-5]\d)$/;
-    return !regex.test(trimmed);
-  }, [scheduleEnabled, scheduleTime]);
+  // ── Bước 3-4: ô soạn bài chung + lịch đăng (Đăng ngay / Tạo chiến dịch / Sửa chiến dịch) ──
+  const searchParams = useSearchParams();
+  const editCampaignId = searchParams?.get("campaign") || null;
+  const [editingCampaign, setEditingCampaign] = useState(null);
+  const composeDraft = useComposeDraft({ postType: "status", autosave: !editCampaignId });
+  const { compose } = composeDraft;
+  const parsedCompose = useMemo(
+    () => parseComposeText(compose.content_text, compose.content_mode),
+    [compose.content_text, compose.content_mode],
+  );
+  const [slots, setSlots] = useState([]);
+  const [campaignName, setCampaignName] = useState("");
+  const [planCheck, setPlanCheck] = useState(null);
+  const [planChecking, setPlanChecking] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [activeCampaignRun, setActiveCampaignRun] = useState(null);
+  const [viewingCampaignRun, setViewingCampaignRun] = useState(false);
+  const [lastCreatedCampaign, setLastCreatedCampaign] = useState(null);
+  const campaignUidsRef = useRef(null);
+  const useSchedule = Boolean(editCampaignId) || Boolean(scheduleEnabled);
+  const keptSlots = useMemo(() => editingCampaign?.waitingSlots || [], [editingCampaign]);
 
-  const validationStatus = useMemo(() => {
-    if (scheduleEnabled) {
-      if (!scheduleTime || typeof scheduleTime !== "string" || !scheduleTime.trim()) {
-        return {
-          ready: false,
-          reason: "Vui lòng nhập giờ hẹn hoặc tắt tính năng Khung giờ đăng.",
-        };
-      }
-      if (scheduleTimeInvalid) {
-        return {
-          ready: false,
-          reason: "Khung giờ đăng không hợp lệ (Bắt buộc định dạng HH:mm, ví dụ 08:00, 14:30 khi BẬT hẹn giờ).",
-        };
-      }
+  const toHHmm = (iso) => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime())
+      ? ""
+      : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+
+  const runSettings = () => ({
+    thread_count: Math.max(1, parseInt(threadCount, 10) || 1),
+    min_delay: parseInt(minDelay, 10) || 0,
+    max_delay: parseInt(maxDelay, 10) || 0,
+  });
+
+  // Nạp chiến dịch cần sửa: /interact/post?tab=status&campaign=<id>
+  useEffect(() => {
+    if (!editCampaignId) {
+      setEditingCampaign(null);
+      campaignUidsRef.current = null;
+      return undefined;
     }
-    if (selectedAccs.length === 0) {
-      return {
-        ready: false,
-        reason: "Chưa chọn tài khoản nào (Vui lòng tick chọn ít nhất 1 nick ở Bước 2).",
-      };
-    }
-    const threads = parseInt(threadCount, 10) || 0;
-    const maxThreads = Math.min(10, selectedAccs.length);
-    if (threads > maxThreads) {
-      return {
-        ready: false,
-        reason: `Số luồng chạy (${threads}) không được vượt quá số tài khoản đã chọn (${selectedAccs.length}), tối đa 10.`,
-      };
-    }
-    const missingAccounts = selectedAccs.filter((acc) => {
-      const accUidStr = String(acc.uid || acc.id);
-      const draft = drafts.find((d) => String(d.accountUid) === accUidStr);
-      return !draft || !draft.content || draft.content.trim().length === 0;
-    });
-    if (missingAccounts.length > 0) {
-      return {
-        ready: false,
-        reason: `Vui lòng nhấn nút '▷ THỰC THI' ở Bước 2 để tạo bài viết trước (còn ${missingAccounts.length} nick chưa có bài).`,
-      };
-    }
-    const unsavedAccounts = selectedAccs.filter((acc) => {
-      const accUidStr = String(acc.uid || acc.id);
-      const draft = drafts.find((d) => String(d.accountUid) === accUidStr);
-      return !draft || !draft.isSaved;
-    });
-    if (unsavedAccounts.length > 0) {
-      return {
-        ready: false,
-        reason: `Vui lòng nhấn 'Lưu' cho tất cả bài viết ở Khu vực xem trước trước khi Đăng bài (còn ${unsavedAccounts.length} bài chưa lưu).`,
-      };
-    }
-    return {
-      ready: true,
-      reason: `Đã lưu đầy đủ ${selectedAccs.length} bài viết. Sẵn sàng khởi chạy đăng bài!`,
+    let cancelled = false;
+    api
+      .get(`/api/post/campaigns/${editCampaignId}`)
+      .then((res) => {
+        const c = res?.data;
+        if (cancelled || !c) return;
+        const waiting = sortSlots((c.slots || []).filter((sl) => sl.status === "WAITING").map((sl) => toHHmm(sl.run_at)));
+        setEditingCampaign({ ...c, waitingSlots: waiting });
+        composeDraft.replace(c);
+        setSlots(waiting);
+        setCampaignName(c.name || "");
+        const st = c.settings || {};
+        if (st.thread_count) setThreadCount(st.thread_count);
+        if (st.min_delay != null) setMinDelay(st.min_delay);
+        if (st.max_delay != null) setMaxDelay(st.max_delay);
+        campaignUidsRef.current = new Set((c.accounts || []).map((a) => String(a.uid)));
+        if (!c.can_edit) {
+          toast.warning("Chiến dịch đang chạy 1 khung giờ, đợi khung đó xong rồi mới lưu được.", "SỬA CHIẾN DỊCH");
+        }
+      })
+      .catch((err) => {
+        toast.error(err?.message || "Không tải được chiến dịch.", "SỬA CHIẾN DỊCH");
+        router.replace("/interact/post?tab=status");
+      });
+    return () => {
+      cancelled = true;
     };
-  }, [scheduleEnabled, scheduleTime, scheduleTimeInvalid, selectedAccs, drafts, threadCount]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editCampaignId]);
 
-  // BR-M03-PUB-01: Kiểm tra giờ hẹn ở Quá khứ
-  const scheduleIsInPast = useMemo(() => {
-    if (!scheduleEnabled || !scheduleTime || scheduleTimeInvalid) return false;
-    const parts = scheduleTime.trim().split(":");
-    const h = parseInt(parts[0], 10);
-    const m = parseInt(parts[1], 10);
-    if (isNaN(h) || isNaN(m)) return false;
-    const now = new Date();
-    const target = new Date();
-    target.setHours(h, m, 0, 0);
-    return target.getTime() <= now.getTime();
-  }, [scheduleEnabled, scheduleTime, scheduleTimeInvalid]);
-
-  const handleStartPost = (e) => {
-    if (e && typeof e.preventDefault === "function") {
-      e.preventDefault();
-    }
-    startPostingFlow(false);
-  };
-
-  const startPostingFlow = (forceImmediate = false) => {
-    if (!validationStatus.ready) {
-      toast.warning(validationStatus.reason, "CHƯA ĐỦ ĐIỀU KIỆN ĐĂNG");
-      return;
-    }
-
-    // BR-M03-PUB-01: Nhánh 2 - Giờ hẹn ở QUÁ KHỨ -> BẮT BUỘC hiển thị Modal + Toast cảnh báo
-    const willSchedule = scheduleEnabled && forceImmediate !== true;
-    if (willSchedule && scheduleIsInPast) {
+  // Tick các nick của chiến dịch đang sửa (chờ danh sách nick tải xong)
+  useEffect(() => {
+    const uids = campaignUidsRef.current;
+    if (!uids || !accountsLoaded || !editingCampaign) return;
+    campaignUidsRef.current = null;
+    let missing = 0;
+    setAccounts((prev) => {
+      const next = prev.map((a) => {
+        const inCampaign = uids.has(String(a.uid || a.id));
+        return { ...a, selected: inCampaign && isAccountEligible(a) };
+      });
+      missing = uids.size - next.filter((a) => a.selected).length;
+      return next;
+    });
+    if (missing > 0) {
       toast.warning(
-        `Giờ hẹn ${scheduleTime} đã qua so với hiện tại! Vui lòng chọn Đăng bài ngay hoặc Sửa giờ.`,
-        "CẢNH BÁO GIỜ HẸN"
+        `${missing} nick của chiến dịch hiện không Live / chưa đăng nhập nên chưa được chọn. Lưu lại sẽ bỏ các nick này khỏi chiến dịch.`,
+        "SỬA CHIẾN DỊCH",
       );
-      setShowPastScheduleModal(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountsLoaded, editingCampaign]);
+
+  // Kiểm tra kho bài / ảnh / khung giờ trên máy chủ (không ghi gì) mỗi khi soạn thay đổi
+  useEffect(() => {
+    if (viewState !== "config") return undefined;
+    if (selectedAccs.length === 0 && parsedCompose.count === 0) {
+      setPlanCheck(null);
+      return undefined;
+    }
+    const timer = setTimeout(async () => {
+      setPlanChecking(true);
+      try {
+        const res = await api.post("/api/post/compose/check", {
+          account_count: selectedAccs.length,
+          compose,
+          slots: useSchedule ? slots : [],
+          keep_slots: keptSlots,
+          settings: runSettings(),
+        });
+        setPlanCheck(res);
+      } catch {
+        setPlanCheck(null);
+      } finally {
+        setPlanChecking(false);
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compose, selectedAccs.length, slots, useSchedule, keptSlots, threadCount, minDelay, maxDelay, viewState]);
+
+  // Khung chiến dịch đang chạy → banner "Xem tiến trình" trên màn soạn
+  useEffect(() => {
+    if (viewState !== "config") return undefined;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const res = await api.get("/api/post/status");
+        const d = res?.data ?? res;
+        if (!stopped) setActiveCampaignRun(d?.campaign && d?.is_running ? d.campaign : null);
+      } catch {
+        // quiet error
+      }
+    };
+    tick();
+    const id = setInterval(tick, 10000);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+    };
+  }, [viewState]);
+
+  const handleBackFromCampaignRun = () => {
+    if (pollingRef.current) clearInterval(pollingRef.current);
+    setViewingCampaignRun(false);
+    setViewState("config");
+  };
+
+  const handleAiGenerate = async (count, withImages) => {
+    setShowConfigErrors(true);
+    if (!hasApiKeySource) {
+      toast.warning("Nhập Gemini API Key hoặc chọn file ở Bước 1 trước khi dùng AI.", "THIẾU GEMINI API KEY");
       return;
     }
-
-    executeStartSession(willSchedule);
+    if (!hasPrompt) {
+      toast.warning("Nhập Khung Prompt AI ở Bước 1 trước khi dùng AI.", "CHƯA CÓ PROMPT");
+      return;
+    }
+    try {
+      handleSaveSettingsToDb();
+      await composeDraft.startGenerate({
+        prompt,
+        count,
+        withImages,
+        apiKeySource: apiKeyContent || keyFileName,
+        pixabayKey,
+        model: selectedModel,
+      });
+    } catch (err) {
+      toast.error(err?.message || "Không bắt đầu được AI tạo bài.", "AI TẠO BÀI");
+    }
   };
 
-  const handleConfirmPastScheduleImmediate = () => {
-    setShowPastScheduleModal(false);
-    toast.success("Đang tiến hành đăng bài ngay lập tức!", "ĐĂNG NGAY");
-    startPostingFlow(true); // forceImmediate = true: người dùng chọn CÓ -> Đăng ngay
+  const handleClearCompose = async () => {
+    try {
+      await composeDraft.clearAll();
+    } catch (err) {
+      toast.error(err?.message || "Không xoá được.", "XOÁ TẤT CẢ");
+    }
   };
 
-  const handleCancelPastSchedule = () => {
-    setShowPastScheduleModal(false);
-    toast.info("Đã hủy lệnh đăng. Vui lòng nhập lại khung giờ đăng phù hợp.", "CHỌN LẠI GIỜ");
-  };
-
-  const executeStartSession = async (isScheduled) => {
-    handleSaveSettingsToDb();
-    // Bước 5 UC-M03-07: Lập tức chuyển sang view running để khóa thao tác chỉnh sửa
+  const enterProgressView = (message) => {
+    setViewingCampaignRun(false);
     setViewState("running");
-    // Đang giám sát / sau đăng → tắt guard (nút Quay lại cấu hình)
-    setUnsavedChanges(false);
-    onHasPostsChange?.(false);
     setIsPaused(false);
     setIsStopped(false);
+    setThreadRows([]);
+    setPreviewPostId(null);
+    setMetrics({ running: 0, paused: 0, waiting: 0, completed: 0, systemError: 0, deadAccount: 0, stopped: 0 });
+    setLogs(
+      message
+        ? [{ id: Date.now().toString(), timestamp: new Date().toLocaleTimeString(), thread: "System", type: "info", message }]
+        : [],
+    );
+    startStatusPolling();
+  };
 
-    // Bug 14: 1 dòng / 1 bài (tài khoản), KHÔNG cắt theo số luồng
-    const tc = Math.max(1, parseInt(threadCount, 10) || 1);
-    const initialRows = selectedAccs.map((acc, idx) => {
-      const accUid = String(acc.uid || acc.id);
-      const matchedDraft = drafts.find((d) => String(d.accountUid) === accUid);
-      const draftContent = (matchedDraft?.content || "").trim();
-      const draftImages = normalizeImagePaths(matchedDraft);
-      const isActiveSlot = idx < tc;
-      return {
-        id: acc.id,
-        threadId: isActiveSlot ? `T-${String(idx + 1).padStart(2, "0")}` : "—",
-        accountName: acc.name,
-        accountUid: acc.uid,
-        status: isScheduled || !isActiveSlot ? "Chờ thực thi" : "Đang chạy",
-        contentPreview: isScheduled
-          ? `Hẹn giờ đăng: ${scheduleTime}`
-          : draftContent
-          ? draftContent.slice(0, 30) + "..."
-          : "Đang chuẩn bị nội dung...",
-        currentActivity: isScheduled
-          ? `Đang chờ đến khung giờ ${scheduleTime} để kích nổ...`
-          : isActiveSlot
-          ? "Đang khởi tạo Chrome Profile & kết nối Facebook..."
-          : "Đang chờ trong hàng đợi...",
-        elapsedTime: "0:00",
-        content: draftContent,
-        imagePaths: draftImages,
-        mediaPath: "",
-        mediaName: "",
-        postType: "status",
-      };
-    });
-    setPreviewPostId(initialRows[0] ? String(initialRows[0].id) : null);
+  const showWarnings = (warnings) => (warnings || []).forEach((w) => toast.warning(w, "LƯU Ý"));
 
-    setMetrics({
-      running: isScheduled ? 0 : Math.min(tc, selectedAccs.length),
-      paused: 0,
-      waiting: isScheduled
-        ? selectedAccs.length
-        : Math.max(0, selectedAccs.length - Math.min(tc, selectedAccs.length)),
-      completed: 0,
-      systemError: 0,
-      deadAccount: 0,
-      stopped: 0,
-    });
-    setThreadRows(initialRows);
-    setLogs([
-      {
-        id: Date.now().toString(),
-        timestamp: new Date().toLocaleTimeString(),
-        thread: "System",
-        type: "info",
-        message: isScheduled
-          ? `Đang chờ đến khung giờ ${scheduleTime} để kích nổ...`
-          : `Khởi chạy tiến trình đăng Status với ${selectedAccs.length} tài khoản...`,
-      },
-    ]);
-
+  // Không hẹn giờ = Đăng ngay: không lưu chiến dịch, không xoá nháp, xem kết quả ở Lịch sử
+  const handlePostNow = async () => {
+    if (submitBlockReason) {
+      toast.warning(submitBlockReason, "CHƯA ĐỦ ĐIỀU KIỆN");
+      return;
+    }
+    setSubmitting(true);
     try {
-      const accountsWithContent = selectedAccs.map((acc) => {
-        const accUidStr = String(acc.uid || acc.id);
-        const matched = drafts.find((d) => String(d.accountUid) === accUidStr);
-        const imgs = normalizeImagePaths(matched);
-        return {
-          ...acc,
-          uid: accUidStr,
-          content: matched?.content || "",
-          image_path: imgs[0] || null,
-          imagePath: imgs[0] || null,
-          image_paths: imgs,
-          imagePaths: imgs,
-        };
-      });
-
+      await composeDraft.flush();
+      handleSaveSettingsToDb();
+      const settings = runSettings();
       const res = await api.post("/api/post/start", {
         post_type: "status",
-        accounts: accountsWithContent,
-        thread_count: threadCount,
-        min_delay: minDelay,
-        max_delay: maxDelay,
-        schedule_enabled: isScheduled,
-        schedule_time: isScheduled ? scheduleTime : null,
+        accounts: selectedAccs.map((a) => ({ ...a, uid: String(a.uid || a.id) })),
+        ...settings,
+        schedule_enabled: false,
+        compose,
       });
-
-      const resData = res?.data ?? res;
-      if (resData?.success === false) {
-        throw new Error(resData?.message || "Không thể khởi động phiên đăng bài.");
-      }
-      toast.success("Đã kích hoạt phiên đăng Status thành công!", "BẮT ĐẦU ĐĂNG");
-      startStatusPolling();
+      if (res?.success === false) throw new Error(res?.message || "Không thể khởi động phiên đăng bài.");
+      const skipped = res?.skipped || [];
+      toast.success(
+        `Đã bắt đầu đăng ${res?.inserted_count || 0} bài.${skipped.length ? ` ${skipped.length} nick bị bỏ qua: ${skipped[0].reason}` : ""}`,
+        "ĐĂNG NGAY",
+      );
+      showWarnings(res?.warnings);
+      enterProgressView(`Khởi chạy đăng Status ${res?.inserted_count || 0} bài (${res?.parsed || ""}).`);
     } catch (err) {
-      toast.error(`Lỗi kết nối Engine: ${err.message || err}`, "KHÔNG THỂ BẮT ĐẦU");
-      setViewState("config");
-      setLogs((prev) => [
-        ...prev,
-        {
-          id: (Date.now() + 1).toString(),
-          timestamp: new Date().toLocaleTimeString(),
-          thread: "System",
-          type: "error",
-          message: `Lỗi kết nối Engine: ${err.message || err}`,
-        },
-      ]);
+      toast.error(err?.message || String(err), "KHÔNG THỂ ĐĂNG NGAY");
+    } finally {
+      setSubmitting(false);
     }
+  };
+
+  const campaignPayload = () => ({
+    name: campaignName.trim(),
+    accounts: selectedAccs.map((a) => ({ uid: String(a.uid || a.id), name: a.name || "" })),
+    settings: runSettings(),
+    compose,
+    slots,
+  });
+
+  // Hẹn giờ = Tạo chiến dịch: bộ lập lịch trên máy này tự đăng vào từng khung giờ
+  const handleCreateCampaign = async () => {
+    if (submitBlockReason) {
+      toast.warning(submitBlockReason, "CHƯA ĐỦ ĐIỀU KIỆN");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await composeDraft.flush();
+      handleSaveSettingsToDb();
+      const res = await api.post("/api/post/campaigns", campaignPayload());
+      const created = res?.data;
+      toast.success(`Đã tạo chiến dịch "${created?.name}" với ${slots.length} khung giờ.`, "TẠO CHIẾN DỊCH");
+      showWarnings(res?.warnings);
+      setLastCreatedCampaign(created || null);
+      setSlots([]);
+      setCampaignName("");
+      await composeDraft.reload(); // máy chủ đã xoá nháp sau khi tạo chiến dịch
+    } catch (err) {
+      toast.error(err?.message || String(err), "KHÔNG TẠO ĐƯỢC CHIẾN DỊCH");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleSaveCampaign = async () => {
+    if (submitBlockReason) {
+      toast.warning(submitBlockReason, "CHƯA ĐỦ ĐIỀU KIỆN");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await api.put(`/api/post/campaigns/${editCampaignId}`, campaignPayload());
+      toast.success(`Đã lưu chiến dịch "${res?.data?.name}". Thay đổi áp dụng cho các khung chưa chạy.`, "SỬA CHIẾN DỊCH");
+      showWarnings(res?.warnings);
+      router.push(`/interact/campaigns?id=${editCampaignId}`);
+    } catch (err) {
+      toast.error(err?.message || String(err), "KHÔNG LƯU ĐƯỢC CHIẾN DỊCH");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    router.replace("/interact/post?tab=status");
   };
 
   const handleTogglePause = async () => {
@@ -1734,11 +1224,8 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
     setAccounts((prev) => prev.map((a) => ({ ...a, selected: false })));
     // Xóa nội dung prompt cũ khi quay lại màn cấu hình
     setPrompt("");
-    // UC-M03-07: Tải lại nháp sạch từ CSDL (những bài đã PUBLISHED thành công đã được xóa)
-    // Sau đó tự tick lại các nick còn draft (bài chưa đăng)
     sessionAccountsRef.current = [];
-    const loadedDrafts = await loadDraftsFromDb();
-    autoSelectAccountsWithDrafts(loadedDrafts);
+    setViewingCampaignRun(false);
   };
 
   const selectedCount = accounts.filter((a) => a.selected).length;
@@ -1779,7 +1266,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
   };
   const minDelayNum = parseInt(minDelay, 10) || 0;
   const maxDelayNum = parseInt(maxDelay, 10) || 0;
-  const step1Locked = isGeneratingDrafts || Boolean(generatingCardUid);
+  const step1Locked = composeDraft.generating;
 
   // Tự hạ số luồng khi bỏ chọn acc / vượt trần 10
   useEffect(() => {
@@ -1791,8 +1278,46 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
     if (val > maxThreadCount) setThreadCount(maxThreadCount);
   }, [selectedCount, maxThreadCount, threadCount]);
 
+  // Gợi ý số bài AI tạo = số nick × số khung giờ
+  const suggestedAiCount = Math.max(1, selectedCount) * Math.max(1, useSchedule ? slots.length : 1);
+
+  // Lý do chưa bấm được Đăng ngay / Tạo chiến dịch (máy chủ vẫn kiểm tra lại khi bấm)
+  const submitBlockReason = (() => {
+    if (composeDraft.generating) return "AI đang tạo bài, đợi xong hoặc bấm Huỷ.";
+    if (selectedAccs.length === 0) return "Chưa chọn nick nào ở Bước 2.";
+    if (parsedCompose.count === 0) return "Ô soạn ở Bước 3 chưa có bài nào.";
+    if (threadExceedsAccounts) return `Số luồng tối đa ${maxThreadCount} (≤ số nick đã chọn, tối đa 10).`;
+    if (useSchedule && slots.length === 0) return "Thêm ít nhất 1 khung giờ để tạo chiến dịch.";
+    if (useSchedule && slotProblems(slots, keptSlots).length > 0)
+      return "Có khung giờ đã qua hoặc còn chưa tới 5 phút, hãy bỏ hoặc đổi giờ.";
+    if (editingCampaign && editingCampaign.can_edit === false)
+      return "Chiến dịch đang chạy 1 khung giờ, đợi khung đó xong rồi mới lưu được.";
+    if (!useSchedule && activeCampaignRun)
+      return `Chiến dịch "${activeCampaignRun.campaign_name}" đang chạy khung ${activeCampaignRun.run_at}. Đợi khung này xong rồi đăng ngay.`;
+    if (planCheck && planCheck.ok === false) return planCheck.errors?.[0] || "Kho bài / ảnh chưa đủ.";
+    return "";
+  })();
+
   return (
     <div className="space-y-6  pb-20">
+      {viewState === "config" && activeCampaignRun && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#BFDBFE] bg-[#EFF6FF] px-5 py-3">
+          <div className="flex items-center gap-2 text-xs font-semibold text-[#1E3A8A] sm:text-sm">
+            <Loader2 size={15} className="animate-spin text-[#2563EB]" />
+            <span>
+              Chiến dịch &quot;{activeCampaignRun.campaign_name}&quot; đang chạy khung {activeCampaignRun.run_at}.
+              Đăng ngay sẽ được mở lại khi khung này xong.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => checkActiveSessionOnMount(true).then(() => startStatusPolling())}
+            className="rounded-lg bg-[#2563EB] px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-700"
+          >
+            Xem tiến trình
+          </button>
+        </div>
+      )}
       {/* ── BƯỚC 1: THIẾT LẬP CẤU HÌNH HỆ THỐNG (ẩn khi đang giám sát; hiện lại khi quay về cấu hình) ── */}
       {viewState === "config" && (
       <div id="status-step1-config" className="space-y-3">
@@ -2001,7 +1526,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
               <label className="text-xs sm:text-sm font-bold text-[#0F172A] flex items-center">
                 <span>
                   Khung Prompt AI cấu trúc bài đăng{" "}
-                  <span className="text-red-500" aria-hidden="true">*</span>
+                  <span className="text-[11px] font-medium text-slate-400">(cần khi dùng AI tạo bài ở Bước 3)</span>
                 </span>
                 <span className="w-3.5 h-3.5 rounded-full border border-[#94A3B8] text-[#94A3B8] inline-flex items-center justify-center text-[10px] font-normal leading-none shrink-0 ml-1 cursor-help select-none" title="Nhập yêu cầu câu lệnh hướng dẫn AI tạo bài viết">
                   ?
@@ -2012,7 +1537,6 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 placeholder={"Ví dụ:\nHãy tạo 1 bài viết về chủ đề du lịch Việt Nam, ngắn gọn, hấp dẫn, có icon, phù hợp đăng Facebook. Nội dung cần thu hút người xem, khuyến khích tương tác."}
-                aria-required="true"
                 aria-invalid={showConfigErrors && !hasPrompt}
                 className={`w-full min-h-[140px] p-4 bg-white border rounded-xl text-xs sm:text-sm text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:ring-1 transition-all resize-y leading-relaxed ${
                   showConfigErrors && !hasPrompt
@@ -2317,342 +1841,104 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
           </div>
           </div>
 
-          {/* ── Nút THỰC THI ở Bước 2 (Chuẩn Figma) ── */}
-          {viewState === "config" && (
-            <div className="space-y-2 border-t border-slate-100 bg-white p-4">
-              <button
-                type="button"
-                onClick={handleExecuteGenerate}
-                disabled={isGeneratingDrafts || selectedCount === 0}
-                className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-blue-600 py-3.5 text-xs font-bold tracking-wider text-white shadow-sm shadow-blue-500/10 transition-all hover:bg-blue-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {isGeneratingDrafts ? (
-                  <>
-                    <Loader2 size={15} className="animate-spin text-white" />
-                    <span>ĐANG THỰC THI AI TẠO BÀI VIẾT ({selectedCount} TÀI KHOẢN)...</span>
-                  </>
-                ) : (
-                  <>
-                    <Play size={14} className="fill-white" />
-                    <span>THỰC THI</span>
-                  </>
-                )}
-              </button>
-              {!hasRequiredConfig && (
-                <p className="pt-0.5 text-center text-[11px] font-medium text-amber-600">
-                  {!hasApiKeySource
-                    ? "Nhập Gemini API Key hoặc chọn file ở Bước 1 trước khi thực thi."
-                    : !hasModel
-                      ? "Chọn Model Gemini ở Bước 1 trước khi thực thi."
-                      : "Nhập Khung Prompt AI ở Bước 1 trước khi thực thi."}
-                </p>
-              )}
-            </div>
-          )}
         </div>
       </div>
       )}
 
-      {/* ── KHU VỰC XEM TRƯỚC (CHUẨN 1:1 THEO FIGMA DESIGN) ── */}
+      {/* ── BƯỚC 3: NỘI DUNG ĐĂNG (ô soạn chung + kho ảnh + AI tạo bài) ── */}
       {viewState === "config" && (
-        <div ref={previewSectionRef} className="space-y-3 pt-1">
-          <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] overflow-hidden">
-            {/* Header Khu vực Xem trước chuẩn Figma */}
-            <div className="p-6 border-b border-[#E2E8F0]">
-              <div className="flex items-center gap-3.5">
-                <div className="w-9 h-9 rounded-xl bg-[#1D49BF] flex items-center justify-center shrink-0">
-                  <Image src="/icons/icon_post_eye.svg" width={18} height={18} alt="eye" className="block" />
-                </div>
-                <h3 className="text-base sm:text-lg font-bold text-[#0F1C2E] tracking-tight">
-                  Khu vực Xem trước
-                </h3>
+        <div className="space-y-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
+              3
+            </div>
+            <h2 className="text-sm font-bold text-slate-800 tracking-tight">Bước 3: Nội dung đăng</h2>
+          </div>
+
+          {editingCampaign && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-900">
+              <span>
+                Đang sửa chiến dịch <strong>&quot;{editingCampaign.name}&quot;</strong>. Thay đổi chỉ áp dụng cho các khung giờ
+                chưa chạy; nháp soạn bài của bạn được giữ nguyên.
+              </span>
+              <button type="button" onClick={handleCancelEdit} className="font-bold text-amber-900 underline">
+                Huỷ sửa
+              </button>
+            </div>
+          )}
+
+          <div className="rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-xs">
+            <ComposeEditor
+              compose={compose}
+              parsed={parsedCompose}
+              onChange={composeDraft.update}
+              onClearAll={handleClearCompose}
+              saveState={editCampaignId ? "idle" : composeDraft.saveState}
+              lockedReason="AI đang thêm bài vào cuối ô. Bấm Huỷ nếu muốn sửa ngay."
+              ai={{
+                generating: composeDraft.generating,
+                job: composeDraft.job,
+                suggestedCount: suggestedAiCount,
+                onGenerate: handleAiGenerate,
+                onCancel: composeDraft.cancelGenerate,
+                disabledReason: editCampaignId
+                  ? "Khi sửa chiến dịch, dán hoặc sửa bài trực tiếp trong ô (AI chỉ thêm bài vào nháp soạn bài)."
+                  : "",
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ── BƯỚC 4: LỊCH ĐĂNG & THỰC THI ── */}
+      {viewState === "config" && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
+              4
+            </div>
+            <h2 className="text-sm font-bold text-slate-800 tracking-tight">Bước 4: Lịch đăng &amp; thực thi</h2>
+          </div>
+
+          <div className="rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-xs space-y-5">
+            <div className="flex items-start gap-3">
+              <Switch
+                checked={useSchedule}
+                disabled={Boolean(editCampaignId)}
+                onCheckedChange={setScheduleEnabled}
+              />
+              <div className="space-y-0.5">
+                <span className="text-xs font-bold text-slate-700">HẸN GIỜ (TẠO CHIẾN DỊCH)</span>
+                <p className="text-[11px] text-slate-500">
+                  {useSchedule
+                    ? "Tự động đăng vào các khung giờ trong hôm nay. Mỗi khung, mỗi nick đăng 1 bài; một nick không đăng lại bài / ảnh đã đăng trong chiến dịch."
+                    : "Đang tắt: bấm Đăng ngay, mỗi nick đăng 1 bài khác nhau ngay bây giờ. Kết quả xem ở Lịch sử."}
+                </p>
               </div>
-              <p className="text-sm text-[#525866] leading-relaxed mt-3">
-                Nơi hiển thị danh sách các bài viết do AI vừa sinh ra. Cho phép người dùng đọc lại, chỉnh sửa văn bản trực tiếp trước khi chốt lịch đăng tự động.
-              </p>
             </div>
 
-            {/* Danh sách Cards bài viết */}
-            <div className="p-6 space-y-6">
-              {previewCards.length === 0 ? (
-                <div className="py-12 px-4 text-center border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50/40">
-                  <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-500 flex items-center justify-center mx-auto mb-3 shadow-2xs">
-                    <BookOpen size={22} />
-                  </div>
-                  <h4 className="text-xs font-bold text-slate-700">Chưa có bài viết nào được tạo</h4>
-                  <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
-                    Vui lòng chọn tài khoản ở bảng <strong>Bước 2</strong> và nhấn nút <strong>&quot;THỰC THI&quot;</strong> để AI sinh nội dung hiển thị tại đây.
-                  </p>
+            {useSchedule && (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-bold text-[#0F172A]">Tên chiến dịch</span>
+                  <input
+                    type="text"
+                    value={campaignName}
+                    maxLength={200}
+                    onChange={(e) => setCampaignName(e.target.value)}
+                    placeholder="Để trống sẽ tự đặt theo giờ tạo"
+                    className="h-9 w-full rounded-lg border border-[#E2E8F0] bg-white px-3 text-xs text-[#0F172A] placeholder:text-[#94A3B8] focus:border-[#2563EB] focus:outline-none"
+                  />
+                </label>
+                <div className="space-y-1.5">
+                  <span className="text-xs font-bold text-[#0F172A]">Khung giờ trong hôm nay</span>
+                  <TimeSlotList slots={slots} onChange={setSlots} keep={keptSlots} />
                 </div>
-              ) : (
-                <>
-                  {/* Grid 3 cột chuẩn Figma — min-w-0 để card không đẩy tràn cột */}
-                  <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3 [&>*]:min-w-0">
-                    {paginatedCards.map((card) => {
-                      const isEmojiMenuOpen = emojiPickerCard?.cardKey === card.key;
-                      return (
-                        <div
-                          key={card.key}
-                          className={`relative flex min-w-0 flex-col justify-between overflow-hidden rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] p-4 transition-all hover:shadow-xs sm:p-5 ${
-                            isEmojiMenuOpen ? "z-30 shadow-md ring-1 ring-blue-300" : "z-10"
-                          }`}
-                        >
-                          <div>
-                            {/* Line 1: Green dot + Author Name (Trái) & Nút Emoji (Phải) */}
-                            <div className="flex items-center justify-between gap-2 min-w-0">
-                              <div className="flex items-center gap-2 min-w-0 flex-1">
-                                <span className="w-2.5 h-2.5 rounded-full bg-[#10B981] shrink-0" />
-                                <span className="text-sm sm:text-base font-bold text-[#0F172A] truncate" title={card.authorName}>
-                                  {card.authorName}
-                                </span>
-                              </div>
+              </div>
+            )}
 
-                              {/* Nút Emoji đưa sang góc phải */}
-                              <div className="relative shrink-0">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEmojiPickerCard((prev) =>
-                                      prev?.cardKey === card.key
-                                        ? null
-                                        : {
-                                            cardKey: card.key,
-                                            uid: card.account?.uid,
-                                            draftId: card.draftId,
-                                            authorName: card.authorName,
-                                          }
-                                    );
-                                  }}
-                                  className={`p-1.5 rounded-lg transition-colors cursor-pointer flex items-center justify-center ${
-                                    isEmojiMenuOpen
-                                      ? "bg-amber-100 text-amber-600 ring-1 ring-amber-300"
-                                      : "text-[#64748B] hover:text-amber-500 hover:bg-slate-200/60"
-                                  }`}
-                                  title="Mở menu chọn biểu tượng cảm xúc (Emoji)"
-                                >
-                                  <Smile size={18} />
-                                </button>
-
-                                {/* Menu chọn Emoji (Dropdown popover căn lề phải không đè nội dung) */}
-                                {isEmojiMenuOpen && (
-                                  <FacebookEmojiMenu
-                                    isOpen={true}
-                                    onClose={() => setEmojiPickerCard(null)}
-                                    onSelectEmoji={handleInsertEmoji}
-                                    targetTitle={card.authorName}
-                                    align="right"
-                                  />
-                                )}
-                              </div>
-                            </div>
-
-                          {/* Textarea nội dung (Nền trắng, viền xám nhạt, thanh cuộn mượt đẹp) */}
-                          <div className="mt-3">
-                            <textarea
-                              ref={(el) => {
-                                const uidStr = card.account?.uid ? String(card.account.uid) : null;
-                                const key = `${uidStr}-${card.draftId}`;
-                                if (el) {
-                                  textareaRefs.current[key] = el;
-                                }
-                              }}
-                              rows={6}
-                              value={card.content}
-                              onChange={(e) => handleUpdateDraftContent(card.account.uid, card.draftId, e.target.value)}
-                              placeholder={`Nhập nội dung bài đăng cho ${card.authorName}...`}
-                              className="w-full text-xs sm:text-[13px] text-[#0F172A] bg-white p-3.5 rounded-xl border border-[#E2E8F0] resize-none leading-relaxed focus:bg-white focus:outline-none focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] transition-all font-sans min-h-[145px] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#CBD5E1] hover:[&::-webkit-scrollbar-thumb]:bg-[#94A3B8] [&::-webkit-scrollbar-thumb]:rounded-full"
-                            />
-                          </div>
-
-                          {/* Ký tự */}
-                          <div className="mt-2 text-xs text-[#64748B]">
-                            <span>{card.charCount} ký tự</span>
-                          </div>
-                        </div>
-
-                        {/* Footer: 2x2 trên card hẹp, 1 hàng khi đủ rộng — không tràn viền */}
-                        <div className="mt-4 grid w-full min-w-0 grid-cols-2 gap-1.5 border-t border-[#E2E8F0] pt-3 xl:grid-cols-4">
-                          {/* [Ảnh (X)] */}
-                          <button
-                            type="button"
-                            onClick={() => setViewingImageCard(card)}
-                            className="flex h-[30px] min-w-0 cursor-pointer items-center justify-center gap-1 rounded-lg border border-[#E2E8F0] bg-white px-1.5 text-[11px] font-semibold text-[#565E74] transition-colors hover:bg-slate-50"
-                            title="Xem và quản lý ảnh đính kèm"
-                          >
-                            <Image src="/icons/icon_post_image.svg" width={12} height={12} alt="image" className="block shrink-0" />
-                            <span className="truncate">Ảnh ({card.imageCount})</span>
-                          </button>
-
-                          {/* [Tạo lại] */}
-                          <button
-                            type="button"
-                            onClick={() => handleGenerateForSingleAccount(card.account)}
-                            disabled={isGeneratingDrafts || generatingCardUid === card.account.uid || !hasPrompt}
-                            className="flex h-[30px] min-w-0 cursor-pointer items-center justify-center gap-1 rounded-lg border border-[#E2E8F0] bg-white px-1.5 text-[11px] font-semibold text-[#565E74] transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                            title="Tạo lại nội dung bài này bằng AI"
-                          >
-                            <Image
-                              src="/icons/icon_post_reload.svg"
-                              width={10}
-                              height={14}
-                              alt="reload"
-                              className={`block shrink-0 ${generatingCardUid === card.account.uid ? "animate-spin" : ""}`}
-                            />
-                            <span className="truncate">Tạo lại</span>
-                          </button>
-
-                          {/* [Xóa] */}
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteDraftItem(card.draftId, card.account.uid)}
-                            className="flex h-[30px] min-w-0 cursor-pointer items-center justify-center gap-1 rounded-lg border border-[#E2E8F0] bg-white px-1.5 text-[11px] font-semibold text-[#565E74] transition-colors hover:bg-rose-50 hover:text-rose-600"
-                            title="Xóa bài viết và bỏ chọn nick này"
-                          >
-                            <Image src="/icons/icon_post_delete.svg" width={12} height={14} alt="delete" className="block shrink-0" />
-                            <span className="truncate">Xóa</span>
-                          </button>
-
-                          {/* [Lưu] / [Đã lưu] — trống nội dung / đã lưu thì khóa; sửa nội dung/ảnh mới mở lại */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (card.isSaved || !(card.content || "").trim()) return;
-                              handleSaveDraftItem(card.account.uid, card.draftId, card.content);
-                            }}
-                            disabled={card.isSaved || !(card.content || "").trim()}
-                            title={
-                              card.isSaved
-                                ? "Đã lưu — sửa nội dung hoặc ảnh để lưu lại"
-                                : !(card.content || "").trim()
-                                  ? "Nhập nội dung bài đăng trước khi lưu"
-                                  : "Lưu bài viết"
-                            }
-                            className={`flex h-[30px] min-w-0 items-center justify-center gap-1 rounded-lg px-1.5 text-[11px] font-bold shadow-xs transition-all ${
-                              card.isSaved
-                                ? "cursor-default bg-[#059669] text-white opacity-90"
-                                : !(card.content || "").trim()
-                                  ? "cursor-not-allowed bg-[#2563EB] text-white opacity-50"
-                                  : "cursor-pointer bg-[#2563EB] text-white hover:bg-blue-700 active:scale-[0.98]"
-                            }`}
-                          >
-                            {card.isSaved ? (
-                              <>
-                                <Check size={12} className="shrink-0 stroke-[3]" />
-                                <span className="truncate">Đã lưu</span>
-                              </>
-                            ) : (
-                              <>
-                                <Image src="/icons/icon_post_save.svg" width={12} height={12} alt="save" className="block shrink-0" />
-                                <span className="truncate">Lưu</span>
-                              </>
-                            )}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  </div>
-
-                  {/* Thanh Phân trang chuẩn Figma: Hiển thị 3/10 bài, < 1 2 3 > */}
-                  <div className="flex items-center justify-between text-xs sm:text-sm text-[#475569] pt-5 mt-2">
-                    <span className="font-medium text-[#334155]">
-                      Hiển thị {paginatedCards.length}/{previewCards.length} bài
-                    </span>
-
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setActiveDraftPage((p) => Math.max(1, p - 1))}
-                        disabled={activeDraftPage <= 1}
-                        className="w-8 h-8 rounded-lg flex items-center justify-center bg-[#EFF6FF] text-[#2563EB] hover:bg-blue-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
-                      >
-                        <ChevronLeft size={16} />
-                      </button>
-
-                      {Array.from({ length: totalDraftPages }).map((_, idx) => {
-                        const pageNum = idx + 1;
-                        const isCurrent = pageNum === activeDraftPage;
-                        return (
-                          <button
-                            key={pageNum}
-                            type="button"
-                            onClick={() => setActiveDraftPage(pageNum)}
-                            className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold cursor-pointer transition-all ${
-                              isCurrent
-                                ? "bg-[#2563EB] text-white shadow-xs"
-                                : "text-[#334155] hover:bg-slate-100 font-medium"
-                            }`}
-                          >
-                            {pageNum}
-                          </button>
-                        );
-                      })}
-
-                      <button
-                        type="button"
-                        onClick={() => setActiveDraftPage((p) => Math.min(totalDraftPages, p + 1))}
-                        disabled={activeDraftPage >= totalDraftPages}
-                        className="w-8 h-8 rounded-lg flex items-center justify-center bg-[#EFF6FF] text-[#2563EB] hover:bg-blue-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
-                      >
-                        <ChevronRight size={16} />
-                      </button>
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {/* ── Thiết lập lịch đăng & luồng (Nằm trong Khu vực Xem trước theo Figma) ── */}
-              <div className="pt-4 border-t border-slate-100 space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-center">
-                  {/* Khung giờ đăng (VR-M03-PUB-05, VR-M03-PUB-02) */}
-                  <div className="flex items-center gap-3">
-                    <Switch
-                      checked={scheduleEnabled}
-                      onCheckedChange={setScheduleEnabled}
-                    />
-                    <span className="text-xs font-bold text-slate-700 whitespace-nowrap">
-                      THIẾT LẬP KHUNG GIỜ ĐĂNG
-                    </span>
-                    <input
-                      type="text"
-                      disabled={!scheduleEnabled}
-                      value={scheduleTime}
-                      placeholder="HH:mm"
-                      maxLength={5}
-                      onChange={(e) => {
-                        let val = e.target.value.replace(/[^0-9:]/g, "");
-                        setScheduleTime(val);
-                      }}
-                      onBlur={(e) => {
-                        let val = (e.target.value || "").trim();
-                        if (/^\d:[0-5]\d$/.test(val)) {
-                          setScheduleTime("0" + val);
-                        }
-                      }}
-                      className={`w-20 h-8 text-center border rounded-lg text-xs font-mono font-semibold transition-all ${
-                        !scheduleEnabled
-                          ? "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed opacity-60"
-                          : scheduleTimeInvalid
-                          ? "bg-rose-50 border-rose-500 text-rose-700 focus:outline-none focus:ring-1 focus:ring-rose-500"
-                          : scheduleIsInPast
-                          ? "bg-amber-50 border-amber-400 text-amber-900 focus:border-amber-500 focus:outline-none"
-                          : "bg-white border-slate-300 text-slate-800 focus:border-blue-500 focus:outline-none shadow-2xs"
-                      }`}
-                      title={
-                        scheduleTimeInvalid
-                          ? "Khung giờ phải có định dạng HH:mm hợp lệ (00:00 - 23:59)"
-                          : scheduleIsInPast
-                          ? "Giờ hẹn đã qua so với hiện tại. Hệ thống sẽ hỏi xác nhận khi đăng bài."
-                          : "Định dạng HH:mm"
-                      }
-                    />
-                    {scheduleEnabled && !scheduleTimeInvalid && scheduleIsInPast && (
-                      <span className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 font-semibold shrink-0">
-                        Đã qua giờ
-                      </span>
-                    )}
-                  </div>
-
+            <div className="pt-4 border-t border-slate-100">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
                   {/* Số lượng chạy: min 1, max = min(10, số acc đã chọn) + mũi tên ↑↓ */}
                   <div className="flex flex-col items-start sm:items-center gap-1">
                     <div className="flex items-center justify-start sm:justify-center gap-3">
@@ -2809,31 +2095,62 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
                       <span className="text-slate-400 shrink-0">giây</span>
                     </div>
                   </div>
-                </div>
+              </div>
+            </div>
 
-                {/* ── Nút ĐĂNG BÀI (Chỉ bấm được khi đã Lưu hết toàn bộ bài viết) ── */}
-                <div className="pt-2 space-y-2">
+            <PlanCheckNotice check={planCheck} loading={planChecking} />
+
+            <div className="space-y-2">
+              <div className="flex flex-col gap-2 sm:flex-row">
+                {editCampaignId ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleSaveCampaign}
+                      disabled={submitting || Boolean(submitBlockReason)}
+                      className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-blue-600 py-3.5 text-xs font-bold tracking-wider text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {submitting ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                      LƯU CHIẾN DỊCH
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCancelEdit}
+                      className="rounded-xl border border-slate-200 px-6 py-3.5 text-xs font-bold tracking-wider text-slate-600 hover:bg-slate-50"
+                    >
+                      HUỶ SỬA
+                    </button>
+                  </>
+                ) : (
                   <button
                     type="button"
-                    onClick={handleStartPost}
-                    disabled={!validationStatus.ready}
-                    className={`w-full py-3.5 rounded-xl font-bold text-xs tracking-wider shadow-sm flex items-center justify-center gap-2 transition-all ${validationStatus.ready
-                      ? "bg-blue-600 hover:bg-blue-700 text-white cursor-pointer active:scale-[0.99] shadow-blue-500/20"
-                      : "bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed opacity-80"
-                      }`}
+                    onClick={useSchedule ? handleCreateCampaign : handlePostNow}
+                    disabled={submitting || Boolean(submitBlockReason)}
+                    className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-blue-600 py-3.5 text-xs font-bold tracking-wider text-white shadow-sm shadow-blue-500/20 hover:bg-blue-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    <Play size={14} className={validationStatus.ready ? "fill-white" : "fill-slate-400"} />
-                    <span>ĐĂNG BÀI</span>
+                    {submitting ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} className="fill-white" />}
+                    {useSchedule ? `TẠO CHIẾN DỊCH (${slots.length} KHUNG GIỜ)` : "ĐĂNG NGAY"}
                   </button>
-
-                  {!validationStatus.ready && (
-                    <p className="text-[11px] text-amber-600 font-medium text-center flex items-center justify-center gap-1.5 pt-0.5">
-                      <Info size={13} />
-                      <span>{validationStatus.reason}</span>
-                    </p>
-                  )}
-                </div>
+                )}
               </div>
+              {submitBlockReason && (
+                <p className="flex items-center justify-center gap-1.5 pt-0.5 text-center text-[11px] font-medium text-amber-600">
+                  <Info size={13} />
+                  <span>{submitBlockReason}</span>
+                </p>
+              )}
+              {lastCreatedCampaign && !editCampaignId && (
+                <p className="text-center text-[11px] font-medium text-emerald-700">
+                  Đã tạo chiến dịch &quot;{lastCreatedCampaign.name}&quot;.{" "}
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/interact/campaigns?id=${lastCreatedCampaign.id}`)}
+                    className="font-bold underline"
+                  >
+                    Xem chiến dịch
+                  </button>
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -2842,6 +2159,16 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
       {/* ── RUNNING STATE ONLY (FIGMA NODE 1613:2258) ── */}
       {viewState === "running" && (
         <div className="space-y-5 animate-in fade-in duration-200">
+          {viewingCampaignRun && (
+            <button
+              type="button"
+              onClick={handleBackFromCampaignRun}
+              className="flex items-center gap-1.5 text-xs font-semibold text-[#2563EB] hover:underline"
+            >
+              <ChevronLeft size={14} />
+              Quay lại soạn bài (khung chiến dịch vẫn chạy tiếp)
+            </button>
+          )}
           <div className="flex items-center gap-3">
             {!(
               isStopped ||
@@ -3114,62 +2441,6 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
       )}
 
 
-      {/* Modal Xem & Quản lý Ảnh Bài Viết */}
-      <PostImageModal
-        key={viewingImageCard ? String(viewingImageCard.account?.uid || viewingImageCard.draftId) : "none"}
-        isOpen={!!viewingImageCard}
-        card={viewingImageCard}
-        onClose={() => setViewingImageCard(null)}
-        pixabayKey={pixabayKey}
-        apiKeySource={apiKeyContent || keyFileName || undefined}
-        onUpdateImages={(nextPaths) => {
-          if (!viewingImageCard) return;
-          const imgs = normalizeImagePaths(nextPaths);
-          const uidStr = String(viewingImageCard.account?.uid || "");
-          setDrafts((prev) => {
-            const idx = prev.findIndex((d) => String(d.accountUid) === uidStr);
-            if (idx >= 0) {
-              const updated = [...prev];
-              updated[idx] = {
-                ...updated[idx],
-                imagePaths: imgs,
-                imagePath: imgs[0] || null,
-                imageCount: imgs.length,
-                // Modal đã persist DB — giữ trạng thái đã lưu
-                isSaved: true,
-              };
-              return updated;
-            }
-            return [
-              ...prev,
-              {
-                id: viewingImageCard.draftId || `draft-${Date.now()}`,
-                authorName: viewingImageCard.authorName,
-                accountUid: uidStr,
-                content: viewingImageCard.content,
-                charCount: viewingImageCard.charCount,
-                imagePaths: imgs,
-                imagePath: imgs[0] || null,
-                imageCount: imgs.length,
-                selected: true,
-                mediaType: "status",
-                isSaved: true,
-              },
-            ];
-          });
-          setViewingImageCard((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  imagePaths: imgs,
-                  imagePath: imgs[0] || null,
-                  imageCount: imgs.length,
-                }
-              : null
-          );
-        }}
-      />
-
       {/* Modal xác nhận DỪNG KHẨN CẤP */}
       <EmergencyStopModal
         isOpen={showEmergencyModal}
@@ -3178,14 +2449,6 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
         isStopping={isStopping}
       />
 
-      {/* Modal xác nhận khi giờ hẹn ở Quá khứ (BR-M03-PUB-01) */}
-      <PastScheduleModal
-        isOpen={showPastScheduleModal}
-        onClose={handleCancelPastSchedule}
-        onConfirm={handleConfirmPastScheduleImmediate}
-        scheduleTime={scheduleTime}
-        currentTime={new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-      />
     </div>
   );
 }

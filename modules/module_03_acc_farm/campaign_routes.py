@@ -62,6 +62,8 @@ class ComposeCheckPayload(BaseModel):
     compose: CampaignComposePayload
     slots: List[str] = Field(default_factory=list, max_length=MAX_TIME_SLOTS * 2)
     settings: CampaignSettingsPayload = Field(default_factory=CampaignSettingsPayload)
+    # Khung chờ cũ của chiến dịch đang sửa (không bắt "sau bây giờ 5 phút")
+    keep_slots: List[str] = Field(default_factory=list, max_length=MAX_TIME_SLOTS * 2)
 
 
 class RerunPayload(BaseModel):
@@ -90,6 +92,7 @@ def check_compose(payload: ComposeCheckPayload):
     """Kiểm tra kho bài / ảnh / khung giờ trước khi Đăng ngay hoặc Tạo chiến dịch (không ghi gì)."""
     result = campaign_service.preview(
         payload.compose.to_input(), payload.account_count, payload.slots, payload.settings.model_dump(),
+        keep_slots=payload.keep_slots,
     )
     return {"success": True, **result}
 

@@ -14,7 +14,7 @@ import re
 import random
 import logging
 import mimetypes
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from concurrent.futures import ThreadPoolExecutor
 from config.constants import UPLOADS_DIR
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, UploadFile, File
@@ -72,14 +72,6 @@ class SettingsPayload(BaseModel):
     min_delay: Optional[int] = 600
     max_delay: Optional[int] = 900
     thread_count: Optional[int] = 1
-
-class GenerateDraftsPayload(BaseModel):
-    post_type: str = "status"
-    prompt: str
-    accounts: List[Dict[str, Any]]
-    api_key_source: Optional[str] = None
-    pixabay_key: Optional[str] = None
-    model: Optional[str] = None
 
 class ScanFolderPayload(BaseModel):
     master_folder_path: str
@@ -322,123 +314,6 @@ def get_available_gemini_models_get(key_source: Optional[str] = Query(None)):
     """Lấy danh sách các model Google Gemini qua GET."""
     models = list_available_gemini_models(key_source=key_source)
     return {"success": True, "models": models, "count": len(models)}
-
-@router.post("/drafts/generate")
-def generate_drafts(payload: GenerateDraftsPayload):
-    # Lấy key từ file hoặc settings
-    keys = []
-    if payload.api_key_source:
-        keys = load_gemini_keys(payload.api_key_source)
-    settings = post_repository.get_post_settings(payload.post_type)
-    if not keys and settings:
-        keys = parse_user_gemini_keys(settings.get('gemini_api_keys'))
-    if not keys and settings and settings.get('api_key_file_path'):
-        keys = load_gemini_keys(settings['api_key_file_path'])
-    if not keys:
-        keys = load_gemini_keys()
-
-    if not keys:
-        raise HTTPException(status_code=400, detail="Chưa cấu hình Gemini API Key hợp lệ.")
-
-    chosen_model = payload.model or (settings.get('gemini_model') if settings else None) or "gemini-3.8-flash"
-
-    created_drafts = []
-    errors = []
-    image_warnings = []
-    for acc in payload.accounts:
-        uid = str(acc.get('uid', ''))
-        name = str(acc.get('name', ''))
-
-        try:
-            gen_res = generate_status_content(
-                prompt=payload.prompt,
-                api_key=keys[0],
-                model=chosen_model,
-                fallback_keys=keys[1:]
-            )
-            if isinstance(gen_res, tuple):
-                content, img_kw = gen_res
-            else:
-                content, img_kw = gen_res, None
-
-            # Lưu nội dung trước. Tìm ảnh không được làm mất bài.
-            post_repository.delete_drafts_by_account(uid, payload.post_type)
-            post = post_repository.create_post(
-                post_type=payload.post_type,
-                account_uid=uid,
-                account_name=name,
-                content=content,
-                status='DRAFT'
-            )
-
-            img_path = None
-            if img_kw:
-                logger.info(f"Đã lưu nội dung UID {uid}. Tìm ảnh riêng, từ khóa '{img_kw}'.")
-                pool = ThreadPoolExecutor(max_workers=1)
-                try:
-                    fut = pool.submit(
-                        crawl_or_fetch_image,
-                        img_kw,
-                        payload.pixabay_key,
-                        None,
-                        keys,
-                    )
-                    img_path = fut.result(timeout=25)
-                except FuturesTimeout:
-                    img_path = None
-                    logger.warning(f"Tìm ảnh quá 25s cho UID {uid} — giữ nội dung, không ảnh.")
-                except Exception as img_err:
-                    img_path = None
-                    logger.warning(f"Tìm ảnh lỗi UID {uid}: {img_err}")
-                finally:
-                    pool.shutdown(wait=False, cancel_futures=True)
-
-                if img_path:
-                    updated = post_repository.save_or_update_draft(
-                        account_uid=uid,
-                        content=content,
-                        post_type=payload.post_type,
-                        draft_id=post.get("id"),
-                        account_name=name,
-                        status="DRAFT",
-                        image_path=img_path,
-                        image_paths=[img_path],
-                    )
-                    if updated:
-                        post = updated
-                else:
-                    image_warnings.append({
-                        "uid": uid,
-                        "name": name or uid,
-                        "message": f"Không tìm được ảnh cho {name or uid}. Đã thêm nội dung.",
-                    })
-
-            created_drafts.append(post)
-        except Exception as e:
-            msg = str(e)
-            errors.append({"uid": uid, "error": msg})
-            logger.error(f"Lỗi tạo bài nháp cho UID {uid}: {e}")
-
-    if not created_drafts:
-        detail = errors[0]["error"] if errors else "Không tạo được bài viết."
-        # Rút gọn lỗi Gemini cho FE (401 key invalid / 429 / model…)
-        lower = detail.lower()
-        if "401" in detail or "api key not valid" in lower or "unauthenticated" in lower:
-            detail = (
-                "Gemini API Key không hợp lệ hoặc đã hết hạn (HTTP 401). "
-                "Hãy tạo key mới tại Google AI Studio rồi dán/chọn lại."
-            )
-        elif "429" in detail or "resource_exhausted" in lower:
-            detail = "Gemini bị giới hạn tốc độ (HTTP 429). Thử lại sau hoặc đổi API Key."
-        raise HTTPException(status_code=400, detail=detail)
-
-    return {
-        "success": True,
-        "data": created_drafts,
-        "partial_errors": errors or None,
-        "image_warnings": image_warnings or None,
-    }
-
 
 @router.get("/drafts")
 def list_drafts(post_type: str = Query("status")):
@@ -986,6 +861,9 @@ def stop_posting():
 
 @router.post("/reset")
 def reset_posting():
+    # Không xoá phiên đang chạy (vd: khung chiến dịch) — bộ lập lịch dựa vào phiên này để chốt kết quả
+    if runner.is_busy():
+        raise HTTPException(status_code=409, detail="Phiên đăng bài đang chạy. Dừng phiên trước khi soạn bài mới.")
     runner.reset_session()
     return {"success": True, "message": "Đã reset phiên đăng bài để soạn bài mới."}
 
@@ -993,6 +871,7 @@ def reset_posting():
 @router.get("/status")
 def get_posting_status():
     status = runner.get_status()
+    status["campaign"] = post_now_service.campaign_of_session(status.get("session_id"))
     return {"success": True, "data": status}
 
 

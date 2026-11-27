@@ -164,14 +164,21 @@ def preview(
     slot_times: Sequence[str],
     settings: Dict[str, int],
     now: Optional[datetime] = None,
+    keep_slots: Sequence[str] = (),
 ) -> Dict[str, Any]:
-    """Kiểm tra trước khi bấm Đăng ngay / Tạo chiến dịch (FE hiện lỗi + cảnh báo ngay khi soạn)."""
+    """Kiểm tra trước khi bấm Đăng ngay / Tạo chiến dịch (FE hiện lỗi + cảnh báo ngay khi soạn).
+    keep_slots: khung chờ cũ của chiến dịch đang sửa (được giữ dù đã sát giờ)."""
     now = now or local_now()
     errors: List[str] = []
     warnings: List[str] = []
     times: List[datetime] = []
+    keep = []
+    for raw in keep_slots or []:
+        m = _TIME_RE.match(str(raw or "").strip())
+        if m:
+            keep.append(now.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0))
     try:
-        times = parse_slot_times(slot_times, now)
+        times = parse_slot_times(slot_times, now, keep=keep)
     except CampaignError as exc:
         errors.extend(exc.errors)
     if len(slot_times or []) > MAX_TIME_SLOTS:
