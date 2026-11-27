@@ -10,18 +10,21 @@ import {
   Download,
   ExternalLink,
   Loader2,
+  Play,
   BarChart2,
   X,
   BadgeCheck,
+  ScrollText,
 } from "lucide-react";
 
 import { Checkbox } from "@/components/ui/checkbox";
+import { refreshMiniProgress } from "@/components/MiniProgress";
 import CustomSelect from "@/components/ui/custom-select";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "@/lib/toast";
 import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
-import { Pager, notifyExportResult } from "../_shared";
+import { LiveLogConsole, Pager, notifyExportResult } from "../_shared";
 import { askConfirm } from "../shared/askConfirm";
 import { useActionLock } from "../shared/useActionLock";
 import { saveBlobFile } from "../shared/saveFile.mjs";
@@ -29,6 +32,7 @@ import {
   getScanSessions,
   getScanSessionDetail,
   stopScanSession,
+  continueScanSession,
   getScannedPages,
   getSessionFollowerPages,
   getSessionPostPages,
@@ -97,6 +101,11 @@ const fmtNum = (n) => Number(n || 0).toLocaleString("vi-VN");
 /** page_key "id:123" / "user:abc" → "123" / "abc" */
 const bareKey = (key) => String(key || "").replace(/^(id|user):/, "");
 const isLive = (s) => s.status === "RUNNING" || s.status === "PAUSED";
+/** Chạy tiếp được: quét followers / bài viết / thông tin Page (link, tệp) đã dừng, lỗi hoặc dừng giữa chừng */
+const canContinue = (s) =>
+  ["FOLLOW", "POST_SCAN", "DETAIL"].includes(s.job_type) &&
+  ["STOPPED", "FAILED", "PARTIAL"].includes(s.status) &&
+  s.stop_reason !== "TARGET_REACHED";
 const isPageJob = (s) => s.job_type !== "FOLLOW" && s.job_type !== "POST_SCAN";
 const unitOf = (s) => (s.job_type === "FOLLOW" ? "UID" : s.job_type === "POST_SCAN" ? "bài viết" : "Page");
 const typeLabel = (s) =>
@@ -147,6 +156,26 @@ function formatDt(dt) {
   return `${two(d.getHours())}:${two(d.getMinutes())} - ${two(d.getDate())}/${two(d.getMonth() + 1)}/${d.getFullYear()}`;
 }
 
+/** Log lưu kèm phiên (cột logs: JSON [{ts, level, message}]) → dòng cho LiveLogConsole */
+function parseSessionLogs(session) {
+  let lines = session?.logs;
+  if (typeof lines === "string") {
+    try {
+      lines = JSON.parse(lines);
+    } catch {
+      lines = [];
+    }
+  }
+  if (!Array.isArray(lines)) return [];
+  return lines.map((line, i) => ({
+    id: `h${session.id}_${i}`,
+    timestamp: line?.ts || "—",
+    thread: line?.thread,
+    message: line?.message ?? "",
+    type: ["success", "warn", "error"].includes(line?.level) ? line.level : "info",
+  }));
+}
+
 function DurationLine({ s }) {
   const Icon = isLive(s) ? Clock : s.status === "COMPLETED" ? CheckCircle2 : CircleStop;
   const text = isLive(s)
@@ -185,6 +214,7 @@ export default function PageScannerHistoryModule() {
   const [selected, setSelected] = useState(() => new Map());
   const [exporting, guardExport, exportingApi] = useActionLock();
   const [isStopping, guardStop] = useActionLock();
+  const [isContinuing, guardContinue] = useActionLock();
 
   /* Detail panel */
   const [detailOpen, setDetailOpen] = useState(false);
@@ -193,6 +223,8 @@ export default function PageScannerHistoryModule() {
   const [detailPagesLoading, setDetailPagesLoading] = useState(false);
   const [detailPage, setDetailPage] = useState(1);
   const [detailTotal, setDetailTotal] = useState(0);
+  const [detailTab, setDetailTab] = useState("data");
+  const detailLogs = useMemo(() => (detail ? parseSessionLogs(detail) : []), [detail]);
 
   const requestSeq = useRef(0);
   const detailSeq = useRef(0);
@@ -376,23 +408,49 @@ export default function PageScannerHistoryModule() {
     }
   };
 
-  const openDetail = (session) => {
-    setDetail(session);
-    setDetailOpen(true);
-    setDetailPages([]);
-    setDetailTotal(0);
-    loadDetailPages(1, session);
-    getScanSessionDetail(session.id)
+  const refreshDetail = useCallback((session, { silent = false } = {}) => {
+    return getScanSessionDetail(session.id)
       .then((res) =>
         // Giữ mốc thời gian của danh sách (có múi giờ) — API chi tiết trả giờ không kèm múi giờ
         setDetail((cur) =>
           cur?.id === session.id
-            ? { ...session, ...res, started_at: session.started_at, finished_at: session.finished_at }
+            ? { ...cur, ...res, started_at: cur.started_at, finished_at: cur.finished_at ?? res.finished_at }
             : cur,
         ),
       )
-      .catch((err) => toast.error(`Lỗi tải chi tiết: ${err.message}`));
+      .catch((err) => {
+        if (!silent) toast.error(`Lỗi tải chi tiết: ${err.message}`);
+      });
+  }, []);
+
+  const openDetail = (session) => {
+    setDetail(session);
+    setDetailOpen(true);
+    setDetailTab("data");
+    setDetailPages([]);
+    setDetailTotal(0);
+    loadDetailPages(1, session);
+    refreshDetail(session);
   };
+
+  const closeDetail = useCallback(() => setDetailOpen(false), []);
+
+  /* Phiên đang chạy → cập nhật thống kê + nhật ký trong modal */
+  const detailLive = detailOpen && detail && isLive(detail);
+  const detailId = detail?.id;
+  useEffect(() => {
+    if (!detailLive) return undefined;
+    const t = setInterval(() => refreshDetail({ id: detailId }, { silent: true }), POLL_MS);
+    return () => clearInterval(t);
+  }, [detailLive, detailId, refreshDetail]);
+
+  /* Esc đóng modal */
+  useEffect(() => {
+    if (!detailOpen) return undefined;
+    const onKey = (e) => e.key === "Escape" && closeDetail();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [detailOpen, closeDetail]);
 
   const handleStop = async (session) => {
     const ok = await askConfirm({
@@ -408,6 +466,24 @@ export default function PageScannerHistoryModule() {
       loadSessions({ silent: true });
     } catch (err) {
       toast.error(`Không dừng được: ${err.message}`, { key: "m11-history-stop" });
+    }
+  };
+
+  const handleContinue = async (session) => {
+    const ok = await askConfirm({
+      title: "Chạy tiếp phiên quét",
+      description: `Chạy tiếp phiên #${session.id} (${targetText(session)})? Hệ thống tạo phiên mới cùng cấu hình và tài khoản, quét tiếp từ Page đang dở — dữ liệu đã lưu sẽ được bỏ qua.`,
+      confirmText: "Chạy tiếp",
+    });
+    if (!ok) return;
+    try {
+      const res = await continueScanSession(session.id);
+      toast.success(`Đã tạo phiên #${res?.session_id} chạy tiếp ${fmtNum(res?.remaining_pages)} Page còn lại`, { key: "m11-history-continue" });
+      setDetailOpen(false);
+      loadSessions({ silent: true });
+      refreshMiniProgress(); // thẻ tiến độ góc màn hình hiện ngay
+    } catch (err) {
+      toast.error(`Không chạy tiếp được: ${err?.message || err}`, { key: "m11-history-continue" });
     }
   };
 
@@ -470,7 +546,7 @@ export default function PageScannerHistoryModule() {
                 <th className={TH}>Kết quả thu thập</th>
                 <th className={TH}>Thời gian</th>
                 <th className={TH}>Trạng thái</th>
-                <th className={`${TH} w-24 text-center`}>Thao tác</th>
+                <th className={`${TH} sticky right-0 z-[1] shadow-[-6px_0_8px_-6px_rgba(15,23,42,0.15)] w-24 bg-[#F8FAFC] text-center`}>Thao tác</th>
               </tr>
             </thead>
             <tbody className={`divide-y divide-[#F1F5F9] ${loading && sessions.length ? "opacity-60" : ""}`}>
@@ -496,7 +572,7 @@ export default function PageScannerHistoryModule() {
                   const target = targetOf(s);
                   const result = resultOf(s);
                   return (
-                    <tr key={s.id} className={`transition-colors hover:bg-slate-50 ${s.status === "FAILED" ? "bg-red-50/20" : ""}`}>
+                    <tr key={s.id} className={`group transition-colors hover:bg-slate-50 ${s.status === "FAILED" ? "bg-red-50/20" : ""}`}>
                       <td className="py-3 pl-4">
                         <Checkbox checked={selected.has(s.id)} onCheckedChange={() => toggleOne(s)} aria-label={`Chọn phiên #${s.id}`} />
                       </td>
@@ -526,7 +602,8 @@ export default function PageScannerHistoryModule() {
                       <td className="px-3 py-3" title={s.error_message || STOP_REASONS[s.stop_reason]?.label || ""}>
                         <StatusBadge status={s.status} />
                       </td>
-                      <td className="px-3 py-3">
+                      {/* Cột thao tác cố định bên phải khi bảng cuộn ngang */}
+                      <td className="sticky right-0 z-[1] shadow-[-6px_0_8px_-6px_rgba(15,23,42,0.15)] bg-white px-3 py-3 transition-colors group-hover:bg-slate-50">
                         <div className="flex items-center justify-center gap-1">
                           <button
                             type="button"
@@ -547,6 +624,18 @@ export default function PageScannerHistoryModule() {
                               className="rounded-lg p-1.5 text-red-500 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
                             >
                               <CircleStop className="size-4" />
+                            </button>
+                          )}
+                          {canContinue(s) && (
+                            <button
+                              type="button"
+                              title="Chạy tiếp các Page còn lại"
+                              aria-label="Chạy tiếp"
+                              onClick={() => guardContinue(() => handleContinue(s))}
+                              disabled={isContinuing}
+                              className="rounded-lg p-1.5 text-[#059669] hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <Play className="size-4" />
                             </button>
                           )}
                         </div>
@@ -581,30 +670,48 @@ export default function PageScannerHistoryModule() {
         </div>
       </section>
 
-      {/* ══════ SESSION DETAIL SLIDE-OVER ══════ */}
+      {/* ══════ SESSION DETAIL MODAL ══════ */}
       {detailOpen && detail && (
-        <div className="fixed inset-0 z-50 flex justify-end">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setDetailOpen(false)} />
-          <div className="relative z-10 flex h-full w-full max-w-3xl flex-col bg-white shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" onClick={closeDetail} />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Chi tiết phiên #${detail.id}`}
+            className="relative z-10 flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+          >
             {/* Header */}
-            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
-              <div>
-                <h2 className="text-base font-bold text-slate-800">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
+              <div className="min-w-0">
+                <h2 className="truncate text-base font-bold text-slate-800" title={targetText(detail)}>
                   Chi tiết phiên #{detail.id}: <span className="text-primary">{targetText(detail)}</span>
                 </h2>
-                <div className="mt-1 flex items-center gap-2">
+                <div className="mt-1 flex flex-wrap items-center gap-2">
                   <StatusBadge status={detail.status} />
                   <StopReasonBadge reason={detail.stop_reason} />
                   <span className="text-[11px] text-slate-400">{formatDt(detail.started_at)}</span>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setDetailOpen(false)}
-                className="rounded-lg p-1.5 hover:bg-slate-100"
-              >
-                <X className="size-4 text-slate-500" />
-              </button>
+              <div className="flex shrink-0 items-center gap-2">
+                {canContinue(detail) && (
+                  <button
+                    type="button"
+                    onClick={() => guardContinue(() => handleContinue(detail))}
+                    disabled={isContinuing}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                  >
+                    <Play className="size-3.5" /> Chạy tiếp
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={closeDetail}
+                  aria-label="Đóng"
+                  className="rounded-lg p-1.5 hover:bg-slate-100"
+                >
+                  <X className="size-4 text-slate-500" />
+                </button>
+              </div>
             </div>
 
             {/* Stats row */}
@@ -628,10 +735,48 @@ export default function PageScannerHistoryModule() {
               <span className="text-slate-400">Nguồn: <span className="font-semibold text-slate-600">{detail.source_type}</span></span>
               <span className="text-slate-400">Thời lượng: <span className="font-semibold text-slate-600">{formatDuration(detail.duration_seconds)}</span></span>
               <span className="text-slate-400">Mục tiêu: <span className="font-semibold text-slate-600">{detail.max_results} {unitOf(detail)}</span></span>
+              {detail.error_message && (
+                <span className="basis-full text-red-600">Lỗi: <span className="font-semibold">{detail.error_message}</span></span>
+              )}
             </div>
 
+            {/* Tabs */}
+            <div className="flex gap-1 border-b border-slate-100 px-6">
+              {[
+                { key: "data", label: "Dữ liệu thu thập", Icon: BarChart2 },
+                { key: "logs", label: `Nhật ký chạy${detailLogs.length ? ` (${fmtNum(detailLogs.length)})` : ""}`, Icon: ScrollText },
+              ].map(({ key, label, Icon }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setDetailTab(key)}
+                  className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-semibold transition-colors ${
+                    detailTab === key
+                      ? "border-[#2563EB] text-[#2563EB]"
+                      : "border-transparent text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  <Icon className="size-3.5" />
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {detailTab === "logs" ? (
+              <div className="flex-1 overflow-auto p-4">
+                <LiveLogConsole
+                  title={`Nhật ký phiên #${detail.id}`}
+                  logs={detailLogs}
+                  phase={detail.status === "RUNNING" ? "running" : detail.status === "PAUSED" ? "paused" : "done"}
+                />
+                {!isLive(detail) && !detailLogs.length && (
+                  <p className="mt-2 text-center text-[11px] text-slate-400">Phiên này không lưu nhật ký chạy.</p>
+                )}
+              </div>
+            ) : (
+            <>
             {/* Pages list */}
-            <div className="flex-1 overflow-auto">
+            <div className="min-h-[240px] flex-1 overflow-auto">
               {detailPagesLoading ? (
                 <div className="flex h-full items-center justify-center text-slate-400">
                   <div className="text-center">
@@ -719,6 +864,8 @@ export default function PageScannerHistoryModule() {
               <div className="flex items-center justify-end gap-1 border-t border-slate-100 px-6 py-3">
                 <Pager page={detailPage} totalPages={detailTotal} onChange={(p) => loadDetailPages(p)} />
               </div>
+            )}
+            </>
             )}
           </div>
         </div>

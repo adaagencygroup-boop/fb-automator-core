@@ -45,10 +45,11 @@ export function ListSidePanel({
   onSearchChange,
   searchPlaceholder = "Tìm tên hoặc ID…",
   headerRight,
+  className = "",
   children,
 }) {
   return (
-    <Card className="flex h-[640px] max-h-[calc(100vh-180px)] min-h-[360px] w-full flex-col overflow-hidden border-slate-200 shadow-sm lg:w-[280px] lg:shrink-0">
+    <Card className={`flex h-[640px] max-h-[calc(100vh-180px)] min-h-[360px] w-full flex-col overflow-hidden border-slate-200 shadow-sm lg:w-[280px] lg:shrink-0 ${className}`}>
       <div className="shrink-0 border-b border-slate-100 px-4 py-3">
         <div className="flex items-center justify-between gap-2">
           <div>

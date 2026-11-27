@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
@@ -1099,6 +1100,117 @@ async def resume_scan_session(session_id: int):
         "worker_signaled": ok,
         "message": f"Đã gửi tín hiệu tiếp tục phiên #{session_id}",
     }
+
+
+# ==================== CHẠY TIẾP phiên đã dừng (Lịch sử) ====================
+
+CONTINUABLE_JOBS = ("FOLLOW", "POST_SCAN", "DETAIL")
+CONTINUABLE_STATUSES = ("STOPPED", "FAILED", "PARTIAL")
+# Dòng log mở từng Page: "[3/10] Mở Page …" (FOLLOW) · "[3/10] Feed Page …" (POST_SCAN) · "[3/10] Đang quét …" (DETAIL)
+_PAGE_MARKER = re.compile(r"^\[(\d+)/(\d+)\] (?:Mở Page|Feed Page|Đang quét) ")
+# Bảng ghi dữ liệu theo phiên — dự phòng khi log đã bị cắt bớt (giữ ~500 dòng cuối)
+_SESSION_DATA = {
+    "FOLLOW": "SELECT DISTINCT page_key FROM scanned_page_followers WHERE owner_key = %s AND last_session_id = %s",
+    "POST_SCAN": "SELECT DISTINCT page_key FROM scanned_posts WHERE owner_key = %s AND last_session_id = %s",
+    "DETAIL": "SELECT DISTINCT page_key FROM page_scan_session_pages WHERE %s IS NOT NULL AND session_id = %s",
+}
+
+
+def _json(value: Any, fallback: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return fallback
+    return value if value is not None else fallback
+
+
+def _continue_start_index(owner: str, session: Dict[str, Any], page_keys: List[str]) -> int:
+    """Vị trí Page đang quét dở khi phiên dừng — quét lại từ Page đó (dữ liệu đã lưu tự bỏ qua)."""
+    start = -1
+    for line in _json(session.get("logs"), []) or []:
+        m = _PAGE_MARKER.match(str((line or {}).get("message") or ""))
+        if m and int(m.group(2)) == len(page_keys):
+            start = max(start, int(m.group(1)) - 1)
+    try:
+        rows = db.fetch_all(_SESSION_DATA[session["job_type"]], (owner, session["id"])) or []
+        pos = {k: i for i, k in enumerate(page_keys)}
+        for r in rows:
+            start = max(start, pos.get(r["page_key"], -1))
+    except Exception as exc:
+        logger.warning(f"[Module 11 API] Đọc dữ liệu phiên #{session['id']} để chạy tiếp: {exc}")
+    return max(start, 0)
+
+
+def continue_plan(owner: str, session: Dict[str, Any]) -> Dict[str, Any]:
+    """{ok, reason?, page_keys, settings} — phần còn thiếu của phiên FOLLOW / POST_SCAN / DETAIL."""
+    job = session.get("job_type") or "DISCOVERY"
+    if job not in CONTINUABLE_JOBS:
+        return {"ok": False, "reason": "Loại phiên này không hỗ trợ chạy tiếp"}
+    if session.get("status") not in CONTINUABLE_STATUSES:
+        return {"ok": False, "reason": "Chỉ chạy tiếp được phiên đã dừng, lỗi hoặc dừng giữa chừng"}
+    settings = _json(session.get("settings"), {}) or {}
+    page_keys = [str(k).strip() for k in (settings.get("page_keys") or []) if str(k).strip()]
+    if not page_keys:
+        return {"ok": False, "reason": "Phiên không lưu danh sách Page để chạy tiếp"}
+    done = int(session.get("total_unique") or 0)
+    goal = int((settings.get("target_followers") if job == "FOLLOW" else settings.get("target_pages")) or 0)
+    if job != "POST_SCAN" and goal and done >= goal:
+        return {"ok": False, "reason": "Phiên đã đạt mục tiêu"}
+    remaining = page_keys[_continue_start_index(owner, session, page_keys):]
+    return {"ok": True, "job": job, "page_keys": remaining, "settings": settings, "goal_left": goal - done if goal else 0}
+
+
+@router.post("/sessions/{session_id}/continue")
+async def continue_scan_session(session_id: int):
+    """
+    POST /api/page-scanner/sessions/{id}/continue
+    Chạy tiếp phiên đã dừng / lỗi: tạo phiên mới cùng cấu hình & tài khoản, chỉ quét các Page còn lại
+    (bắt đầu từ Page đang quét dở). Hỗ trợ quét followers, quét bài viết, quét thông tin Page (link / tệp).
+    """
+    owner = _get_owner()
+    session = db.fetch_one(
+        "SELECT id, status, job_type, source_type, settings, logs, total_unique, account_uid"
+        " FROM page_scan_sessions WHERE id = %s AND owner_key = %s",
+        (session_id, owner),
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="Không tìm thấy phiên quét")
+    plan = await asyncio.to_thread(continue_plan, owner, session)
+    if not plan["ok"]:
+        raise HTTPException(status_code=409, detail=plan["reason"])
+    s, keys, job = plan["settings"], plan["page_keys"], plan["job"]
+    accounts = [str(u).strip() for u in (s.get("account_uids") or []) if str(u).strip()] or [str(session.get("account_uid") or "")]
+    pick = lambda *names: {n: s[n] for n in names if s.get(n) is not None}  # noqa: E731
+
+    if job == "FOLLOW":
+        res = await create_follower_scan_session(FollowerSessionInput(
+            page_keys=keys, account_uids=accounts, target_followers=max(1, plan["goal_left"] or 500),
+            **pick("rotate_every", "rotate_on_checkpoint", "keep_browser", "max_per_page", "idle_timeout_s", "skip_existing",
+                   "source_list_id", "page_delay_s", "page_delay_min_s", "page_delay_max_s", "scroll_delay_s"),
+        ))
+        new_id = res["session_id"]
+    elif job == "POST_SCAN":
+        res = await create_post_scan_session(PostSessionInput(
+            page_keys=keys, account_uids=accounts,
+            **pick("max_posts_per_page", "date_from", "date_to", "post_types", "idle_timeout_s", "skip_existing",
+                   "page_delay_s", "page_delay_min_s", "page_delay_max_s", "scroll_delay_s", "keep_browser",
+                   "source_list_id", "rotate_every", "rotate_on_checkpoint", "skip_pinned_posts"),
+        ))
+        new_id = res["session_id"]
+    else:
+        label = str(s.get("source_label") or "Nhập link")
+        res = await create_detail_scan_session(DetailSessionInput(
+            pages=[{"page_key": k} for k in keys], account_uids=accounts,
+            source_type=session.get("source_type") or "PARSE",
+            source_label=label if label.startswith("Chạy tiếp") else f"Chạy tiếp #{session_id} · {label}"[:200],
+            target_pages=plan["goal_left"] or None,
+            **pick("min_followers", "rotate_every", "page_delay_min_s", "page_delay_max_s"),
+        ))
+        new_id = res["session_id"]
+
+    append_session_log(new_id, f"Chạy tiếp phiên #{session_id} · còn {len(keys)} Page", "warn")
+    return {"session_id": new_id, "from_session_id": session_id, "job_type": job, "remaining_pages": len(keys)}
 
 
 @router.post("/stop")

@@ -376,6 +376,14 @@ export const NAV_ITEMS = [
         moduleId: "profile_scan",
         icon: icon("icon_nav_seeding_profile", 16, 13),
       },
+      {
+        id: "profile_scan.history",
+        label: "Lịch sử",
+        title: "Lịch sử quét profile",
+        description: "Nhật ký và tiến độ các phiên quét thông tin profile.",
+        moduleId: "profile_scan",
+        icon: HISTORY_ICON,
+      },
     ],
   },
 ];

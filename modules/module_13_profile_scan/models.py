@@ -283,6 +283,111 @@ def pending_count(session_id: int) -> int:
     return session_counts(session_id)["pending"]
 
 
+# ==================== Lịch sử phiên ====================
+
+# Giờ lưu là giờ của DB (TIMESTAMP không múi giờ) → đổi sang timestamptz để trả ISO có múi giờ
+_TZ = "AT TIME ZONE current_setting('TIMEZONE')"
+
+
+def list_sessions(
+    owner: str, page: int, page_size: int, keyword: str = "", mode: str = "", statuses: Optional[List[str]] = None,
+    date_from: Any = None, date_to: Any = None,
+) -> Dict[str, Any]:
+    where = ["s.owner_key = %s"]
+    params: List[Any] = [owner]
+    if mode:
+        where.append("s.mode = %s")
+        params.append(mode)
+    if statuses:
+        where.append("s.status = ANY(%s)")
+        params.append(statuses)
+    if date_from:
+        where.append(f"(s.created_at {_TZ}) >= %s")
+        params.append(date_from)
+    if date_to:
+        where.append(f"(s.created_at {_TZ}) < %s")
+        params.append(date_to)
+    if keyword:
+        like = f"%{keyword}%"
+        where.append(
+            """(s.id::text = %s OR s.message ILIKE %s OR (s.settings::jsonb -> 'account_uids')::text ILIKE %s
+                OR EXISTS (SELECT 1 FROM profile_scan_targets t CROSS JOIN LATERAL unnest(t.source_keys) AS k(key)
+                           JOIN profile_sources ps ON ps.owner_key = s.owner_key AND ps.source_key = k.key
+                           WHERE t.session_id = s.id AND ps.name ILIKE %s))"""
+        )
+        params += [keyword.lstrip("#"), like, like, like]
+    cond = " AND ".join(where)
+    total = db.fetch_one(f"SELECT COUNT(*)::int AS c FROM profile_scan_sessions s WHERE {cond}", tuple(params))["c"]
+    rows = db.fetch_all(
+        f"""
+        SELECT s.id, s.status, s.mode, s.message, s.settings,
+               (s.created_at {_TZ}) AS started_at, (s.finished_at {_TZ}) AS finished_at,
+               EXTRACT(EPOCH FROM (
+                   CASE WHEN s.finished_at IS NOT NULL THEN s.finished_at
+                        WHEN s.status IN ('RUNNING', 'PAUSED') THEN NOW()::timestamp ELSE s.heartbeat_at END
+               ) - s.created_at)::int AS duration_seconds,
+               c.total, c.done, c.skipped, c.failed, c.pending,
+               COALESCE(src.source_count, 0) AS source_count, src.source_name, src.source_type
+        FROM profile_scan_sessions s
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*)::int AS total,
+                   COUNT(*) FILTER (WHERE status = 'DONE')::int AS done,
+                   COUNT(*) FILTER (WHERE status = 'SKIPPED')::int AS skipped,
+                   COUNT(*) FILTER (WHERE status = 'FAILED')::int AS failed,
+                   COUNT(*) FILTER (WHERE status IN ('PENDING', 'RUNNING'))::int AS pending
+            FROM profile_scan_targets WHERE session_id = s.id
+        ) c ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*)::int AS source_count,
+                   (ARRAY_AGG(x.name ORDER BY x.first))[1] AS source_name,
+                   (ARRAY_AGG(x.type ORDER BY x.first))[1] AS source_type
+            FROM (
+                SELECT ps.name, ps.type, MIN(t.id) AS first
+                FROM profile_scan_targets t CROSS JOIN LATERAL unnest(t.source_keys) AS k(key)
+                JOIN profile_sources ps ON ps.owner_key = s.owner_key AND ps.source_key = k.key
+                WHERE t.session_id = s.id
+                GROUP BY ps.source_key, ps.name, ps.type
+            ) x
+        ) src ON TRUE
+        WHERE {cond}
+        ORDER BY s.id DESC LIMIT %s OFFSET %s
+        """,
+        tuple(params + [page_size, (page - 1) * page_size]),
+    )
+    for r in rows:
+        try:
+            settings = json.loads(r.pop("settings") or "{}")
+        except ValueError:
+            settings = {}
+        r["account_uids"] = settings.get("account_uids") or []
+        r["workers"] = settings.get("workers")
+        r["delay_min"] = settings.get("delay_min")
+        r["delay_max"] = settings.get("delay_max")
+        r["min_friends"] = settings.get("min_friends") or 0
+    return {"items": rows, "total": total}
+
+
+def session_targets(session_id: int, status: str, page: int, page_size: int) -> Dict[str, Any]:
+    """Từng profile cần quét trong phiên + kết quả (tên / UID / lý do bỏ qua, lỗi)."""
+    statuses = {"DONE": ["DONE"], "SKIPPED": ["SKIPPED"], "FAILED": ["FAILED"], "PENDING": ["PENDING", "RUNNING"]}.get(status)
+    cond = "t.session_id = %s" + (" AND t.status = ANY(%s)" if statuses else "")
+    base: List[Any] = [session_id] + ([statuses] if statuses else [])
+    total = db.fetch_one(f"SELECT COUNT(*)::int AS c FROM profile_scan_targets t WHERE {cond}", tuple(base))["c"]
+    items = db.fetch_all(
+        f"""
+        SELECT t.id, t.url, t.status, t.uid, t.reason, t.account_uid, t.attempts,
+               COALESCE(p.name, t.name) AS name, COALESCE(p.avatar_url, t.avatar_url) AS avatar, p.friends, p.followers, p.phone
+        FROM profile_scan_targets t
+        JOIN profile_scan_sessions s ON s.id = t.session_id
+        LEFT JOIN scanned_profiles p ON p.owner_key = s.owner_key AND p.uid = t.uid
+        WHERE {cond}
+        ORDER BY t.id LIMIT %s OFFSET %s
+        """,
+        tuple(base + [page_size, (page - 1) * page_size]),
+    )
+    return {"items": items, "total": total}
+
+
 # ==================== Profile ====================
 
 FIELDS = (
