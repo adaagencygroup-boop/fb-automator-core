@@ -459,7 +459,10 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
               Mẹo: giữ chuột trái và kéo để chọn nhiều tài khoản liên tiếp · Ctrl + click chọn riêng lẻ · Shift + click chọn cả khoảng.
             </p>
           )}
-          <div ref={setTableBox} className="max-h-[640px] overflow-auto overscroll-contain rounded-xl border border-[#E2E8F0]">
+          {/* Khung viền: phần trên = bảng cuộn (tiêu đề cột dính), phần dưới = thanh phân trang CỐ ĐỊNH (không cuộn theo bảng) */}
+          {/* Không overflow-hidden ở khung ngoài: menu "20 / trang" mở lên trên không bị cắt khi bảng ít dòng */}
+          <div className="flex max-h-[640px] flex-col rounded-xl border border-[#E2E8F0]">
+          <div ref={setTableBox} className="min-h-0 flex-1 overflow-auto overscroll-contain rounded-t-xl">
             <table className={`w-full text-left text-[13px] ${tab === "comment" ? "min-w-[860px]" : "min-w-[680px]"}`}>
               <thead className="sticky top-0 z-10 border-b border-[#E2E8F0] bg-[#F8FAFC] text-[11px] font-bold uppercase text-[#475569] shadow-[0_1px_0_0_#E2E8F0]">
                 <tr>
@@ -551,7 +554,8 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
                 )}
               </tbody>
             </table>
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#F1F5F9] px-4 py-3">
+          </div>
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-[#F1F5F9] rounded-b-xl bg-white px-4 py-3">
               <p className="text-[13px] text-[#64748B]">
                 Hiển thị <b className="text-[#0F172A]">{nf(from)} - {nf(to)}</b> trong tổng số{" "}
                 <b className="text-[#0F172A]">{nf(data.total)}</b> {tab === "comment" ? "bình luận" : "tài khoản tương tác"}
