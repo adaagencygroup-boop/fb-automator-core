@@ -522,5 +522,56 @@ class TestHashtagDetailSync(unittest.TestCase):
         self.assertEqual(out_ok["website"], "https://360vds.viettel.vn/")
 
 
+class TestListPagesFilterSql(unittest.TestCase):
+    def test_region_regex_matches_vi_en_and_abbreviations(self):
+        import re
+        from modules.module_11_page_scanner.api.router import _build_page_filter_sql, _normalize_region_key
+
+        self.assertEqual(_normalize_region_key("TP. Hồ Chí Minh"), "ho chi minh")
+        self.assertEqual(_normalize_region_key("Hà Nội"), "ha noi")
+        self.assertEqual(_normalize_region_key("Đà Nẵng"), "da nang")
+
+        conds_hcm, params_hcm = _build_page_filter_sql("sp", None, None, "Hồ Chí Minh")
+        self.assertEqual(len(conds_hcm), 1)
+        pat_hcm = re.compile(params_hcm[0], re.IGNORECASE)
+        for ok_addr in (
+            "Ho Chi Minh City, Vietnam, 79000",
+            "146 đường B2, phường An Khánh, Ho Chi Minh City, Vietnam",
+            "244 Cong Quynh, Pham Ngu Lao, District 1, HCM City, 70000",
+            "Quận 1, TP. Hồ Chí Minh",
+            "TP.HCM, Việt Nam",
+            "Saigon, Vietnam",
+        ):
+            self.assertRegex(ok_addr, pat_hcm)
+        self.assertNotRegex("Hanoi, Vietnam, 10000", pat_hcm)
+
+        conds_hn, params_hn = _build_page_filter_sql("sp", None, None, "Hà Nội")
+        pat_hn = re.compile(params_hn[0], re.IGNORECASE)
+        for ok_addr in (
+            "Hanoi, Vietnam, 10000",
+            "Keangnam Hanoi Landmark Tower, Phạm Hùng, Hanoi, Vietnam",
+            "Hà Nội, 100000",
+            "Ha Noi, Vietnam",
+        ):
+            self.assertRegex(ok_addr, pat_hn)
+        self.assertNotRegex("Ho Chi Minh City, Vietnam", pat_hn)
+
+        conds_dn, params_dn = _build_page_filter_sql("", None, None, "Đà Nẵng")
+        pat_dn = re.compile(params_dn[0], re.IGNORECASE)
+        self.assertRegex("194 Phạm Cự Lượng, TP Đà Nẵng, Da Nang, Vietnam", pat_dn)
+        self.assertRegex("Da Nang, Vietnam", pat_dn)
+
+    def test_keyword_includes_page_key_and_info_filter(self):
+        from modules.module_11_page_scanner.api.router import _build_page_filter_sql
+
+        conds, params = _build_page_filter_sql("sp", "024 6656 6595", "HAS_BOTH", "ALL")
+        self.assertEqual(len(conds), 2)
+        self.assertIn("sp.page_key ILIKE %s", conds[0])
+        self.assertIn("REGEXP_REPLACE(COALESCE(sp.phone,''), '[^0-9+]', '', 'g') ILIKE %s", conds[0])
+        self.assertIn("%02466566595%", params)
+        self.assertIn("sp.phone", conds[1])
+        self.assertIn("sp.email", conds[1])
+
+
 if __name__ == "__main__":
     unittest.main()

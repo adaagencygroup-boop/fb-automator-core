@@ -91,3 +91,48 @@ export function parseJsonField(value, fallback) {
     return fallback;
   }
 }
+
+/** Chuẩn hóa chuỗi bỏ dấu tiếng Việt, giữ chữ thường + 1 khoảng trắng. */
+export function foldVietnamese(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/đ/g, "d")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[.,/\\\-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const REGION_MATCHERS = {
+  "ha noi": /(ha\s*noi|hanoi|(?:^|[^a-z0-9])tp\s*hn(?:[^a-z0-9]|$))/i,
+  hanoi: /(ha\s*noi|hanoi|(?:^|[^a-z0-9])tp\s*hn(?:[^a-z0-9]|$))/i,
+  "ho chi minh": /(ho\s*chi\s*minh|sai\s*gon|saigon|(?:^|[^a-z0-9])(?:tp\s*)?hcm(?:[^a-z0-9]|$))/i,
+  "tp ho chi minh": /(ho\s*chi\s*minh|sai\s*gon|saigon|(?:^|[^a-z0-9])(?:tp\s*)?hcm(?:[^a-z0-9]|$))/i,
+  hcm: /(ho\s*chi\s*minh|sai\s*gon|saigon|(?:^|[^a-z0-9])(?:tp\s*)?hcm(?:[^a-z0-9]|$))/i,
+  "da nang": /(da\s*nang|danang)/i,
+  danang: /(da\s*nang|danang)/i,
+};
+
+/** Khớp địa chỉ Page với khu vực đã chọn (hỗ trợ cả tiếng Việt có/không dấu, tiếng Anh, viết tắt). */
+export function matchesRegion(address, region) {
+  const reg = String(region || "").trim();
+  if (!reg || reg.toUpperCase() === "ALL") return true;
+  const addrFolded = foldVietnamese(address);
+  if (!addrFolded) return false;
+  const key = foldVietnamese(reg).replace(/^(tp|thanh pho)\s+/, "").trim();
+  const re = REGION_MATCHERS[key];
+  if (re) return re.test(addrFolded);
+  return addrFolded.includes(key);
+}
+
+/** Khớp bộ lọc tình trạng thông tin liên hệ (HAS_PHONE | HAS_EMAIL | HAS_BOTH). */
+export function matchesInfoFilter(row, infoFilter) {
+  const f = String(infoFilter || "ALL").toUpperCase();
+  const hasPhone = Boolean(String(row?.phone || "").trim());
+  const hasEmail = Boolean(String(row?.email || "").trim());
+  if (f === "HAS_PHONE") return hasPhone;
+  if (f === "HAS_EMAIL") return hasEmail;
+  if (f === "HAS_BOTH") return hasPhone && hasEmail;
+  return true;
+}

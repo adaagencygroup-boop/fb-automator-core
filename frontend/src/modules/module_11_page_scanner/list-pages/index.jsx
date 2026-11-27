@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Download,
   ExternalLink,
@@ -45,6 +45,7 @@ import {
 import { usePageLists } from "../shared/usePageLists";
 import SavePageListModal from "../shared/SavePageListModal";
 import { runDelete, notifyExportResult } from "../_shared";
+import { matchesInfoFilter, matchesRegion } from "../utils.mjs";
 import CreateCategoryModal from "@/modules/module_10_group_scan/member-list/_components/CreateCategoryModal";
 
 const ALL_ID = "__all__";
@@ -111,6 +112,10 @@ export default function PageScannerListPages() {
   const [activeId, setActiveId] = useState(ALL_ID);
   const [infoFilter, setInfoFilter] = useState("ALL");
   const [regionFilter, setRegionFilter] = useState("ALL");
+  const [allPagesTotal, setAllPagesTotal] = useState(null);
+  const reqSeqRef = useRef(0);
+  const searchTimerRef = useRef(null);
+  const mountedRef = useRef(false);
 
   const loadKeywords = useCallback(() => {
     return getSearchKeywords()
@@ -154,25 +159,46 @@ export default function PageScannerListPages() {
     [activeId],
   );
 
-  const load = useCallback(
-    (p = 1, overrideId) => {
-      const id = overrideId ?? activeId;
+  const buildQueryParams = useCallback(
+    (p = 1, overrides = {}) => {
+      const id = overrides.id ?? activeId;
+      const kw = (overrides.keyword ?? keyword).trim();
+      const info = overrides.infoFilter ?? infoFilter;
+      const reg = overrides.regionFilter ?? regionFilter;
       const sourceKw = resolveSourceKeyword(id);
       const listId = id?.startsWith(LIST_PREFIX) ? Number(id.slice(LIST_PREFIX.length)) : null;
 
-      const request = getScannedPages({
-        page: p,
-        page_size: pageSize,
-        keyword: keyword.trim() || undefined,
-        source_keyword: sourceKw,
-        list_id: Number.isFinite(listId) ? listId : undefined,
-        sort_by: "followers",
-        sort_dir: "desc",
-      });
+      return {
+        id,
+        sourceKw,
+        kw,
+        info,
+        reg,
+        params: {
+          page: p,
+          page_size: overrides.pageSize ?? pageSize,
+          keyword: kw || undefined,
+          source_keyword: sourceKw,
+          list_id: Number.isFinite(listId) ? listId : undefined,
+          info_filter: info !== "ALL" ? info : undefined,
+          region: reg !== "ALL" ? reg : undefined,
+          sort_by: "followers",
+          sort_dir: "desc",
+        },
+      };
+    },
+    [pageSize, keyword, activeId, infoFilter, regionFilter, resolveSourceKeyword],
+  );
 
-      return request.then((data) => {
+  const load = useCallback(
+    (p = 1, overrides = {}) => {
+      const { id, sourceKw, kw, info, reg, params } = buildQueryParams(p, overrides);
+      const seq = ++reqSeqRef.current;
+
+      return getScannedPages(params).then((data) => {
+        if (seq !== reqSeqRef.current) return;
         let rows = data.items || [];
-        let tot = data.total || 0;
+        let tot = Number(data.total) || 0;
 
         // Guard: backend cũ bỏ qua source_keyword → lọc client theo tag/từ khóa
         if (sourceKw && rows.length) {
@@ -196,24 +222,67 @@ export default function PageScannerListPages() {
           }
         }
 
+        // Guard: nếu backend chưa restart để nhận info_filter / region → vẫn lọc đúng chuẩn trên client
+        if (info !== "ALL" || reg !== "ALL") {
+          const filtered = rows.filter((r) => matchesInfoFilter(r, info) && matchesRegion(r.address, reg));
+          if (filtered.length < rows.length) {
+            rows = filtered;
+            if (tot === (data.items || []).length || tot <= pageSize) {
+              tot = filtered.length;
+            }
+          }
+        }
+
         setItems(rows);
         setTotal(tot);
+        if (id === ALL_ID && !kw && info === "ALL" && reg === "ALL") {
+          setAllPagesTotal(tot);
+        }
         setPage(p);
         setSelectedKeys([]);
       }).catch((err) => {
+        if (seq !== reqSeqRef.current) return;
         toast.error(`Lỗi tải DS page: ${err.message}`);
       }).finally(() => {
-        setLoading(false);
+        if (seq === reqSeqRef.current) setLoading(false);
       });
     },
-    [pageSize, keyword, activeId, resolveSourceKeyword],
+    [buildQueryParams, pageSize],
   );
 
+  // Tự tải lại ngay khi đổi nguồn sidebar hoặc đổi dropdown Tình trạng / Khu vực
   useEffect(() => {
-    load(1, activeId);
-  }, [activeId]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
+      searchTimerRef.current = null;
+    }
+    setLoading(true);
+    load(1);
+    mountedRef.current = true;
+  }, [activeId, infoFilter, regionFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Tự tìm kiếm tức thì khi gõ vào ô tìm kiếm (debounce 250ms, không cần nhấn Enter)
+  useEffect(() => {
+    if (!mountedRef.current) return undefined;
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => {
+      searchTimerRef.current = null;
+      setLoading(true);
+      load(1);
+    }, 250);
+    return () => {
+      if (searchTimerRef.current) {
+        clearTimeout(searchTimerRef.current);
+        searchTimerRef.current = null;
+      }
+    };
+  }, [keyword]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const reload = (p = 1) => {
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
+      searchTimerRef.current = null;
+    }
     setLoading(true);
     return load(p);
   };
@@ -225,9 +294,36 @@ export default function PageScannerListPages() {
   };
 
   const handleExport = async () => {
-    const rowsSrc = selectedKeys.length
-      ? items.filter((r) => selectedKeys.includes(r.page_key))
-      : items;
+    let rowsSrc = [];
+    if (selectedKeys.length) {
+      rowsSrc = filteredItems.filter((r) => selectedKeys.includes(r.page_key));
+    } else if (total > filteredItems.length) {
+      try {
+        const batchSize = 1000;
+        const collected = [];
+        let p = 1;
+        let expected = total;
+        while (collected.length < expected && p <= 20) {
+          const { params, info, reg } = buildQueryParams(p, { pageSize: batchSize });
+          const data = await getScannedPages(params);
+          const chunk = (data.items || []).filter(
+            (r) => matchesInfoFilter(r, info) && matchesRegion(r.address, reg),
+          );
+          collected.push(...chunk);
+          expected = Number(data.total) || collected.length;
+          if ((data.items || []).length < batchSize) break;
+          p += 1;
+        }
+        rowsSrc = collected;
+      } catch (err) {
+        toast.error(`Lỗi tải dữ liệu xuất Excel: ${err?.message || "Không tải được danh sách."}`, {
+          key: "m11-list-pages-export",
+        });
+        return;
+      }
+    } else {
+      rowsSrc = filteredItems;
+    }
     if (!rowsSrc.length) {
       toast.warning("Không có dữ liệu để xuất.", { key: "m11-list-pages-export" });
       return;
@@ -348,18 +444,14 @@ export default function PageScannerListPages() {
   };
 
   const filteredItems = useMemo(() => {
-    return items.filter((r) => {
-      if (infoFilter === "HAS_PHONE" && !r.phone) return false;
-      if (infoFilter === "HAS_EMAIL" && !r.email) return false;
-      if (infoFilter === "HAS_BOTH" && (!r.phone || !r.email)) return false;
-      if (regionFilter !== "ALL") {
-        const addr = String(r.address || "").toLowerCase();
-        if (!addr.includes(regionFilter.toLowerCase())) return false;
-      }
-      return true;
-    });
+    return items.filter(
+      (r) => matchesInfoFilter(r, infoFilter) && matchesRegion(r.address, regionFilter),
+    );
   }, [items, infoFilter, regionFilter]);
 
+  const hasActiveFilter = Boolean(
+    keyword.trim() || infoFilter !== "ALL" || regionFilter !== "ALL",
+  );
   const allSelected = filteredItems.length > 0 && selectedKeys.length === filteredItems.length;
   const detailTitle = activeKeyword?.keyword || activeList?.name || "Tất cả page";
 
@@ -391,7 +483,13 @@ export default function PageScannerListPages() {
               onClick={() => selectSource(ALL_ID)}
               title="Tất cả page"
               subtitle="Kho quét toàn bộ"
-              badge={activeId === ALL_ID && total > 0 ? total.toLocaleString("vi-VN") : undefined}
+              badge={
+                allPagesTotal != null && allPagesTotal > 0
+                  ? allPagesTotal.toLocaleString("vi-VN")
+                  : activeId === ALL_ID && !hasActiveFilter && total > 0
+                    ? total.toLocaleString("vi-VN")
+                    : undefined
+              }
             />
 
             {filteredKeywords.length > 0 ? (
@@ -466,7 +564,7 @@ export default function PageScannerListPages() {
             <div>
               <h2 className="font-heading text-sm font-bold text-slate-800">{detailTitle}</h2>
               <p className="mt-0.5 text-[11px] text-slate-400">
-                Tổng số Page đã lưu:{" "}
+                {hasActiveFilter ? "Khớp bộ lọc: " : "Tổng số Page đã lưu: "}
                 <strong className="text-slate-700">{Number(total).toLocaleString("vi-VN")} Page</strong>
                 {activeKeyword ? " theo từ khóa" : activeList ? " trong danh mục" : ""}
               </p>
@@ -527,9 +625,6 @@ export default function PageScannerListPages() {
               <option value="Hồ Chí Minh">TP. Hồ Chí Minh</option>
               <option value="Đà Nẵng">Đà Nẵng</option>
             </select>
-            <Button type="button" size="sm" variant="outline" onClick={() => reload(1)}>
-              Lọc
-            </Button>
           </div>
 
           <div className="flex items-center gap-3 px-5 pb-2">
@@ -575,7 +670,14 @@ export default function PageScannerListPages() {
                 {loading ? (
                   <TableLoading colSpan={11} />
                 ) : filteredItems.length === 0 ? (
-                  <TableEmpty colSpan={11} message="Chưa có page — chạy Quét thông tin page trước." />
+                  <TableEmpty
+                    colSpan={11}
+                    message={
+                      hasActiveFilter
+                        ? "Không tìm thấy page phù hợp với bộ lọc."
+                        : "Chưa có page — chạy Quét thông tin page trước."
+                    }
+                  />
                 ) : (
                   filteredItems.map((r, idx) => {
                     const selected = selectedKeys.includes(r.page_key);

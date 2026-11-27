@@ -757,13 +757,100 @@ async def list_search_keywords():
     return {"items": items, "total": len(items)}
 
 
+_REGION_REGEX_MAP = {
+    "ha noi": r"(hà\s*nội|ha\s*noi|hanoi|(^|[^a-z0-9])tp\.?\s*hn([^a-z0-9]|$))",
+    "hanoi": r"(hà\s*nội|ha\s*noi|hanoi|(^|[^a-z0-9])tp\.?\s*hn([^a-z0-9]|$))",
+    "ho chi minh": r"(hồ\s*chí\s*minh|ho\s*chi\s*minh|sài\s*gòn|sai\s*gon|saigon|(^|[^a-z0-9])(tp\.?\s*)?hcm([^a-z0-9]|$))",
+    "tp ho chi minh": r"(hồ\s*chí\s*minh|ho\s*chi\s*minh|sài\s*gòn|sai\s*gon|saigon|(^|[^a-z0-9])(tp\.?\s*)?hcm([^a-z0-9]|$))",
+    "hcm": r"(hồ\s*chí\s*minh|ho\s*chi\s*minh|sài\s*gòn|sai\s*gon|saigon|(^|[^a-z0-9])(tp\.?\s*)?hcm([^a-z0-9]|$))",
+    "da nang": r"(đà\s*nẵng|da\s*nang|danang)",
+    "danang": r"(đà\s*nẵng|da\s*nang|danang)",
+}
+
+
+def _normalize_region_key(value: Optional[str]) -> str:
+    import unicodedata
+
+    raw = str(value or "").strip().lower().replace("đ", "d")
+    folded = "".join(
+        ch for ch in unicodedata.normalize("NFD", raw) if unicodedata.category(ch) != "Mn"
+    )
+    folded = re.sub(r"[.,/\\\-]+", " ", folded)
+    folded = re.sub(r"\s+", " ", folded).strip()
+    folded = re.sub(r"^(tp|thanh pho)\s+", "", folded).strip()
+    return folded
+
+
+def _build_page_filter_sql(
+    prefix: str,
+    keyword: Optional[str],
+    info_filter: Optional[str],
+    region: Optional[str],
+) -> tuple[List[str], List[Any]]:
+    """Tạo điều kiện WHERE + params dùng chung cho GET /pages (tìm keyword/ID, tình trạng SĐT/Email, khu vực)."""
+    conds: List[str] = []
+    params: List[Any] = []
+    p = f"{prefix}." if prefix else ""
+
+    kw = str(keyword or "").strip()
+    if kw:
+        kw_like = f"%{kw}%"
+        kw_digits = re.sub(r"[^0-9+]", "", kw)
+        if len(kw_digits) >= 3:
+            conds.append(
+                f"({p}page_name ILIKE %s OR {p}page_key ILIKE %s OR {p}page_url ILIKE %s"
+                f" OR COALESCE({p}phone,'') ILIKE %s"
+                f" OR REGEXP_REPLACE(COALESCE({p}phone,''), '[^0-9+]', '', 'g') ILIKE %s"
+                f" OR COALESCE({p}email,'') ILIKE %s OR COALESCE({p}website,'') ILIKE %s"
+                f" OR COALESCE({p}address,'') ILIKE %s)"
+            )
+            params.extend([kw_like, kw_like, kw_like, kw_like, f"%{kw_digits}%", kw_like, kw_like, kw_like])
+        else:
+            conds.append(
+                f"({p}page_name ILIKE %s OR {p}page_key ILIKE %s OR {p}page_url ILIKE %s"
+                f" OR COALESCE({p}phone,'') ILIKE %s OR COALESCE({p}email,'') ILIKE %s"
+                f" OR COALESCE({p}website,'') ILIKE %s OR COALESCE({p}address,'') ILIKE %s)"
+            )
+            params.extend([kw_like, kw_like, kw_like, kw_like, kw_like, kw_like, kw_like])
+
+    info = str(info_filter or "").strip().upper()
+    if info == "HAS_PHONE":
+        conds.append(f"NULLIF(TRIM(COALESCE({p}phone, '')), '') IS NOT NULL")
+    elif info == "HAS_EMAIL":
+        conds.append(f"NULLIF(TRIM(COALESCE({p}email, '')), '') IS NOT NULL")
+    elif info == "HAS_BOTH":
+        conds.append(
+            f"(NULLIF(TRIM(COALESCE({p}phone, '')), '') IS NOT NULL"
+            f" AND NULLIF(TRIM(COALESCE({p}email, '')), '') IS NOT NULL)"
+        )
+
+    reg = str(region or "").strip()
+    if reg and reg.upper() != "ALL":
+        reg_key = _normalize_region_key(reg)
+        pattern = _REGION_REGEX_MAP.get(reg_key)
+        if pattern:
+            conds.append(f"COALESCE({p}address, '') ~* %s")
+            params.append(pattern)
+        else:
+            conds.append(f"COALESCE({p}address, '') ILIKE %s")
+            params.append(f"%{reg}%")
+
+    return conds, params
+
+
 @router.get("/pages")
 async def list_scanned_pages(
     session_id: Optional[int] = Query(None, description="Lọc theo mã phiên quét"),
     source_keyword: Optional[str] = Query(
         None, description="Lọc page thuộc phiên DISCOVERY có đúng từ khóa/hashtag này"
     ),
-    keyword: Optional[str] = Query(None, description="Tìm theo tên hoặc url"),
+    keyword: Optional[str] = Query(None, description="Tìm theo tên, ID, url, SĐT, email, địa chỉ"),
+    info_filter: Optional[str] = Query(
+        None, description="Lọc tình trạng thông tin: HAS_PHONE | HAS_EMAIL | HAS_BOTH"
+    ),
+    region: Optional[str] = Query(
+        None, description="Lọc khu vực địa chỉ (khớp cả tiếng Việt có/không dấu, tiếng Anh, viết tắt)"
+    ),
     list_id: Optional[int] = Query(None, description="Lọc page trong danh mục đã lưu (page_list_categories.id)"),
     relevance_status: Optional[str] = Query(None, description="Lọc theo độ liên quan (RELEVANT, REVIEW, EXCLUDED)"),
     min_followers: Optional[int] = Query(None, ge=0, description="Lọc hiển thị: follower tối thiểu"),
@@ -774,7 +861,7 @@ async def list_scanned_pages(
 ):
     """
     GET /api/page-scanner/pages
-    Truy vấn danh sách Fanpage đã cào (phân trang, lọc phiên/từ khóa/follower, sắp xếp).
+    Truy vấn danh sách Fanpage đã cào (phân trang, lọc phiên/từ khóa/tình trạng/khu vực/follower, sắp xếp).
     """
     owner = _get_owner()
     offset = (page - 1) * page_size
@@ -786,14 +873,9 @@ async def list_scanned_pages(
         query_params: List[Any] = [owner, session_id]
         where_conds = []
 
-        if keyword:
-            where_conds.append(
-                "(sp.page_name ILIKE %s OR sp.page_url ILIKE %s OR COALESCE(sp.phone,'') ILIKE %s"
-                " OR COALESCE(sp.email,'') ILIKE %s OR COALESCE(sp.website,'') ILIKE %s"
-                " OR COALESCE(sp.address,'') ILIKE %s)"
-            )
-            kw_param = f"%{keyword.strip()}%"
-            query_params.extend([kw_param, kw_param, kw_param, kw_param, kw_param, kw_param])
+        f_conds, f_params = _build_page_filter_sql("sp", keyword, info_filter, region)
+        where_conds.extend(f_conds)
+        query_params.extend(f_params)
 
         if relevance_status and relevance_status.upper() in ["RELEVANT", "REVIEW", "EXCLUDED"]:
             where_conds.append("ssp.relevance_status = %s")
@@ -875,14 +957,9 @@ async def list_scanned_pages(
             )""",
         ]
 
-        if keyword:
-            where_conds.append(
-                "(sp.page_name ILIKE %s OR sp.page_url ILIKE %s OR COALESCE(sp.phone,'') ILIKE %s"
-                " OR COALESCE(sp.email,'') ILIKE %s OR COALESCE(sp.website,'') ILIKE %s"
-                " OR COALESCE(sp.address,'') ILIKE %s)"
-            )
-            kw_param = f"%{keyword.strip()}%"
-            params.extend([kw_param, kw_param, kw_param, kw_param, kw_param, kw_param])
+        f_conds, f_params = _build_page_filter_sql("sp", keyword, info_filter, region)
+        where_conds.extend(f_conds)
+        params.extend(f_params)
 
         if relevance_status and relevance_status.upper() in ["RELEVANT", "REVIEW", "EXCLUDED"]:
             where_conds.append("sp.relevance_status = %s")
@@ -937,14 +1014,9 @@ async def list_scanned_pages(
             )
             params.extend([owner, int(list_id)])
 
-        if keyword:
-            where_conds.append(
-                "(page_name ILIKE %s OR page_url ILIKE %s OR COALESCE(phone,'') ILIKE %s"
-                " OR COALESCE(email,'') ILIKE %s OR COALESCE(website,'') ILIKE %s"
-                " OR COALESCE(address,'') ILIKE %s)"
-            )
-            kw_param = f"%{keyword.strip()}%"
-            params.extend([kw_param, kw_param, kw_param, kw_param, kw_param, kw_param])
+        f_conds, f_params = _build_page_filter_sql("", keyword, info_filter, region)
+        where_conds.extend(f_conds)
+        params.extend(f_params)
 
         if relevance_status and relevance_status.upper() in ["RELEVANT", "REVIEW", "EXCLUDED"]:
             where_conds.append("relevance_status = %s")
