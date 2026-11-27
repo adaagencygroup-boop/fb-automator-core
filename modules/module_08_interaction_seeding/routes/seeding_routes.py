@@ -662,7 +662,7 @@ def _visible_targets_query(
     include_completed: bool = False,
 ):
     """Mục tiêu seeding user được thấy (admin thấy hết), mặc định bỏ các mục tiêu đã chạy xong.
-    Dùng chung cho GET /targets và tạo chiến dịch với use_saved_targets."""
+    Dùng chung khi đọc, lưu, xóa danh sách và tạo chiến dịch với use_saved_targets."""
     query = db.query(SeedingTarget)
     if target_type:
         query = query.filter(SeedingTarget.target_type == target_type.upper())
@@ -693,6 +693,22 @@ def _visible_targets_query(
     return query
 
 
+def _serialize_targets(targets: list[SeedingTarget], offset: int = 0):
+    return [
+        {
+            "id": target.id,
+            "stt": offset + index + 1,
+            "url": target.url,
+            "fb_id": target.fb_id,
+            "display_name": target.display_name,
+            "target_type": target.target_type,
+            "created_by": target.created_by,
+            "created_at": to_vn_iso(target.created_at),
+        }
+        for index, target in enumerate(targets)
+    ]
+
+
 @router.get("/targets")
 def list_seeding_targets(
     target_type: str | None = None,
@@ -719,19 +735,7 @@ def list_seeding_targets(
         total = len(targets)
     return {
         "total": total,
-        "targets": [
-            {
-                "id": t.id,
-                "stt": offset + idx + 1,
-                "url": t.url,
-                "fb_id": t.fb_id,
-                "display_name": t.display_name,
-                "target_type": t.target_type,
-                "created_by": t.created_by,
-                "created_at": to_vn_iso(t.created_at),
-            }
-            for idx, t in enumerate(targets)
-        ],
+        "targets": _serialize_targets(targets, offset),
     }
 
 
@@ -746,12 +750,12 @@ def validate_targets(
     current_user = get_current_user_info(request, authorization)
     user_id = current_user.get("id") if current_user else None
 
-    valid_targets = []
+    submitted_target_ids = set()
     seen_urls = set()
     seen_fb_ids = set()
     camp_type = req.target_type.upper()
 
-    for idx, raw_url in enumerate(req.urls):
+    for raw_url in req.urls:
         url = normalize_target_url(raw_url, camp_type)
         if not url:
             continue
@@ -801,45 +805,19 @@ def validate_targets(
             if not target_obj.fb_id:
                 target_obj.fb_id = fb_id
 
-        valid_targets.append(
-            {
-                "id": target_obj.id,
-                "stt": len(valid_targets) + 1,
-                "url": target_obj.url,
-                "fb_id": target_obj.fb_id,
-                "display_name": target_obj.display_name or display_name,
-                "created_by": target_obj.created_by,
-            }
-        )
+        submitted_target_ids.add(target_obj.id)
 
     db.commit()
 
-    # Lấy toàn bộ danh sách các link CHƯA HOÀN THÀNH THÀNH CÔNG của user này trong DB để đồng bộ giao diện
-    all_current_q = db.query(SeedingTarget).filter(
-        SeedingTarget.target_type == camp_type
+    all_current = (
+        _visible_targets_query(db, camp_type, current_user)
+        .order_by(SeedingTarget.id.asc())
+        .all()
     )
-    if user_id is not None:
-        all_current_q = all_current_q.filter(SeedingTarget.created_by == user_id)
-
-    # CHỈ ẨN CÁC LINK ĐÃ CHẠY THÀNH CÔNG (COMPLETED)
-    completed_stmt = (
-        select(SeedingCampaignTarget.target_id)
-        .join(SeedingCampaign, SeedingCampaignTarget.campaign_id == SeedingCampaign.id)
-        .where(
-            or_(
-                SeedingCampaign.status == "COMPLETED",
-                and_(
-                    SeedingCampaignTarget.success_count > 0,
-                    SeedingCampaignTarget.failed_count == 0,
-                ),
-            )
-        )
-    )
-    all_current_q = all_current_q.filter(~SeedingTarget.id.in_(completed_stmt))
-    all_current = all_current_q.order_by(SeedingTarget.id.asc()).all()
 
     return {
         "total": len(all_current),
+        "visible_submitted_count": sum(t.id in submitted_target_ids for t in all_current),
         "targets": [
             {
                 "id": t.id,
@@ -901,31 +879,11 @@ def clear_seeding_targets(
     Dữ liệu lịch sử đã được lưu trực tiếp display_name và target_url vào seeding_tasks và seeding_campaign_targets nên vẫn bảo toàn 100%.
     """
     current_user = get_current_user_info(request, authorization)
-    query = db.query(SeedingTarget)
-    if target_type:
-        query = query.filter(SeedingTarget.target_type == target_type.upper())
-    if current_user:
-        role = (
-            current_user.get("role") or current_user.get("_role_claim") or "user"
-        ).lower()
-        if role not in ("admin", "superadmin", "administrator"):
-            query = query.filter(SeedingTarget.created_by == current_user["id"])
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Thiếu thông tin xác thực đăng nhập")
 
-    # Chỉ xóa những targets chưa thành công khỏi danh sách hiển thị của user
-    completed_stmt = (
-        select(SeedingCampaignTarget.target_id)
-        .join(SeedingCampaign, SeedingCampaignTarget.campaign_id == SeedingCampaign.id)
-        .where(
-            or_(
-                SeedingCampaign.status == "COMPLETED",
-                and_(
-                    SeedingCampaignTarget.success_count > 0,
-                    SeedingCampaignTarget.failed_count == 0,
-                ),
-            )
-        )
-    )
-    targets_to_clear = query.filter(~SeedingTarget.id.in_(completed_stmt)).all()
+    visible_targets = _visible_targets_query(db, target_type, current_user).order_by(SeedingTarget.id.asc())
+    targets_to_clear = visible_targets.with_for_update().all()
     deleted_count = len(targets_to_clear)
     for t in targets_to_clear:
         db.query(SeedingTask).filter(SeedingTask.target_id == t.id).update(
@@ -935,8 +893,10 @@ def clear_seeding_targets(
             {SeedingCampaignTarget.target_id: None}, synchronize_session=False
         )
         db.delete(t)
+    db.flush()
+    remaining = _serialize_targets(visible_targets.all())
     db.commit()
-    return {"success": True, "deleted": deleted_count}
+    return {"success": True, "deleted": deleted_count, "targets": remaining}
 
 
 # 1.1 QUẢN LÝ BÌNH LUẬN NHÁP (KHO BÌNH LUẬN)

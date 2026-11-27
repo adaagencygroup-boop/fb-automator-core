@@ -187,13 +187,12 @@ export default function SeedingProfilePage() {
     try {
       const normalizedUrls = (rawUrls || []).map((u) => normalizeTargetUrl(u, "PROFILE"));
       const res = await seedingApi.validateSeedingTargets("PROFILE", normalizedUrls);
-      if (res && res.targets) {
-        setTargets(res.targets);
-        setSuccessMessage(
-          `Đã lưu thành công ${res.targets.length} trang cá nhân vào cơ sở dữ liệu`,
-        );
-        return res.targets;
+      if (!Array.isArray(res?.targets) || !Number.isInteger(res.visible_submitted_count)) {
+        throw new Error("Không nhận được kết quả xác nhận danh sách Trang cá nhân từ máy chủ.");
       }
+      setTargets(res.targets);
+      setSuccessMessage(res.targets.length ? `Danh sách có ${res.targets.length} Trang cá nhân` : null);
+      return res.visible_submitted_count;
     } catch (e) {
       addLog(`Lỗi lưu link trang cá nhân: ${e.message}`, "error");
       throw e;
@@ -229,17 +228,17 @@ export default function SeedingProfilePage() {
 
   const handleClearTargets = async () => {
     if (isRunning) {
-      toast.warning("Không thể xóa danh sách Trang cá nhân khi đang chạy seeding!");
-      return;
+      throw new Error("Không thể xóa danh sách Trang cá nhân khi đang chạy seeding!");
     }
     try {
-      await seedingApi.clearSeedingTargets("PROFILE");
+      const { deleted, targets: remaining } = await seedingApi.clearSeedingTargets("PROFILE");
+      setTargets(remaining);
+      setSuccessMessage(remaining.length ? `Danh sách có ${remaining.length} Trang cá nhân` : null);
+      return deleted;
     } catch (err) {
       addLog(`Lỗi xóa danh sách: ${err.message}`, "error");
       throw err;
     }
-    setTargets([]);
-    setSuccessMessage(null);
   };
 
   const handleStart = async () => {

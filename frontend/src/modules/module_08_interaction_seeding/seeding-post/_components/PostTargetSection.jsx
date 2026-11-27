@@ -257,13 +257,14 @@ export default function PostTargetSection({
   const handleConfirmAdd = async () => {
     setIsValidating(true);
     try {
-      await onAddTargets(pendingLines);
-      setTextInput("");
+      const visibleCount = await onAddTargets(pendingLines);
       setConfirmAddOpen(false);
-      toast.success(
-        `Đã xác thực và lưu thành công ${pendingLines.length} bài viết vào danh sách!`,
-        "THÊM THÀNH CÔNG"
-      );
+      if (visibleCount === pendingLines.length) {
+        setTextInput("");
+        toast.success(`Đã thêm ${visibleCount} bài viết vào danh sách!`, "THÊM THÀNH CÔNG");
+      } else {
+        toast.warning(`Có ${visibleCount}/${pendingLines.length} bài vừa nhập trong danh sách.`, "KẾT QUẢ THÊM BÀI");
+      }
     } catch (e) {
       toast.error(
         e?.message || "Đã xảy ra lỗi khi kiểm tra và xác thực liên kết bài viết. Vui lòng thử lại!",
@@ -298,8 +299,12 @@ export default function PostTargetSection({
     if (isRunning) return;
     setIsClearing(true);
     try {
-      await onClearTargets();
-      toast.success("Đã xóa toàn bộ danh sách bài viết thành công!", "ĐÃ DỌN DẸP");
+      const deleted = await onClearTargets();
+      if (deleted > 0) {
+        toast.success(`Đã xóa ${deleted} bài viết.`, "ĐÃ DỌN DẸP");
+      } else {
+        toast.warning("Không có bài viết nào được xóa.", "KẾT QUẢ XÓA");
+      }
       setClearAllOpen(false);
     } catch (e) {
       toast.error(e?.message || "Không thể dọn dẹp danh sách. Vui lòng thử lại!", "LỖI XÓA");
@@ -600,7 +605,13 @@ export default function PostTargetSection({
           onImportTargets={(imported) => {
             if (imported.length > 0) {
               Promise.resolve(onAddTargets(imported.map((item) => item.url)))
-                .then(() => toast.success(`Đã nhập thành công ${imported.length} bài viết từ file Excel!`, "THÀNH CÔNG"))
+                .then((visibleCount) => {
+                  if (visibleCount === imported.length) {
+                    toast.success(`Đã nhập ${visibleCount} bài viết từ file Excel!`, "THÀNH CÔNG");
+                  } else {
+                    toast.warning(`Có ${visibleCount}/${imported.length} bài từ file Excel trong danh sách.`, "KẾT QUẢ NHẬP FILE");
+                  }
+                })
                 .catch((e) => toast.error(e?.message || "Không lưu được bài viết từ file Excel.", "LỖI NHẬP FILE"));
             }
           }}

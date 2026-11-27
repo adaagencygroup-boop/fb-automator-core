@@ -259,16 +259,13 @@ export default function SeedingPostPage() {
     try {
       const normalizedUrls = (rawUrls || []).map((u) => normalizeTargetUrl(u, "POST"));
       const res = await seedingApi.validateSeedingTargets("POST", normalizedUrls);
-      if (res && res.targets) {
-        targetMutationVersion.current += 1;
-        const saved = await seedingApi.getSeedingTargets("POST", false, true).catch(() => null);
-        const currentTargets = saved?.targets || res.targets;
-        setTargets(currentTargets);
-        setSuccessMessage(
-          `Đã lưu thành công ${currentTargets.length} bài viết vào cơ sở dữ liệu`,
-        );
-        return currentTargets;
+      if (!Array.isArray(res?.targets) || !Number.isInteger(res.visible_submitted_count)) {
+        throw new Error("Không nhận được kết quả xác nhận danh sách bài viết từ máy chủ.");
       }
+      targetMutationVersion.current += 1;
+      setTargets(res.targets);
+      setSuccessMessage(res.targets.length ? `Danh sách có ${res.targets.length} bài viết` : null);
+      return res.visible_submitted_count;
     } catch (e) {
       addLog(`Lỗi lưu link bài viết: ${e.message}`, "error");
       throw e;
@@ -305,19 +302,18 @@ export default function SeedingPostPage() {
 
   const handleClearTargets = async () => {
     if (isRunning) {
-      toast.warning("Không thể xóa danh sách bài viết khi đang chạy seeding!");
-      return;
+      throw new Error("Không thể xóa danh sách bài viết khi đang chạy seeding!");
     }
     try {
-      const res = await seedingApi.clearSeedingTargets("POST");
-      if (!res?.success) throw new Error("Máy chủ chưa xác nhận xóa danh sách bài viết.");
+      const { deleted, targets: remaining } = await seedingApi.clearSeedingTargets("POST");
+      targetMutationVersion.current += 1;
+      setTargets(remaining);
+      setSuccessMessage(remaining.length ? `Danh sách có ${remaining.length} bài viết` : null);
+      return deleted;
     } catch (err) {
       addLog(`Lỗi xóa danh sách bài viết: ${err.message}`, "error");
       throw err;
     }
-    targetMutationVersion.current += 1;
-    setTargets([]);
-    setSuccessMessage(null);
   };
 
   const handleAddBulkComments = async (newCmts) => {

@@ -187,13 +187,12 @@ export default function SeedingPageMain() {
     try {
       const normalizedUrls = (rawUrls || []).map((u) => normalizeTargetUrl(u, "PAGE"));
       const res = await seedingApi.validateSeedingTargets("PAGE", normalizedUrls);
-      if (res && res.targets) {
-        setTargets(res.targets);
-        setSuccessMessage(
-          `Đã lưu thành công ${res.targets.length} page vào cơ sở dữ liệu`,
-        );
-        return res.targets;
+      if (!Array.isArray(res?.targets) || !Number.isInteger(res.visible_submitted_count)) {
+        throw new Error("Không nhận được kết quả xác nhận danh sách Page từ máy chủ.");
       }
+      setTargets(res.targets);
+      setSuccessMessage(res.targets.length ? `Danh sách có ${res.targets.length} Page` : null);
+      return res.visible_submitted_count;
     } catch (e) {
       addLog(`Lỗi lưu link: ${e.message}`, "error");
       throw e;
@@ -229,17 +228,17 @@ export default function SeedingPageMain() {
 
   const handleClearTargets = async () => {
     if (isRunning) {
-      toast.warning("Không thể xóa danh sách Page khi đang chạy seeding!");
-      return;
+      throw new Error("Không thể xóa danh sách Page khi đang chạy seeding!");
     }
     try {
-      await seedingApi.clearSeedingTargets("PAGE");
+      const { deleted, targets: remaining } = await seedingApi.clearSeedingTargets("PAGE");
+      setTargets(remaining);
+      setSuccessMessage(remaining.length ? `Danh sách có ${remaining.length} Page` : null);
+      return deleted;
     } catch (err) {
       addLog(`Lỗi xóa danh sách: ${err.message}`, "error");
       throw err;
     }
-    setTargets([]);
-    setSuccessMessage(null);
   };
 
   const handleStart = async () => {

@@ -51,7 +51,11 @@ export const seedingApi = {
 
   clearSeedingTargets: async (targetType) => {
     const params = targetType ? { target_type: targetType } : {};
-    return await api.delete("/api/seeding/targets/clear", { params });
+    const res = await api.delete("/api/seeding/targets/clear", { params });
+    if (!res?.success || !Number.isInteger(res.deleted) || res.deleted < 0 || !Array.isArray(res.targets)) {
+      throw new Error("Máy chủ chưa xác nhận kết quả xóa danh sách.");
+    }
+    return res;
   },
 
   getSeedingComments: async () => {

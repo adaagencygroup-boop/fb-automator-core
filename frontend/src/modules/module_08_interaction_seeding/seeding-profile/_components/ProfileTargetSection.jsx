@@ -216,13 +216,14 @@ export default function ProfileTargetSection({
   const handleConfirmAdd = async () => {
     setIsValidating(true);
     try {
-      await onAddTargets(pendingLines);
-      setTextInput("");
+      const visibleCount = await onAddTargets(pendingLines);
       setConfirmAddOpen(false);
-      toast.success(
-        `Đã xác thực và lưu thành công ${pendingLines.length} Trang cá nhân vào danh sách!`,
-        "THÊM THÀNH CÔNG"
-      );
+      if (visibleCount === pendingLines.length) {
+        setTextInput("");
+        toast.success(`Đã thêm ${visibleCount} Trang cá nhân vào danh sách!`, "THÊM THÀNH CÔNG");
+      } else {
+        toast.warning(`Có ${visibleCount}/${pendingLines.length} Trang cá nhân vừa nhập trong danh sách.`, "KẾT QUẢ THÊM LINK");
+      }
     } catch (e) {
       toast.error(
         e?.message || "Đã xảy ra lỗi khi kiểm tra và xác thực liên kết Trang cá nhân. Vui lòng thử lại!",
@@ -257,8 +258,12 @@ export default function ProfileTargetSection({
     if (isRunning) return;
     setIsClearing(true);
     try {
-      await onClearTargets();
-      toast.success("Đã xóa toàn bộ danh sách Trang cá nhân thành công!", "ĐÃ DỌN DẸP");
+      const deleted = await onClearTargets();
+      if (deleted > 0) {
+        toast.success(`Đã xóa ${deleted} Trang cá nhân.`, "ĐÃ DỌN DẸP");
+      } else {
+        toast.warning("Không có Trang cá nhân nào được xóa.", "KẾT QUẢ XÓA");
+      }
       setClearAllOpen(false);
     } catch (e) {
       toast.error(e?.message || "Không thể dọn dẹp danh sách. Vui lòng thử lại!", "LỖI XÓA");
@@ -525,10 +530,17 @@ export default function ProfileTargetSection({
           onClose={() => setIsExcelModalOpen(false)}
           targetType="PROFILE"
           existingTargets={allKnownTargets}
-          onImportTargets={(imported) => {
-            if (imported.length > 0) {
-              onAddTargets(imported.map((item) => item.url));
-              toast.success(`Đã nhập thành công ${imported.length} Trang cá nhân từ file Excel!`, "THÀNH CÔNG");
+          onImportTargets={async (imported) => {
+            if (!imported.length) return;
+            try {
+              const visibleCount = await onAddTargets(imported.map((item) => item.url));
+              if (visibleCount === imported.length) {
+                toast.success(`Đã nhập ${visibleCount} Trang cá nhân từ file Excel!`, "THÀNH CÔNG");
+              } else {
+                toast.warning(`Có ${visibleCount}/${imported.length} Trang cá nhân từ file Excel trong danh sách.`, "KẾT QUẢ NHẬP FILE");
+              }
+            } catch (e) {
+              toast.error(e?.message || "Không lưu được danh sách Trang cá nhân từ file Excel.", "LỖI NHẬP FILE");
             }
           }}
         />
