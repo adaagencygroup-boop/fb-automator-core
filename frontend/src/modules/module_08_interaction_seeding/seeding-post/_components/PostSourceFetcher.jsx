@@ -157,6 +157,8 @@ export default function PostSourceFetcher({
   const loadListRef = useRef(null);
   const loadingListRef = useRef(false);
   const listItemsRef = useRef([]);
+  const postListScrollRef = useRef(null);
+  const previousPostCountRef = useRef(0);
   const startRequestRef = useRef(false);
   const startUnlockTimerRef = useRef(null);
   const missingLinkToastShownRef = useRef(false);
@@ -436,6 +438,20 @@ export default function PostSourceFetcher({
   const chosen = selectedCount(sel, visibleCount);
   const pickN = Number(firstN);
   const pickValid = Number.isInteger(pickN) && pickN >= 1 && pickN <= 5000;
+
+  useEffect(() => {
+    const currentCount = list.items.length;
+    const previousCount = previousPostCountRef.current;
+    previousPostCountRef.current = currentCount;
+    if (!running || currentCount <= previousCount) return undefined;
+
+    const container = postListScrollRef.current;
+    if (!container) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      container.scrollTop = container.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [list.items.length, running]);
 
   const handleStart = async (event) => {
     event?.preventDefault();
@@ -724,7 +740,7 @@ export default function PostSourceFetcher({
               </div>
             </div>
 
-            <div className="max-h-[min(30vh,calc(92vh_-_600px))] space-y-2 overflow-y-auto overscroll-contain pr-1 lg:max-h-[min(58vh,calc(92vh_-_320px))]">
+            <div ref={postListScrollRef} className="max-h-[min(30vh,calc(92vh_-_600px))] space-y-2 overflow-y-auto overscroll-contain pr-1 lg:max-h-[min(58vh,calc(92vh_-_320px))]">
               {loadingList && !visibleItems.length ? (
                 <p className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 p-4 text-xs text-gray-500">
                   <Loader2 className="size-4 animate-spin text-blue-600" aria-hidden="true" /> Đang tải bài viết...
