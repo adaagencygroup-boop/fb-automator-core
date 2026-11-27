@@ -216,13 +216,27 @@ export default function PageTargetSection({
   const handleConfirmAdd = async () => {
     setIsValidating(true);
     try {
-      await onAddTargets(pendingLines);
+      const result = await onAddTargets(pendingLines);
+      const added = Number(result?.addedVisibleCount ?? pendingLines.length);
+      const skippedDone = Number(result?.alreadyCompletedCount ?? 0);
       setTextInput("");
       setConfirmAddOpen(false);
-      toast.success(
-        `Đã xác thực và lưu thành công ${pendingLines.length} Page vào danh sách!`,
-        "THÊM THÀNH CÔNG"
-      );
+      if (added === 0 && skippedDone > 0) {
+        toast.warning(
+          `${skippedDone} Page đã từng chạy seeding thành công trước đó nên không thêm lại vào danh sách chờ.`,
+          "ĐÃ CHẠY THÀNH CÔNG TRƯỚC ĐÓ"
+        );
+      } else if (skippedDone > 0) {
+        toast.success(
+          `Đã lưu ${added} Page mới vào danh sách · bỏ qua ${skippedDone} Page đã chạy thành công trước đó.`,
+          "THÊM THÀNH CÔNG"
+        );
+      } else {
+        toast.success(
+          `Đã xác thực và lưu thành công ${added} Page vào danh sách!`,
+          "THÊM THÀNH CÔNG"
+        );
+      }
     } catch (e) {
       toast.error(
         e?.message || "Đã xảy ra lỗi khi kiểm tra và xác thực liên kết Page. Vui lòng thử lại!",
@@ -527,8 +541,25 @@ export default function PageTargetSection({
           existingTargets={allKnownTargets}
           onImportTargets={(imported) => {
             if (imported.length > 0) {
-              onAddTargets(imported.map((item) => item.url));
-              toast.success(`Đã nhập thành công ${imported.length} Page từ file Excel!`, "THÀNH CÔNG");
+              Promise.resolve(onAddTargets(imported.map((item) => item.url)))
+                .then((result) => {
+                  const added = Number(result?.addedVisibleCount ?? imported.length);
+                  const skippedDone = Number(result?.alreadyCompletedCount ?? 0);
+                  if (added === 0 && skippedDone > 0) {
+                    toast.warning(
+                      `${skippedDone} Page trong file Excel đã từng chạy seeding thành công trước đó nên không thêm lại.`,
+                      "ĐÃ CHẠY THÀNH CÔNG TRƯỚC ĐÓ"
+                    );
+                  } else if (skippedDone > 0) {
+                    toast.success(
+                      `Đã nhập ${added} Page từ file Excel · bỏ qua ${skippedDone} Page đã chạy thành công trước đó.`,
+                      "THÀNH CÔNG"
+                    );
+                  } else {
+                    toast.success(`Đã nhập thành công ${added} Page từ file Excel!`, "THÀNH CÔNG");
+                  }
+                })
+                .catch((e) => toast.error(e?.message || "Không lưu được Page từ file Excel.", "LỖI NHẬP FILE"));
             }
           }}
         />

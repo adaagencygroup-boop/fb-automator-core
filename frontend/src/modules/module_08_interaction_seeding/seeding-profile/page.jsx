@@ -188,11 +188,19 @@ export default function SeedingProfilePage() {
       const normalizedUrls = (rawUrls || []).map((u) => normalizeTargetUrl(u, "PROFILE"));
       const res = await seedingApi.validateSeedingTargets("PROFILE", normalizedUrls);
       if (res && res.targets) {
+        const addedVisibleCount = Number(res.added_visible_count ?? normalizedUrls.length);
+        const alreadyCompletedCount = Number(res.already_completed_count ?? 0);
         setTargets(res.targets);
         setSuccessMessage(
-          `Đã lưu thành công ${res.targets.length} trang cá nhân vào cơ sở dữ liệu`,
+          res.targets.length > 0
+            ? `Đã lưu thành công ${res.targets.length} trang cá nhân vào cơ sở dữ liệu`
+            : null,
         );
-        return res.targets;
+        return {
+          targets: res.targets,
+          addedVisibleCount,
+          alreadyCompletedCount,
+        };
       }
     } catch (e) {
       addLog(`Lỗi lưu link trang cá nhân: ${e.message}`, "error");

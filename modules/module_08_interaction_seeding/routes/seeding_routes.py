@@ -814,32 +814,21 @@ def validate_targets(
 
     db.commit()
 
-    # Lấy toàn bộ danh sách các link CHƯA HOÀN THÀNH THÀNH CÔNG của user này trong DB để đồng bộ giao diện
-    all_current_q = db.query(SeedingTarget).filter(
-        SeedingTarget.target_type == camp_type
+    # Dùng chung _visible_targets_query với GET /targets (đã chặn target_id IS NULL và thống nhất quyền admin)
+    all_current = (
+        _visible_targets_query(db, camp_type, current_user, include_completed=False)
+        .order_by(SeedingTarget.id.asc())
+        .all()
     )
-    if user_id is not None:
-        all_current_q = all_current_q.filter(SeedingTarget.created_by == user_id)
-
-    # CHỈ ẨN CÁC LINK ĐÃ CHẠY THÀNH CÔNG (COMPLETED)
-    completed_stmt = (
-        select(SeedingCampaignTarget.target_id)
-        .join(SeedingCampaign, SeedingCampaignTarget.campaign_id == SeedingCampaign.id)
-        .where(
-            or_(
-                SeedingCampaign.status == "COMPLETED",
-                and_(
-                    SeedingCampaignTarget.success_count > 0,
-                    SeedingCampaignTarget.failed_count == 0,
-                ),
-            )
-        )
-    )
-    all_current_q = all_current_q.filter(~SeedingTarget.id.in_(completed_stmt))
-    all_current = all_current_q.order_by(SeedingTarget.id.asc()).all()
+    visible_ids = {t.id for t in all_current}
+    submitted_ids = [item["id"] for item in valid_targets]
+    added_visible_count = sum(1 for tid in submitted_ids if tid in visible_ids)
+    already_completed_count = sum(1 for tid in submitted_ids if tid not in visible_ids)
 
     return {
         "total": len(all_current),
+        "added_visible_count": added_visible_count,
+        "already_completed_count": already_completed_count,
         "targets": [
             {
                 "id": t.id,
@@ -901,31 +890,10 @@ def clear_seeding_targets(
     Dữ liệu lịch sử đã được lưu trực tiếp display_name và target_url vào seeding_tasks và seeding_campaign_targets nên vẫn bảo toàn 100%.
     """
     current_user = get_current_user_info(request, authorization)
-    query = db.query(SeedingTarget)
-    if target_type:
-        query = query.filter(SeedingTarget.target_type == target_type.upper())
-    if current_user:
-        role = (
-            current_user.get("role") or current_user.get("_role_claim") or "user"
-        ).lower()
-        if role not in ("admin", "superadmin", "administrator"):
-            query = query.filter(SeedingTarget.created_by == current_user["id"])
-
-    # Chỉ xóa những targets chưa thành công khỏi danh sách hiển thị của user
-    completed_stmt = (
-        select(SeedingCampaignTarget.target_id)
-        .join(SeedingCampaign, SeedingCampaignTarget.campaign_id == SeedingCampaign.id)
-        .where(
-            or_(
-                SeedingCampaign.status == "COMPLETED",
-                and_(
-                    SeedingCampaignTarget.success_count > 0,
-                    SeedingCampaignTarget.failed_count == 0,
-                ),
-            )
-        )
-    )
-    targets_to_clear = query.filter(~SeedingTarget.id.in_(completed_stmt)).all()
+    # Chỉ xóa các mục tiêu đang hiển thị (chưa hoàn thành), dùng chung _visible_targets_query để tránh NOT IN (NULL)
+    targets_to_clear = _visible_targets_query(
+        db, target_type, current_user, include_completed=False
+    ).all()
     deleted_count = len(targets_to_clear)
     for t in targets_to_clear:
         db.query(SeedingTask).filter(SeedingTask.target_id == t.id).update(

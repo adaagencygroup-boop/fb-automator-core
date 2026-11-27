@@ -263,11 +263,19 @@ export default function SeedingPostPage() {
         targetMutationVersion.current += 1;
         const saved = await seedingApi.getSeedingTargets("POST", false, true).catch(() => null);
         const currentTargets = saved?.targets || res.targets;
+        const addedVisibleCount = Number(res.added_visible_count ?? normalizedUrls.length);
+        const alreadyCompletedCount = Number(res.already_completed_count ?? 0);
         setTargets(currentTargets);
         setSuccessMessage(
-          `Đã lưu thành công ${currentTargets.length} bài viết vào cơ sở dữ liệu`,
+          currentTargets.length > 0
+            ? `Đã lưu thành công ${currentTargets.length} bài viết vào cơ sở dữ liệu`
+            : null,
         );
-        return currentTargets;
+        return {
+          targets: currentTargets,
+          addedVisibleCount,
+          alreadyCompletedCount,
+        };
       }
     } catch (e) {
       addLog(`Lỗi lưu link bài viết: ${e.message}`, "error");
