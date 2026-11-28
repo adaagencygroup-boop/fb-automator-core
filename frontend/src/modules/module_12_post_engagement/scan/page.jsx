@@ -131,6 +131,11 @@ export default function PostEngagementScanPage() {
   // Màn hình theo bước (giống Tab 1 Module 03): config → chưa bấm gì; check → đã bấm Kiểm tra (hiện terminal);
   // scan → đã bấm Bắt đầu thực thi / Chạy tiếp (hiện thêm Kết quả quét, khoá cấu hình tới khi "Quay về cấu hình ban đầu")
   const [view, setView] = useState("config");
+  // Phiên quét gần nhất (đang xem kết quả): chuyển màn khác rồi quay lại → mở lại đúng màn Kết quả quét
+  const [lastScanJobId, setLastScanJobId] = useState(draft.lastScanJobId || "");
+  useEffect(() => {
+    if (scanJobId) setLastScanJobId(scanJobId);
+  }, [scanJobId]);
   const running = ["running", "paused", "stopping"].includes(scanStatus);
   const checking = Boolean(checkJobId);
   const locked = running || checking || view === "scan";
@@ -138,9 +143,10 @@ export default function PostEngagementScanPage() {
   useEffect(() => {
     saveInputDraft(draftKey(), {
       selectedUids, method, linkText, file, removed: [...removed], checked, quotas, unselected: [...unselected],
-      delayMin, delayMax, sessionKeys, pendingCleanup,
+      delayMin, delayMax, sessionKeys, pendingCleanup, scanView: view === "scan", lastScanJobId,
     });
-  }, [selectedUids, method, linkText, file, removed, checked, quotas, unselected, delayMin, delayMax, sessionKeys, pendingCleanup]);
+  }, [selectedUids, method, linkText, file, removed, checked, quotas, unselected, delayMin, delayMax, sessionKeys, pendingCleanup,
+    view, lastScanJobId]);
 
   // ---- Tải tài khoản Module 2
   const loadAccounts = useCallback(async ({ fresh = false } = {}) => {
@@ -227,9 +233,6 @@ export default function PostEngagementScanPage() {
     else setLinkText(lines.join("\n"));
     toast.info(`Giữ lại ${keep.length} bài chưa quét xong trong danh sách link.`);
   };
-
-  const applyCleanupRef = useRef(applyCleanup);
-  applyCleanupRef.current = applyCleanup;
 
   const backToConfig = () => {
     setView("config");
@@ -324,7 +327,33 @@ export default function PostEngagementScanPage() {
         }
         // Nháp cũ còn bài "Đang kiểm tra" mà không còn phiên Kiểm tra nào chạy → Chưa kiểm tra xong
         if (!c?.job_id) markIncomplete(null);
-        if (!s?.job_id && draft.pendingCleanup) applyCleanupRef.current(draft.pendingCleanup);
+        // Đang xem Kết quả quét lúc rời màn (phiên đã kết thúc) → mở lại đúng màn đó: kết quả đọc từ CSDL theo
+        // danh sách bài của phiên (không mất), log lấy lại từ Engine nếu còn giữ phiên (2 giờ). Danh sách link
+        // chỉ dọn khi bấm "Quay về cấu hình ban đầu".
+        if (!s?.job_id && !c?.job_id && draft.scanView && (draft.sessionKeys || []).length) {
+          setScanStatus("done");
+          setView("scan");
+          if (draft.lastScanJobId) {
+            try {
+              const job = await getScanStatus(draft.lastScanJobId);
+              if (alive && job) {
+                setLogs(job.logs || []);
+                if (["done", "aborted", "error"].includes(job.status)) {
+                  setScanStatus(job.status);
+                  // Phiên kết thúc lúc trang đang đóng → chưa ghi nhận bài nào chưa xong: tính lại để dọn đúng
+                  if (!draft.pendingCleanup) {
+                    const progress = job.progress || {};
+                    const unfinished = job.status === "done" ? [] : (job.posts || []).map((p) => p.post_key)
+                      .filter((key) => !["done", "unavailable"].includes(progress[key]?.status));
+                    setPendingCleanup({ unfinished });
+                  }
+                }
+              }
+            } catch {
+              /* Engine không còn giữ phiên: vẫn xem được kết quả từ CSDL, chỉ không có log */
+            }
+          }
+        }
         if (!s?.job_id) setResumable(await getResumableSession());
       } catch {
         /* bỏ qua */
