@@ -1089,7 +1089,7 @@ export default function PageScannerFollowers() {
                 />
               </div>
 
-              <div className="max-h-[440px] space-y-2.5 overflow-y-auto pr-1">
+              <div className="max-h-[440px] space-y-2.5 overflow-y-auto overscroll-contain pr-1">
                 {filteredLeftPages.length === 0 ? (
                   <p className="py-8 text-center text-xs text-[#94A3B8]">Chưa có page trong phiên</p>
                 ) : (
@@ -1244,9 +1244,9 @@ export default function PageScannerFollowers() {
                 </div>
               </div>
 
-              <div className="flex-1 overflow-x-auto">
+              <div className="h-[clamp(280px,calc(100vh-360px),480px)] overflow-auto overscroll-contain">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-[#F8FAFC] text-xs uppercase tracking-[0.3px] text-[#64748B] [&_th]:py-3 [&_th]:font-semibold">
+                  <thead className="sticky top-0 z-10 bg-[#F8FAFC] text-xs uppercase tracking-[0.3px] text-[#64748B] [&_th]:py-3 [&_th]:font-semibold">
                     <tr className="border-b border-[#E2E8F0]">
                       <th className="w-8 px-3 py-2.5">
                         <Checkbox
@@ -1360,7 +1360,7 @@ export default function PageScannerFollowers() {
                 </table>
               </div>
 
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-[#F1F5F9] pt-3 text-xs">
+              <div className="mt-4 flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[#F1F5F9] pt-3 text-xs">
                 <span className="text-[#64748B]">
                   Hiển thị{" "}
                   <strong className="text-[#0F172A]">
