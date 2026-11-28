@@ -38,9 +38,9 @@ from modules.module_02_account_manager.automation.browser_manager import (
 from modules.module_02_account_manager.context import owner_context
 from modules.module_02_account_manager.database.connection import SessionLocal, get_db
 from modules.module_02_account_manager.database.models import Account
+from modules.module_02_account_manager.security.encryption import decrypt_secret
 from modules.module_08_interaction_seeding.models.seeding_models import vn_now
 from modules.module_02_account_manager.services import events as m2_events
-from modules.module_02_account_manager.services.browser_service import HWID
 from modules.module_08_interaction_seeding.automation import FacebookSeedingBot
 from modules.module_08_interaction_seeding.automation.post_fetcher import running_job_id as running_post_fetch_job
 from modules.module_08_interaction_seeding.seeding_plan import (
@@ -1638,10 +1638,6 @@ class _BatchBrowserPool:
         self._idle = {}
         self._active = 0
 
-    def cached_uids(self, owner: str | None) -> set[str]:
-        with self._lock:
-            return {uid for session_owner, uid, _ in self._idle if session_owner == owner}
-
     def take(self, key):
         with self._lock:
             driver = self._idle.pop(key, None)
@@ -1728,26 +1724,26 @@ def _load_task_plan(s: Session, task_ids: list[int], campaign_id: int) -> dict[s
 
 
 def _logged_in_bot(driver, uid: str, account_record):
-    """Bảo đảm Chrome của nick đã đăng nhập Facebook (nạp Cookie / thông tin tài khoản nếu cần).
-    Trả về bot, hoặc None khi không đăng nhập được."""
-    bot = FacebookSeedingBot(driver)
-    if bot.is_facebook_session_alive(navigate=True):
-        broadcast("success", f"[{uid}] ✓ Phiên đăng nhập Facebook sẵn sàng.")
-        return bot
-    broadcast(
-        "warning",
-        f"[{uid}] Chưa có phiên đăng nhập, đang nạp Cookie / thông tin tài khoản...",
+    """Dùng luồng Module 2 để khôi phục phiên trên chính Chrome đang chạy seeding."""
+    from modules.module_02_account_manager.automation.login_flow import ensure_logged_in
+
+    result = ensure_logged_in(
+        driver,
+        uid=uid,
+        password=decrypt_secret(account_record.password),
+        two_fa=decrypt_secret(account_record.two_fa),
+        cookie=account_record.cookie,
     )
-    login_ok = bot.apply_facebook_support_data(
-        account_record, HWID, callback=lambda m: broadcast("info", m)
-    )
-    if not login_ok:
+    if not result.get("success"):
+        reason = "Facebook yêu cầu xác minh tài khoản (checkpoint)." if result.get("checkpoint") else "Không thể đăng nhập Facebook."
         broadcast(
             "error",
-            f"[{uid}] ❌ Không thể đăng nhập Facebook. Đánh dấu thất bại các tác vụ của nick này.",
+            f"[{uid}] ❌ {reason} Đánh dấu thất bại các tác vụ của nick này.",
         )
         return None
-    return bot
+    message = "Đã đăng nhập lại Facebook." if result.get("reloaded") else "Phiên đăng nhập Facebook sẵn sàng."
+    broadcast("success", f"[{uid}] ✓ {message}")
+    return FacebookSeedingBot(driver)
 
 
 def _execute_task(
@@ -1863,8 +1859,7 @@ def _process_account_tasks(
         with _scoped_db() as s:
             account_record = s.query(Account).filter(Account.uid == uid).first()
             if not account_record:
-                logger.error(f"Account {uid} not found in DB")
-                return
+                raise RuntimeError(f"Không tìm thấy tài khoản {uid} trong DB")
 
             proxy = account_record.proxy
             acc_label = account_record.profile_name or uid
@@ -1885,7 +1880,7 @@ def _process_account_tasks(
                     driver = None
                 elif candidate.is_facebook_session_alive():
                     bot = candidate
-                    broadcast("info", f"[{uid}] ✓ Tiếp tục dùng phiên Facebook của bài trước.", owner=owner)
+                    broadcast("info", f"[{uid}] ✓ Tiếp tục dùng phiên Facebook của link trước.", owner=owner)
 
         if driver is None:
             broadcast("info", f"[{uid}] 🚀 Khởi động trình duyệt Chrome Profile...")
@@ -2065,7 +2060,7 @@ def _finalize_campaign(campaign_id: int, stop_requested: bool) -> None:
         db_end.close()
 
 
-def _run_single_campaign(campaign_id: int, browser_pool: _BatchBrowserPool | None = None):
+def _run_single_campaign(campaign_id: int):
     """Hàm chạy nền điều phối đa luồng (ThreadPoolExecutor) cho một chiến dịch seeding."""
     db = SessionLocal()
     tasks_by_uid: dict[str, list[int]] = {}
@@ -2083,8 +2078,6 @@ def _run_single_campaign(campaign_id: int, browser_pool: _BatchBrowserPool | Non
         camp_owner = (
             str(campaign.created_by) if campaign.created_by is not None else None
         )
-        if campaign.campaign_type != "POST":
-            browser_pool = None
         if (
             _active_seeding_campaigns.get(campaign_id, {}).get("stop_requested")
             or campaign.status == "STOPPED"
@@ -2184,11 +2177,6 @@ def _run_single_campaign(campaign_id: int, browser_pool: _BatchBrowserPool | Non
 
     # Số luồng Chrome chạy đồng thời (người dùng chọn khi tạo lô, mặc định 2)
     max_workers = _campaign_threads.get(campaign_id, DEFAULT_CHROME_THREADS)
-    account_tasks = list(tasks_by_uid.items())
-    if browser_pool is not None:
-        max_workers = min(max_workers, browser_pool.limit)
-        cached = browser_pool.cached_uids(camp_owner)
-        account_tasks.sort(key=lambda entry: entry[0] not in cached)
     broadcast(
         "info",
         f"⚙️ Điều phối tự động với {max_workers} luồng Chrome song song trên {len(tasks_by_uid)} tài khoản.",
@@ -2199,7 +2187,7 @@ def _run_single_campaign(campaign_id: int, browser_pool: _BatchBrowserPool | Non
         # Khởi chạy đa luồng thật mà không giữ connection của DB ở luồng điều phối
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
-            for uid, t_ids in account_tasks:
+            for uid, t_ids in tasks_by_uid.items():
                 if _active_seeding_campaigns.get(campaign_id, {}).get("stop_requested"):
                     break
                 f = executor.submit(
@@ -2210,7 +2198,6 @@ def _run_single_campaign(campaign_id: int, browser_pool: _BatchBrowserPool | Non
                     delay_min=delay_min,
                     delay_max=delay_max,
                     owner=camp_owner,
-                    browser_pool=browser_pool,
                 )
                 futures.append(f)
 
@@ -2322,7 +2309,7 @@ def _running_conflict_detail(camp: SeedingCampaign) -> str:
 # CHIA LƯỢT XOAY VÒNG: mỗi nick làm 1 khối N bài liên tiếp trên 1 phiên Chrome
 # ─────────────────────────────────────────────────────────────
 class _BatchStop:
-    """Cờ dừng của cả lô xoay vòng. Đã thấy yêu cầu dừng 1 lần thì giữ nguyên
+    """Cờ dừng của cả lô. Đã thấy yêu cầu dừng 1 lần thì giữ nguyên
     (cờ của chiến dịch chạy xong bị xoá khỏi _active_seeding_campaigns)."""
 
     def __init__(self, chain: list[int]):
@@ -2358,8 +2345,8 @@ def _sleep_batch(stopped: _BatchStop, campaign_id: int, seconds: int) -> bool:
     return not stopped()
 
 
-def _begin_rotation_campaign(campaign_id: int, owner: str | None, label: str) -> None:
-    """Đánh dấu bài (chiến dịch) bắt đầu chạy trong khối của nick."""
+def _begin_batch_campaign(campaign_id: int, owner: str | None, label: str) -> None:
+    """Đánh dấu chiến dịch của một mục tiêu trong lô đã bắt đầu."""
     summary = f"#{campaign_id}"
     with _scoped_db() as s:
         camp = s.query(SeedingCampaign).filter(SeedingCampaign.id == campaign_id).first()
@@ -2456,7 +2443,7 @@ def _process_account_block(
                 break
 
             current = cid
-            _begin_rotation_campaign(cid, owner, f"bài {pos + 1}/{len(campaign_ids)} của [{acc_label}]")
+            _begin_batch_campaign(cid, owner, f"bài {pos + 1}/{len(campaign_ids)} của [{acc_label}]")
             with _scoped_db() as s:
                 task_ids = [
                     tid
@@ -2621,13 +2608,102 @@ def _run_rotation_batch(chain: list[int], threads: int) -> bool:
     return stopped()
 
 
+def _run_account_groups(chain: list[int], threads: int) -> bool:
+    """Chạy hết các link được phân cho một nhóm nick trước khi mở nhóm Chrome kế tiếp."""
+    with _scoped_db() as db:
+        campaigns = {
+            row.id: row
+            for row in db.query(
+                SeedingCampaign.id, SeedingCampaign.campaign_type, SeedingCampaign.created_by,
+                SeedingCampaign.status, SeedingCampaign.delay_seconds_min, SeedingCampaign.delay_seconds_max,
+            ).filter(SeedingCampaign.id.in_(chain)).all()
+        }
+        if not campaigns or any(row.campaign_type not in SEEDING_TYPE_LABELS for row in campaigns.values()):
+            return False
+        rows = db.query(SeedingTask.campaign_id, SeedingTask.account_uid, SeedingTask.id).filter(
+            SeedingTask.campaign_id.in_(chain), SeedingTask.status == "PENDING"
+        ).order_by(SeedingTask.id).all()
+
+    campaign_ids = [cid for cid in chain if cid in campaigns and campaigns[cid].status != "STOPPED"]
+    tasks_by_campaign: dict[int, dict[str, list[int]]] = {cid: {} for cid in campaign_ids}
+    accounts: dict[str, None] = {}
+    for cid, uid, tid in rows:
+        if cid in tasks_by_campaign:
+            tasks_by_campaign[cid].setdefault(uid, []).append(tid)
+            accounts.setdefault(uid, None)
+
+    stopped = _BatchStop(chain)
+    lanes = max(1, min(MAX_CHROME_THREADS, threads))
+    ordered_uids = list(accounts)
+    remaining = {cid: len(tasks_by_campaign[cid]) for cid in campaign_ids}
+    started: set[int] = set()
+    finished: set[int] = set()
+    try:
+        for cid in campaign_ids:
+            if not remaining[cid] and not stopped():
+                _run_single_campaign(cid)
+                finished.add(cid)
+
+        for start in range(0, len(ordered_uids), lanes):
+            if stopped():
+                break
+            group = ordered_uids[start:start + lanes]
+            pool = _BatchBrowserPool(lanes)
+            try:
+                with ThreadPoolExecutor(max_workers=lanes) as executor:
+                    ran_campaign = False
+                    for cid in campaign_ids:
+                        assigned = tasks_by_campaign[cid]
+                        tasks = [(uid, assigned[uid]) for uid in group if uid in assigned]
+                        if not tasks:
+                            continue
+                        if not _wait_batch_pause(stopped, cid):
+                            break
+                        campaign = campaigns[cid]
+                        owner = str(campaign.created_by) if campaign.created_by is not None else None
+                        lo = 30 if campaign.delay_seconds_min is None else campaign.delay_seconds_min
+                        hi = 60 if campaign.delay_seconds_max is None else campaign.delay_seconds_max
+                        lo, hi = sorted((max(0, lo), max(0, hi)))
+                        if ran_campaign:
+                            delay = random.randint(lo, hi)
+                            broadcast("info", f"⏳ Nghỉ {delay}s trước khi nhóm chuyển sang link tiếp theo.", owner=owner)
+                            if not _sleep_batch(stopped, cid, delay):
+                                break
+                        if cid not in started:
+                            _begin_batch_campaign(cid, owner, "chạy theo nhóm tài khoản")
+                            started.add(cid)
+                        futures = [
+                            executor.submit(_process_account_tasks, cid, uid, tids, lo, hi, owner, pool)
+                            for uid, tids in tasks
+                        ]
+                        for future in as_completed(futures):
+                            future.result()
+                        ran_campaign = True
+                        if stopped():
+                            break
+                        remaining[cid] -= len(tasks)
+                        if remaining[cid] == 0:
+                            _finalize_campaign(cid, stop_requested=False)
+                            finished.add(cid)
+            finally:
+                pool.close()
+
+        if stopped():
+            for cid in campaign_ids:
+                if cid not in finished:
+                    _finalize_campaign(cid, stop_requested=True)
+    finally:
+        for cid in chain:
+            _active_seeding_campaigns.pop(cid, None)
+    return True
+
+
 def _execute_campaign_runner(initial_campaign_id: int):
     """Hàm chạy nền điều phối tuần tự các chiến dịch trong cùng một batch."""
     chain = _batch_campaign_chains.get(initial_campaign_id, [initial_campaign_id])
     batch = _batch_id(initial_campaign_id)
     # Đánh dấu lô đang chạy: khoá không cho bắt đầu lô seeding khác cùng lúc (xem _find_running_campaign)
     _running_batches[initial_campaign_id] = chain
-    browser_pool = None
     try:
         # Lô hẹn giờ: chờ tới giờ hẹn (bị Dừng trong lúc chờ thì không chạy bài nào)
         chain_to_run = chain
@@ -2646,8 +2722,10 @@ def _execute_campaign_runner(initial_campaign_id: int):
         if chain_to_run and _batch_rotation.get(initial_campaign_id):
             _run_rotation_batch(chain_to_run, _campaign_threads.get(initial_campaign_id, DEFAULT_CHROME_THREADS))
             chain_to_run = []
-        if len(chain_to_run) > 1:
-            browser_pool = _BatchBrowserPool(_campaign_threads.get(initial_campaign_id, DEFAULT_CHROME_THREADS))
+        if len(chain_to_run) > 1 and _run_account_groups(
+            chain_to_run, _campaign_threads.get(initial_campaign_id, DEFAULT_CHROME_THREADS)
+        ):
+            return
         for idx, cid in enumerate(chain_to_run):
             if idx > 0 and not _rest_before_next_post(chain, cid):
                 break
@@ -2667,7 +2745,7 @@ def _execute_campaign_runner(initial_campaign_id: int):
             # phải dựa vào trạng thái STOPPED mà API dừng đã ghi vào DB.
             if idx > 0 and _campaign_status(cid) == "STOPPED":
                 break
-            _run_single_campaign(cid, browser_pool=browser_pool)
+            _run_single_campaign(cid)
 
         # Nếu chuỗi bị dừng dở chừng, đảm bảo mọi chiến dịch còn lại trong chuỗi được hoàn tất trạng thái FAILED/STOPPED
         stop_req = any(
@@ -2688,8 +2766,6 @@ def _execute_campaign_runner(initial_campaign_id: int):
                 db_cleanup.close()
 
     finally:
-        if browser_pool is not None:
-            browser_pool.close()
         _running_batches.pop(initial_campaign_id, None)
         _paused_batches.discard(batch)
         _batch_start_at.pop(batch, None)
