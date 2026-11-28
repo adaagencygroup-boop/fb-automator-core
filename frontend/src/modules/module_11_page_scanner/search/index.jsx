@@ -322,6 +322,8 @@ export default function PageScannerSearch() {
 
   /* Run state: idle | running | paused | done */
   const [runPhase, setRunPhase] = useState("idle");
+  // Vừa mở / quay lại trang: đang đọc phiên đang chạy từ máy chủ (vài giây) → khoá nút Bắt đầu
+  const [syncing, setSyncing] = useState(true);
   const [sessionId, setSessionId] = useState(null);
   const [sessionIds, setSessionIds] = useState([]);
   const [keywordProgress, setKeywordProgress] = useState([]); // {keyword, count, status}
@@ -731,6 +733,7 @@ export default function PageScannerSearch() {
   const restoreScan = async () => {
     const seq = ++restoreSeqRef.current;
     const stale = () => seq !== restoreSeqRef.current;
+    setSyncing(true);
     try {
       const saved = loadScanState("search");
       const camp = campaignRef.current;
@@ -768,6 +771,8 @@ export default function PageScannerSearch() {
             ? "paused"
             : "running",
       );
+      // Đã biết phiên còn chạy hay không → mở khoá nút (phần nạp kết quả / log bên dưới không cần chờ)
+      setSyncing(false);
 
       let settings = {};
       try {
@@ -862,6 +867,9 @@ export default function PageScannerSearch() {
       else if (camp.active) watchDetachedCampaign(top?.id ?? null);
     } catch (err) {
       console.error("[PageScanner] Khôi phục phiên quét:", err);
+    } finally {
+      // Lần khôi phục mới hơn đang chạy thì để nó tự mở khoá
+      if (!stale()) setSyncing(false);
     }
   };
   restoreScanRef.current = restoreScan;
@@ -910,6 +918,7 @@ export default function PageScannerSearch() {
   /** "Quét mới": bỏ phiên đang xem (dữ liệu trong kho không bị xóa). */
   const handleNewScan = () => {
     restoreSeqRef.current += 1;
+    setSyncing(false); // huỷ lần khôi phục đang dở → nó không tự mở khoá được nữa
     loadSeqRef.current += 1;
     stopPolling();
     clearScanState("search");
@@ -1265,6 +1274,8 @@ export default function PageScannerSearch() {
   };
 
   const handleStart = () => {
+    // Chưa đồng bộ xong phiên đang chạy → không cho tạo phiên mới (máy chủ sẽ báo lỗi vì phiên cũ còn chạy)
+    if (syncing) return;
     if (!validateBeforeStart()) return;
     restoreSeqRef.current += 1;
     setLogs([]);
@@ -2144,8 +2155,9 @@ export default function PageScannerSearch() {
         paused={isPaused}
         stopping={isStoppingApi}
         showNewScan={showResults}
-        startDisabled={isStarting}
+        startDisabled={isStarting || syncing}
         controlDisabled={isPausing || isStopping}
+        syncing={syncing}
         onStart={() => guardStart(handleStart)}
         onPauseResume={() => guardPause(handlePauseResume)}
         onStop={handleEmergencyStop}

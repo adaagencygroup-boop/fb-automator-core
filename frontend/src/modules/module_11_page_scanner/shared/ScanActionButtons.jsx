@@ -1,6 +1,6 @@
 "use client";
 
-import { Play, RotateCcw } from "lucide-react";
+import { Loader2, Play, RotateCcw } from "lucide-react";
 
 const BASE =
   "flex cursor-pointer items-center justify-center gap-2 text-xs font-bold tracking-wider transition-all active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60";
@@ -14,11 +14,26 @@ function StopIcon() {
   );
 }
 
-/** Nút điều khiển phiên quét (Module 11, 13), cùng kiểu với trang đăng bài Module 3. */
+/** Nút điều khiển phiên quét (Module 11, 13), cùng kiểu với trang đăng bài Module 3.
+ *  syncing: đang đọc lại phiên từ máy chủ (vừa mở / quay lại trang) → khoá thao tác, chưa biết phiên còn chạy hay
+ *  không nên không cho Bắt đầu (bấm lúc này sẽ đụng phiên đang chạy và báo lỗi). */
 export function ScanActionButtons({
   live, paused, stopping = false, showNewScan = false, startDisabled = false, controlDisabled = false,
-  onStart, onPauseResume, onStop, onNewScan,
+  syncing = false, onStart, onPauseResume, onStop, onNewScan,
 }) {
+  if (syncing && !live) {
+    return (
+      <button
+        type="button"
+        disabled
+        aria-busy="true"
+        className={`${BASE} w-full rounded-xl bg-blue-600 py-3.5 text-white shadow-sm shadow-blue-500/20`}
+      >
+        <Loader2 size={14} className="animate-spin" />
+        <span>ĐANG ĐỒNG BỘ PHIÊN QUÉT...</span>
+      </button>
+    );
+  }
   if (live) {
     return (
       <div className="flex items-center gap-3">

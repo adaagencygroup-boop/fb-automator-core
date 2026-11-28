@@ -757,6 +757,88 @@ async def list_search_keywords():
     return {"items": items, "total": len(items)}
 
 
+# Phiên DISCOVERY thuộc 1 từ khóa/hashtag ("#abc" ≈ "abc", không phân biệt hoa thường) — khớp list_search_keywords
+_KEYWORD_SESSION_COND = """
+    s.owner_key = %s
+    AND COALESCE(s.job_type, 'DISCOVERY') = 'DISCOVERY'
+    AND s.source_type IN ('SEARCH', 'HASHTAG')
+    AND (s.keyword = %s OR LOWER(REGEXP_REPLACE(TRIM(s.keyword), '^#+', '')) = %s)
+"""
+
+
+@router.delete("/keywords")
+def delete_search_keyword(keyword: str = Query(..., min_length=1)):
+    """
+    DELETE /api/page-scanner/keywords?keyword=#abc
+    Xóa tag (từ khóa / hashtag ở sidebar DS page) cùng các page liên quan:
+      - page thuộc các phiên tìm của tag + page có matched_hashtags chứa đúng tag đó;
+      - gỡ các page đó khỏi danh mục đã lưu;
+      - xóa các phiên DISCOVERY của tag (page_scan_session_pages xóa theo CASCADE) → tag biến khỏi sidebar.
+    Phiên của tag đang chạy / tạm dừng → 409 (dừng phiên trước).
+    """
+    owner = _get_owner()
+    kw = keyword.strip()
+    norm = kw.lstrip("#").strip().lower()
+    if not norm:
+        raise HTTPException(status_code=422, detail="Từ khóa không hợp lệ.")
+    sess_params = (owner, kw, norm)
+    tag_regex = r"(^|[^[:alnum:]_])#?" + re.escape(norm) + r"([^[:alnum:]_]|$)"
+
+    busy = db.fetch_one(
+        f"SELECT id FROM page_scan_sessions s WHERE {_KEYWORD_SESSION_COND}"
+        " AND s.status IN ('RUNNING', 'PAUSED') LIMIT 1",
+        sess_params,
+    )
+    if busy:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Phiên #{busy['id']} của \"{kw}\" đang chạy / tạm dừng — dừng phiên trước khi xóa.",
+        )
+
+    try:
+        with db.session() as cur:
+            cur.execute(
+                f"""
+                SELECT DISTINCT sp.page_key
+                FROM scanned_pages sp
+                WHERE sp.owner_key = %s
+                  AND (
+                    EXISTS (
+                        SELECT 1
+                        FROM page_scan_session_pages ssp
+                        JOIN page_scan_sessions s ON s.id = ssp.session_id
+                        WHERE ssp.page_key = sp.page_key AND {_KEYWORD_SESSION_COND}
+                    )
+                    OR LOWER(COALESCE(sp.matched_hashtags, '')) ~ %s
+                  )
+                """,
+                (owner, *sess_params, tag_regex),
+            )
+            keys = [r["page_key"] for r in (cur.fetchall() or []) if r.get("page_key")]
+            deleted_pages = 0
+            if keys:
+                cur.execute(
+                    "DELETE FROM page_list_category_pages WHERE owner_key = %s AND page_key = ANY(%s)",
+                    (owner, keys),
+                )
+                cur.execute(
+                    "DELETE FROM scanned_pages WHERE owner_key = %s AND page_key = ANY(%s) RETURNING page_key",
+                    (owner, keys),
+                )
+                deleted_pages = len(cur.fetchall() or [])
+            cur.execute(
+                f"DELETE FROM page_scan_sessions s WHERE {_KEYWORD_SESSION_COND} RETURNING s.id",
+                sess_params,
+            )
+            deleted_sessions = len(cur.fetchall() or [])
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"[PageScanner] delete keyword {kw!r} fail: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Không xóa được tag: {exc}")
+    return {"keyword": kw, "deleted_pages": deleted_pages, "deleted_sessions": deleted_sessions}
+
+
 _VI_ACCENT_SRC = "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ"
 _VI_ACCENT_DST = "aaaaaaaaaaaaaaaaaeeeeeeeeeeeiiiiiooooooooooooooooouuuuuuuuuuuyyyyyd"
 
@@ -901,6 +983,7 @@ async def list_scanned_pages(
         None, description="Lọc khu vực theo 34 tỉnh/thành mới hoặc NO_ADDRESS (khớp có/không dấu, tiếng Anh)"
     ),
     list_id: Optional[int] = Query(None, description="Lọc page trong danh mục đã lưu (page_list_categories.id)"),
+    no_list: bool = Query(False, description="Chỉ page CHƯA thuộc danh mục đã lưu nào"),
     relevance_status: Optional[str] = Query(None, description="Lọc theo độ liên quan (RELEVANT, REVIEW, EXCLUDED)"),
     min_followers: Optional[int] = Query(None, ge=0, description="Lọc hiển thị: follower tối thiểu"),
     sort_by: str = Query("followers", description="followers | created | default"),
@@ -1062,6 +1145,11 @@ async def list_scanned_pages(
                 " WHERE owner_key = %s AND category_id = %s)"
             )
             params.extend([owner, int(list_id)])
+        elif no_list:
+            where_conds.append(
+                "page_key NOT IN (SELECT page_key FROM page_list_category_pages WHERE owner_key = %s)"
+            )
+            params.append(owner)
 
         f_conds, f_params = _build_page_filter_sql("", keyword, info_filter, region)
         where_conds.extend(f_conds)
@@ -2130,8 +2218,12 @@ async def delete_scanned_followers(item: DeleteFollowersInput):
 # ── DANH MỤC PAGE ĐÃ LƯU ("Lưu vào danh sách page chung") ──
 # Viết `def` (không async): FastAPI chạy trong threadpool nên truy vấn DB không chặn event loop.
 
+_LIST_COLOR = r"^#[0-9A-Fa-f]{6}$"
+
+
 class PageListCreateInput(BaseModel):
     name: str = Field(..., max_length=255)
+    color: Optional[str] = Field(None, pattern=_LIST_COLOR)
 
 
 class PageListSaveInput(BaseModel):
@@ -2139,6 +2231,7 @@ class PageListSaveInput(BaseModel):
     category_name: Optional[str] = Field(None, max_length=255)
     page_keys: List[str] = Field(default_factory=list)
     deduplicate: bool = True
+    color: Optional[str] = Field(None, pattern=_LIST_COLOR)  # chỉ dùng khi tạo mới theo tên
 
 
 # Chỉ đếm page còn trong kho (page đã xoá khỏi scanned_pages thì không tính)
@@ -2153,17 +2246,17 @@ def _clean_list_name(name: Any) -> str:
     return " ".join(str(name or "").split())[:255]
 
 
-def _find_or_create_page_list(cur, owner: str, name: str) -> tuple:
-    """(danh mục {id, name}, created) — tên so khớp không phân biệt hoa thường."""
-    find_sql = "SELECT id, name FROM page_list_categories WHERE owner_key = %s AND LOWER(name) = LOWER(%s)"
+def _find_or_create_page_list(cur, owner: str, name: str, color: Optional[str] = None) -> tuple:
+    """(danh mục {id, name, color}, created) — tên so khớp không phân biệt hoa thường."""
+    find_sql = "SELECT id, name, color FROM page_list_categories WHERE owner_key = %s AND LOWER(name) = LOWER(%s)"
     cur.execute(find_sql, (owner, name))
     row = cur.fetchone()
     if row:
         return dict(row), False
     cur.execute(
-        "INSERT INTO page_list_categories (owner_key, name) VALUES (%s, %s)"
-        " ON CONFLICT DO NOTHING RETURNING id, name",
-        (owner, name),
+        "INSERT INTO page_list_categories (owner_key, name, color) VALUES (%s, %s, %s)"
+        " ON CONFLICT DO NOTHING RETURNING id, name, color",
+        (owner, name, color),
     )
     row = cur.fetchone()
     if row:
@@ -2178,7 +2271,7 @@ def list_page_lists():
     owner = _get_owner()
     rows = db.fetch_all(
         f"""
-        SELECT c.id, c.name, c.created_at, c.updated_at, ({_PAGE_LIST_COUNT_SQL}) AS page_count
+        SELECT c.id, c.name, c.color, c.created_at, c.updated_at, ({_PAGE_LIST_COUNT_SQL}) AS page_count
         FROM page_list_categories c
         WHERE c.owner_key = %s
         ORDER BY c.updated_at DESC, c.id DESC
@@ -2198,7 +2291,7 @@ def create_page_list(item: PageListCreateInput):
     if not name:
         raise HTTPException(status_code=422, detail="Tên danh mục không được để trống.")
     with db.session() as cur:
-        cat, created = _find_or_create_page_list(cur, owner, name)
+        cat, created = _find_or_create_page_list(cur, owner, name, item.color)
     return {**cat, "created": created}
 
 
@@ -2242,7 +2335,7 @@ def save_pages_to_list(item: PageListSaveInput):
                 raise HTTPException(status_code=404, detail="Không tìm thấy danh mục.")
             cat, created = dict(row), False
         else:
-            cat, created = _find_or_create_page_list(cur, owner, name)
+            cat, created = _find_or_create_page_list(cur, owner, name, item.color)
 
         cur.execute(
             f"""

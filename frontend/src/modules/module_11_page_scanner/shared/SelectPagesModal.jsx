@@ -24,6 +24,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Tag,
+  Hash,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -39,7 +40,11 @@ import {
   getPagesWithFollowers,
   getScannedPages,
   getSearchKeywords,
+  deletePageList,
 } from "../service";
+import { usePageLists } from "./usePageLists";
+import SavePageListModal from "./SavePageListModal";
+import { pageListColor } from "./pageListColor";
 import { Pager, notifyExportResult } from "../_shared";
 import { useActionLock } from "./useActionLock";
 import { saveCsvContent } from "./saveFile.mjs";
@@ -564,8 +569,29 @@ export function SelectAccountsModal({
 }
 
 /* ─── Modal: Chọn page từ danh mục đã quét (giao diện danh mục theo từ khóa/tag) ─── */
-export const NO_TAG_KEY = "__NO_TAG__";
+export const NO_LIST_KEY = "__NO_LIST__";
+/** @deprecated giữ tên cũ cho nơi khác import */
+export const NO_TAG_KEY = NO_LIST_KEY;
 export const ALL_TAGS_KEY = "__ALL__";
+/** Khóa mục "danh mục đã lưu" ở cột trái (phân biệt với tag = tên từ khóa) */
+const LIST_KEY_PREFIX = "list:";
+const listIdOf = (key) =>
+  String(key || "").startsWith(LIST_KEY_PREFIX) ? Number(String(key).slice(LIST_KEY_PREFIX.length)) : null;
+
+/** page_key của 1 danh mục đã lưu (lấy hết, tối đa 2000 page) */
+async function fetchListPageKeys(listId) {
+  // listId = null → page chưa thuộc danh mục đã lưu nào
+  const filter = listId == null ? { no_list: true } : { list_id: listId };
+  const keys = [];
+  for (let p = 1; p <= 10; p += 1) {
+    const res = await getScannedPages({ ...filter, page: p, page_size: 200 });
+    const items = res?.items || [];
+    items.forEach((it) => it?.page_key && keys.push(it.page_key));
+    const total = Number(res?.total) || 0;
+    if (!items.length || keys.length >= total) break;
+  }
+  return keys;
+}
 
 const BADGE_COLOR_PALETTE = [
   "bg-[#2563EB]", // Blue (LE)
@@ -627,7 +653,7 @@ export function extractPageTags(page) {
   return tags;
 }
 
-export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm }) {
+export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm, manageCategories = true }) {
   const [allPages, setAllPages] = useState([]);
   const [loadingPages, setLoadingPages] = useState(false);
   const [draftKeys, setDraftKeys] = useState([]);
@@ -642,6 +668,10 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
   const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [isExporting, guardExport] = useActionLock();
+  // Danh mục đã lưu (DB) — tách riêng khỏi tag (từ khóa / hashtag lúc quét)
+  const { lists: savedLists, reload: reloadSavedLists } = usePageLists({ enabled: open });
+  const [listKeysMap, setListKeysMap] = useState({}); // { [listId]: page_key[] }
+  const [moveKeys, setMoveKeys] = useState(null); // page_key đang chuyển vào danh mục (mở SavePageListModal)
 
   const [prevOpen, setPrevOpen] = useState(open);
   if (open !== prevOpen) {
@@ -720,13 +750,13 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
             if (tags.length) return tags[0];
           }
           if (kwList.length) return kwList[0];
-          return NO_TAG_KEY;
+          return NO_LIST_KEY;
         });
       } catch (err) {
         if (!cancelled) {
           toast.error(`Lỗi tải danh sách page: ${err?.message || "Không thể kết nối"}`);
           setAllPages([]);
-          setActiveCategory(NO_TAG_KEY);
+          setActiveCategory(NO_LIST_KEY);
         }
       } finally {
         if (!cancelled) setLoadingPages(false);
@@ -739,6 +769,36 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
       cancelled = true;
     };
   }, [open]);
+
+  const activeListId = listIdOf(activeCategory);
+  const activeListKeys = activeListId != null ? listKeysMap[activeListId] : null;
+  const loadListKeys = useCallback(async (listId) => {
+    try {
+      const keys = await fetchListPageKeys(listId);
+      setListKeysMap((prev) => ({ ...prev, [listId]: keys }));
+    } catch (err) {
+      toast.error(`Lỗi tải danh mục: ${err?.message || "Không thể kết nối"}`, { key: "m11-modal-list-keys" });
+      setListKeysMap((prev) => ({ ...prev, [listId]: [] }));
+    }
+  }, []);
+  useEffect(() => {
+    if (!open || activeListId == null || activeListKeys) return;
+    loadListKeys(activeListId);
+  }, [open, activeListId, activeListKeys, loadListKeys]);
+
+  // Page chưa có danh mục: tải khi mở modal + sau mỗi lần lưu / xóa danh mục
+  const [unlistedKeys, setUnlistedKeys] = useState(null);
+  const loadUnlistedKeys = useCallback(async () => {
+    try {
+      setUnlistedKeys(await fetchListPageKeys(null));
+    } catch {
+      setUnlistedKeys([]);
+    }
+  }, []);
+  useEffect(() => {
+    if (open) loadUnlistedKeys();
+  }, [open, loadUnlistedKeys]);
+  const unlistedSet = useMemo(() => (unlistedKeys ? new Set(unlistedKeys) : null), [unlistedKeys]);
 
   // Danh sách từ khóa (tag) + mục "Chưa có tag"
   const categoriesData = useMemo(() => {
@@ -776,16 +836,10 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
 
     list.sort((a, b) => b.count - a.count);
 
-    const untaggedItem = {
-      key: NO_TAG_KEY,
-      name: "Chưa có tag",
-      count: untaggedCount,
-      isUntagged: true,
-    };
 
     return {
-      allList: [...list, untaggedItem],
-      totalCategories: list.length + (untaggedCount > 0 ? 1 : 0),
+      allList: list,
+      totalCategories: list.length,
       totalPages: allPages.length,
       untaggedCount,
     };
@@ -800,7 +854,14 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
     );
   }, [categoriesData.allList, categorySearch]);
 
+  const filteredSavedLists = useMemo(() => {
+    const q = categorySearch.trim().toLowerCase();
+    if (!q) return savedLists;
+    return savedLists.filter((l) => String(l.name || "").toLowerCase().includes(q));
+  }, [savedLists, categorySearch]);
+
   // Lọc danh sách page bên phải theo từ khóa/tag đang chọn & các bộ lọc
+  const activeListSet = useMemo(() => (activeListKeys ? new Set(activeListKeys) : null), [activeListKeys]);
   const filteredPages = useMemo(() => {
     const q = pageSearch.trim().toLowerCase();
     const activeLower = (activeCategory || "").toLowerCase();
@@ -808,8 +869,11 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
     return allPages.filter((p) => {
       // 1. Lọc theo Từ khóa (Tag)
       const tags = extractPageTags(p);
-      if (activeCategory === NO_TAG_KEY) {
-        if (tags.length > 0) return false;
+      if (activeListId != null) {
+        // Danh mục đã lưu: chỉ page thuộc danh mục (chưa tải xong → trống)
+        if (!activeListSet || !activeListSet.has(p.page_key)) return false;
+      } else if (activeCategory === NO_LIST_KEY) {
+        if (!unlistedSet || !unlistedSet.has(p.page_key)) return false;
       } else if (activeCategory && activeCategory !== ALL_TAGS_KEY) {
         const hasTag = tags.some((t) => t.toLowerCase() === activeLower);
         if (!hasTag) return false;
@@ -838,7 +902,7 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
 
       return true;
     });
-  }, [allPages, activeCategory, statusFilter, locationFilter, pageSearch]);
+  }, [allPages, activeCategory, activeListId, activeListSet, unlistedSet, statusFilter, locationFilter, pageSearch]);
 
   // Phân trang danh sách page
   const totalFiltered = filteredPages.length;
@@ -878,11 +942,15 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
   });
 
   const activeCategoryObj = useMemo(() => {
+    if (activeListId != null) {
+      const l = savedLists.find((x) => x.id === activeListId);
+      return { name: l?.name || "Danh mục", count: filteredPages.length, isList: true };
+    }
     return categoriesData.allList.find((c) => c.key === activeCategory) || {
-      name: activeCategory === NO_TAG_KEY ? "Chưa có tag" : activeCategory,
+      name: activeCategory === NO_LIST_KEY ? "Chưa có danh mục" : activeCategory,
       count: filteredPages.length,
     };
-  }, [categoriesData.allList, activeCategory, filteredPages.length]);
+  }, [categoriesData.allList, activeCategory, activeListId, savedLists, filteredPages.length]);
 
   const handleExportExcel = async () => {
     const exportItems = filteredPages;
@@ -951,12 +1019,28 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
     return url.replace(/^https?:\/\/(www\.)?facebook\.com\//, "fb.com/").replace(/\/$/, "");
   };
 
-  const [showMoveCategoryModal, setShowMoveCategoryModal] = useState(false);
-  const [targetCategory, setTargetCategory] = useState("");
 
   const handleDeleteCategory = async () => {
-    if (activeCategory === NO_TAG_KEY) {
-      toast.warning("Không thể xóa mục 'Chưa có tag'.");
+    if (activeListId != null) {
+      const name = activeCategoryObj.name;
+      const ok = await askConfirm({
+        title: "Xóa danh mục",
+        description: `Xóa danh mục "${name}"? Các page trong kho vẫn giữ nguyên.`,
+        confirmText: "Xóa danh mục",
+      });
+      if (!ok) return;
+      try {
+        await deletePageList(activeListId);
+        loadUnlistedKeys();
+        setActiveCategory(categoriesData.allList[0]?.key || NO_LIST_KEY);
+        toast.success(`Đã xóa danh mục "${name}".`);
+      } catch (err) {
+        toast.error(`Lỗi xóa danh mục: ${err?.message}`);
+      }
+      return;
+    }
+    if (activeCategory === NO_LIST_KEY) {
+      toast.warning("Không thể xóa mục 'Chưa có danh mục'.");
       return;
     }
     const ok = await askConfirm({
@@ -981,48 +1065,93 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
       })
     );
     setCustomCategories((prev) => prev.filter((c) => c.toLowerCase() !== targetLower));
-    setActiveCategory(NO_TAG_KEY);
+    setActiveCategory(NO_LIST_KEY);
     toast.success(`Đã gỡ từ khóa/tag "${activeCategory}".`);
   };
 
-  const handleMoveCategory = (e) => {
-    e.preventDefault();
-    const dest = targetCategory.trim().replace(/^#+/, "");
-    if (!dest) {
-      toast.warning("Vui lòng chọn hoặc nhập từ khóa/tag đích.");
-      return;
+  /* "Chuyển danh mục": lưu page đang chọn (trong danh sách đang xem) vào danh mục đã lưu — dùng chung SavePageListModal */
+  const handleMovePages = () => {
+    const keys = filteredPages.filter((p) => draftKeys.includes(p.page_key)).map((p) => p.page_key);
+    if (keys.length) setMoveKeys(keys);
+  };
+  const handleMoved = (res) => {
+    reloadSavedLists();
+    loadUnlistedKeys();
+    const id = res?.category?.id;
+    if (id != null) {
+      setListKeysMap((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
     }
-    const destLower = dest.toLowerCase();
-    const selectedKeysSet = new Set(draftKeys);
-    let count = 0;
-    setAllPages((prev) =>
-      prev.map((p) => {
-        if (selectedKeysSet.has(p.page_key)) {
-          count += 1;
-          const currentTags = extractPageTags(p);
-          if (!currentTags.some((t) => t.toLowerCase() === destLower)) {
-            const nextTags = [...currentTags, dest];
-            return {
-              ...p,
-              matched_hashtags: nextTags,
-              source_keywords: [...(p.source_keywords || []), dest],
-            };
-          }
-        }
-        return p;
-      })
-    );
-    if (!categoriesData.allList.some((c) => c.name.toLowerCase() === destLower)) {
-      setCustomCategories((prev) => [...prev, dest]);
-    }
-    setShowMoveCategoryModal(false);
-    setTargetCategory("");
-    toast.success(`Đã gán từ khóa/tag "${dest}" cho ${count} page.`);
   };
 
   const selectedInCurrentCount = useMemo(() => {
     return filteredPages.filter((p) => draftKeys.includes(p.page_key)).length;
   }, [filteredPages, draftKeys]);
+
+  /* Mục cột trái: tag (# tím) · danh mục đã lưu (thư mục xanh) · "Chưa có danh mục" (vàng, cuối nhóm danh mục) */
+  const SIDE_ICON = {
+    tag: { Icon: Hash, cls: "bg-violet-50 text-violet-600" },
+    list: { Icon: Folder, cls: "bg-blue-50 text-[#1877F2]" },
+    untagged: { Icon: FolderPlus, cls: "bg-amber-50 text-amber-600" },
+  };
+  const renderSideItem = ({ key, name, count, kind, color }) => {
+    const isActive = activeCategory === key;
+    const { Icon, cls } = SIDE_ICON[kind];
+    const select = () => {
+      setActiveCategory(key);
+      setCurrentPage(1);
+    };
+    return (
+      <div
+        key={key}
+        role="button"
+        tabIndex={0}
+        onClick={select}
+        onKeyDown={(e) => e.key === "Enter" && select()}
+        title={name}
+        className={`group flex items-center justify-between rounded-xl px-2.5 py-2 cursor-pointer transition text-left ${
+          isActive
+            ? "border-2 border-[#1877F2] bg-[#F0F7FF] shadow-xs"
+            : "border border-transparent hover:border-[#E2E8F0] hover:bg-[#F8FAFC]"
+        }`}
+      >
+        <div className="flex items-center gap-2.5 min-w-0 pr-1">
+          {kind === "tag" ? (
+            <span className={`flex size-7 shrink-0 items-center justify-center rounded-lg ${cls}`}>
+              <Icon className="size-3.5" />
+            </span>
+          ) : (
+            // Danh mục đã lưu / "Chưa có danh mục": chấm màu như danh mục profile (Module 13)
+            <span className="mx-2 size-2.5 shrink-0 rounded-full" style={{ backgroundColor: color || "#CBD5E1" }} />
+          )}
+          <div className="min-w-0">
+            <div className={`text-xs truncate ${isActive ? "font-bold text-[#0F172A]" : "font-semibold text-[#334155]"}`}>
+              {name}
+            </div>
+            <div className={`text-[11px] mt-0.5 ${isActive ? "font-semibold text-[#1877F2]" : "text-[#94A3B8]"}`}>
+              {fmtNum(count)} page{kind === "list" ? " · danh mục" : kind === "tag" ? " · tag" : ""}
+            </div>
+          </div>
+        </div>
+        {manageCategories && isActive && kind !== "untagged" && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleDeleteCategory();
+            }}
+            title={kind === "list" ? "Xóa danh mục này" : "Gỡ tag này"}
+            className="p-1 text-[#94A3B8] hover:text-[#DC2626] rounded transition shrink-0"
+          >
+            <MoreVertical className="size-3.5" />
+          </button>
+        )}
+      </div>
+    );
+  };
 
   if (!open) return null;
 
@@ -1061,20 +1190,24 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
                 <Folder className="size-4 text-[#1877F2]" />
                 <span>DANH SÁCH DANH MỤC</span>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowAddCategoryModal(true)}
-                className="inline-flex items-center gap-1 text-xs font-semibold text-[#1877F2] hover:text-[#1D4ED8] hover:underline"
-              >
-                <Plus className="size-3.5" />
-                <span>Thêm</span>
-              </button>
+              {manageCategories && (
+                <button
+                  type="button"
+                  onClick={() => setShowAddCategoryModal(true)}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-[#1877F2] hover:text-[#1D4ED8] hover:underline"
+                >
+                  <Plus className="size-3.5" />
+                  <span>Thêm</span>
+                </button>
+              )}
             </div>
 
             {/* Thẻ thống kê */}
             <div className="mt-3 shrink-0 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] px-3 py-2 flex items-center justify-between text-xs text-[#64748B]">
               <span>
-                Đã quét: <strong className="text-[#0F172A] font-bold">{categoriesData.totalCategories} danh mục</strong>
+                <strong className="text-[#0F172A] font-bold">{categoriesData.allList.length} tag</strong>
+                {" · "}
+                <strong className="text-[#0F172A] font-bold">{savedLists.length} danh mục</strong>
               </span>
               <strong className="text-[#1877F2] font-bold">{fmtNum(categoriesData.totalPages)} Page</strong>
             </div>
@@ -1085,84 +1218,51 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
               <input
                 value={categorySearch}
                 onChange={(e) => setCategorySearch(e.target.value)}
-                placeholder="Lọc danh mục thư mục..."
+                placeholder="Lọc tag / danh mục..."
                 className="h-9 w-full rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] pr-3 pl-9 text-xs text-[#0F172A] placeholder:text-[#94A3B8] outline-none focus:border-[#1877F2] focus:bg-white transition"
               />
             </div>
 
             {/* Danh sách danh mục scrollable */}
             <div className="mt-3 flex-1 min-h-0 space-y-1.5 overflow-y-auto pr-0.5 [scrollbar-width:thin] [scrollbar-color:#CBD5E1_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-slate-300 hover:[&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-button]:hidden">
-              {filteredCategories.length === 0 ? (
+              {categorySearch.trim() && !filteredCategories.length && !filteredSavedLists.length ? (
                 <div className="py-8 text-center text-xs text-[#94A3B8]">
-                  Không tìm thấy từ khóa phù hợp.
+                  Không tìm thấy tag / danh mục phù hợp.
                 </div>
               ) : (
-                filteredCategories.map((cat) => {
-                  const isActive = activeCategory === cat.key;
-                  return (
-                    <div
-                      key={cat.key}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => {
-                        setActiveCategory(cat.key);
-                        setCurrentPage(1);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          setActiveCategory(cat.key);
-                          setCurrentPage(1);
-                        }
-                      }}
-                      className={`group flex items-center justify-between rounded-xl px-3 py-2.5 cursor-pointer transition text-left ${
-                        isActive
-                          ? "border-2 border-[#1877F2] bg-[#F0F7FF] shadow-xs"
-                          : "border border-transparent hover:border-[#E2E8F0] hover:bg-[#F8FAFC]"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0 pr-1">
-                        <span
-                          className={`size-2 shrink-0 rounded-full ${
-                            isActive ? "bg-[#1877F2]" : cat.isUntagged ? "bg-amber-400" : "bg-[#CBD5E1]"
-                          }`}
-                        />
-                        <div className="min-w-0">
-                          <div
-                            className={`text-xs truncate ${
-                              isActive ? "font-bold text-[#0F172A]" : "font-semibold text-[#334155]"
-                            }`}
-                          >
-                            {cat.name}
-                          </div>
-                          <div
-                            className={`text-[11px] mt-0.5 ${
-                              isActive ? "font-semibold text-[#1877F2]" : "text-[#94A3B8]"
-                            }`}
-                          >
-                            {fmtNum(cat.count)} page
-                          </div>
-                        </div>
-                      </div>
-                      {isActive && !cat.isUntagged && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteCategory();
-                          }}
-                          title="Xóa danh mục này"
-                          className="p-1 text-[#94A3B8] hover:text-[#DC2626] rounded transition shrink-0"
-                        >
-                          <MoreVertical className="size-3.5" />
-                        </button>
-                      )}
+                <>
+                  {filteredCategories.length > 0 && (
+                    <div className="px-1 pt-1 pb-0.5 text-[10px] font-bold uppercase tracking-wider text-[#94A3B8]">
+                      Từ khóa / Tag đã tìm
                     </div>
-                  );
-                })
+                  )}
+                  {filteredCategories.map((cat) =>
+                    renderSideItem({ key: cat.key, name: `#${cat.name}`, count: cat.count, kind: "tag" }),
+                  )}
+                  <div className="px-1 pt-3 pb-0.5 text-[10px] font-bold uppercase tracking-wider text-[#94A3B8]">
+                    Danh mục đã lưu
+                  </div>
+                  {filteredSavedLists.map((l) =>
+                    renderSideItem({
+                      key: `${LIST_KEY_PREFIX}${l.id}`,
+                      name: l.name,
+                      count: l.page_count ?? 0,
+                      kind: "list",
+                      color: pageListColor(l),
+                    }),
+                  )}
+                  {renderSideItem({
+                    key: NO_LIST_KEY,
+                    name: "Chưa có danh mục",
+                    count: unlistedKeys?.length ?? 0,
+                    kind: "untagged",
+                  })}
+                </>
               )}
             </div>
 
             {/* Nút thêm danh mục mới ở đáy */}
+            {manageCategories && (
             <div className="pt-2 shrink-0">
               <button
                 type="button"
@@ -1173,6 +1273,7 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
                 <span>+ Thêm danh mục mới</span>
               </button>
             </div>
+            )}
           </div>
 
           {/* Cột phải: Danh sách Page trong danh mục */}
@@ -1181,15 +1282,26 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
             <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] px-4 py-3 sm:px-5 sm:py-3.5">
               <div>
                 <h3 className="text-base font-bold text-[#0F172A] truncate">
-                  {activeCategoryObj.name}
+                  {activeListId == null && activeCategory !== NO_LIST_KEY ? `#${activeCategoryObj.name}` : activeCategoryObj.name}
                 </h3>
                 <div className="mt-0.5 flex items-center gap-2 text-xs text-[#64748B]">
-                  <Folder className="size-3.5 text-[#94A3B8]" />
-                  <span>{fmtNum(filteredPages.length)} Page</span>
+                  {activeListId != null ? (
+                    <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-[#1877F2]">
+                      <Folder className="size-3" /> Danh mục đã lưu
+                    </span>
+                  ) : activeCategory !== NO_LIST_KEY ? (
+                    <span className="inline-flex items-center gap-1 rounded-md bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-600">
+                      <Hash className="size-3" /> Tag từ khóa
+                    </span>
+                  ) : null}
+                  <span>
+                    {activeListId != null && !activeListKeys ? "Đang tải..." : `${fmtNum(filteredPages.length)} Page`}
+                  </span>
                   <span>•</span>
                   <span>Cập nhật gần đây</span>
                 </div>
               </div>
+              {manageCategories && (
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -1200,17 +1312,19 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
                   <FileSpreadsheet className="size-3.5" />
                   <span>Xuất Excel</span>
                 </button>
-                {activeCategory !== NO_TAG_KEY && (
-                  <button
-                    type="button"
-                    onClick={handleDeleteCategory}
-                    className="inline-flex h-8 sm:h-9 items-center gap-1.5 rounded-lg border border-[#FECACA] hover:bg-[#FEF2F2] px-3 sm:px-3.5 text-xs font-semibold text-[#DC2626] transition"
-                  >
-                    <Trash2 className="size-3.5" />
-                    <span>Xóa danh mục</span>
-                  </button>
-                )}
+                {/* Tag → "Xóa tag" · Danh mục → "Xóa danh mục" · Chưa có danh mục → khóa */}
+                <button
+                  type="button"
+                  onClick={handleDeleteCategory}
+                  disabled={activeCategory === NO_LIST_KEY}
+                  title={activeCategory === NO_LIST_KEY ? 'Không thể xóa mục "Chưa có danh mục"' : undefined}
+                  className="inline-flex h-8 sm:h-9 items-center gap-1.5 rounded-lg border border-[#FECACA] hover:bg-[#FEF2F2] px-3 sm:px-3.5 text-xs font-semibold text-[#DC2626] transition disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                >
+                  <Trash2 className="size-3.5" />
+                  <span>{activeListId == null && activeCategory !== NO_LIST_KEY ? "Xóa tag" : "Xóa danh mục"}</span>
+                </button>
               </div>
+              )}
             </div>
 
             {/* Thanh tìm kiếm & bộ lọc */}
@@ -1281,7 +1395,7 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setShowMoveCategoryModal(true)}
+                  onClick={handleMovePages}
                   disabled={selectedInCurrentCount === 0}
                   className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-[#E2E8F0] bg-white hover:bg-[#F8FAFC] px-2.5 text-[11px] font-semibold text-[#334155] disabled:opacity-40 shadow-xs transition"
                 >
@@ -1303,7 +1417,7 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
             {/* Bảng danh sách Page */}
             <div ref={drag.setContainer} className="flex-1 min-h-0 overflow-auto [scrollbar-width:thin] [scrollbar-color:#CBD5E1_transparent] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-slate-300 hover:[&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-button]:hidden">
               <table className="w-full min-w-[760px] select-none text-left text-xs">
-                <thead className="sticky top-0 z-10 bg-white text-[10px] font-bold text-[#64748B] uppercase tracking-wider">
+                <thead className="sticky top-0 z-20 bg-white text-[10px] font-bold text-[#64748B] uppercase tracking-wider">
                   <tr className="border-b border-[#E2E8F0]">
                     <th className="w-10 px-4 py-3">
                       <Checkbox
@@ -1568,49 +1682,13 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm 
         </div>
       )}
 
-      {/* Submodal Chuyển / Gán từ khóa tag */}
-      {showMoveCategoryModal && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl border border-slate-200">
-            <h4 className="text-base font-bold text-slate-900 mb-2">Gán từ khóa / tag</h4>
-            <p className="text-xs text-slate-500 mb-4">
-              Chọn từ khóa (tag) muốn gán cho {selectedInCurrentCount} page đã chọn.
-            </p>
-            <form onSubmit={handleMoveCategory} className="space-y-4">
-              <select
-                value={targetCategory}
-                onChange={(e) => setTargetCategory(e.target.value)}
-                className="w-full h-10 rounded-xl border border-slate-300 px-3 text-xs outline-none focus:border-blue-600 cursor-pointer"
-              >
-                <option value="">-- Chọn từ khóa đích --</option>
-                {categoriesData.allList
-                  .filter((c) => !c.isUntagged && c.name !== activeCategory)
-                  .map((c) => (
-                    <option key={c.key} value={c.name}>
-                      {c.name}
-                    </option>
-                  ))}
-              </select>
-              <div className="flex items-center justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowMoveCategoryModal(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100"
-                >
-                  Hủy
-                </button>
-                <button
-                  type="submit"
-                  disabled={!targetCategory}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-                >
-                  Xác nhận gán
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Chuyển danh mục: dùng chung modal "Lưu vào danh sách page chung" */}
+      <SavePageListModal
+        isOpen={moveKeys !== null}
+        onClose={() => setMoveKeys(null)}
+        pageKeys={moveKeys || []}
+        onSaved={handleMoved}
+      />
     </div>
   );
 }

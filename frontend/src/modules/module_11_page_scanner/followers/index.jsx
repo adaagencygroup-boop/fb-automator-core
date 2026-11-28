@@ -171,11 +171,14 @@ export default function PageScannerFollowers() {
   const keepBrowser = false;
 
   const [runPhase, setRunPhase] = useState("idle");
+  // Vừa mở / quay lại trang: đang đọc phiên đang chạy từ máy chủ → khoá nút Bắt đầu
+  const [syncing, setSyncing] = useState(true);
   const [sessionId, setSessionId] = useState(null);
   const [resultCount, setResultCount] = useState(0);
   const [logs, setLogs] = useState([]);
   const logId = useRef(0);
   const pollRef = useRef(null);
+  const doneNotifiedRef = useRef(null); // session_id đã báo "hoàn tất" — chặn báo trùng
   // Khoá nút trong lúc xử lý: bấm liên tục chỉ chạy 1 lần, không bắn ra nhiều thông báo / yêu cầu
   const [isToggling, guardToggle] = useActionLock();
   const [isPausing, guardPause] = useActionLock();
@@ -199,6 +202,9 @@ export default function PageScannerFollowers() {
   const isBusy = runPhase === "running" || runPhase === "paused";
   const isPaused = runPhase === "paused";
   const showResults = runPhase !== "idle";
+  // Đang chạy hoặc đang xem kết quả phiên vừa quét: khoá chọn page. "Quét mới" sẽ xoá danh sách page đã chọn,
+  // nên chọn page lúc này sẽ bị mất (ticket #36) — phải bấm Quét mới trước rồi mới chọn page cho lần quét sau.
+  const pagesLocked = showResults;
 
   const pushLog = useCallback((message, type = "info") => {
     logId.current += 1;
@@ -318,25 +324,36 @@ export default function PageScannerFollowers() {
   const startPoll = useCallback(
     (sid) => {
       stopPolling();
+      // Mỗi nhịp poll là async: mạng chậm / mất kết nối thì các nhịp dồn lại rồi cùng trả về — cả loạt cùng thấy
+      // phiên đã xong và bắn nhiều thông báo. inFlight: không gửi nhịp mới khi nhịp trước chưa xong;
+      // doneNotifiedRef: mỗi phiên chỉ báo hoàn tất 1 lần.
+      let inFlight = false;
       pollRef.current = setInterval(async () => {
+        if (inFlight || doneNotifiedRef.current === sid) return;
+        inFlight = true;
         try {
           const session = await getScanSessionDetail(sid);
+          if (doneNotifiedRef.current === sid) return;
           if (session.status === "PAUSED") setRunPhase("paused");
           else if (session.status === "RUNNING") setRunPhase("running");
           syncSessionLogs(session);
           const count = session.total_unique || 0;
           setResultCount(count);
           await refreshResults(sid, scanPageKeysRef.current);
-          if (DONE_STATUSES.includes(session.status)) {
+          if (DONE_STATUSES.includes(session.status) && doneNotifiedRef.current !== sid) {
+            doneNotifiedRef.current = sid;
             stopPolling();
             setRunPhase("done");
             await refreshResults(sid, scanPageKeysRef.current, "done");
             toast.success(
               `Phiên FOLLOW #${sid} · ${session.status}/${session.stop_reason || "—"} · ${count} FL`,
+              { key: `m11-followers-done-${sid}` },
             );
           }
         } catch (e) {
           console.error(e);
+        } finally {
+          inFlight = false;
         }
       }, 1500);
     },
@@ -454,6 +471,7 @@ export default function PageScannerFollowers() {
         setSessionId(top.id);
         setResultCount(top.total_unique || 0);
         setRunPhase(isDone ? "done" : top.status === "PAUSED" ? "paused" : "running");
+        setSyncing(false); // đã biết phiên còn chạy hay không → mở khoá nút
         syncSessionLogs(top);
         saveScanState("followers", { sessionIds: [top.id] });
         const statusVi =
@@ -470,6 +488,8 @@ export default function PageScannerFollowers() {
         else startPoll(top.id);
       } catch {
         /* không có phiên đang chạy */
+      } finally {
+        if (!stale()) setSyncing(false);
       }
     })();
     return () => {
@@ -479,6 +499,8 @@ export default function PageScannerFollowers() {
   }, []);
 
   const handleStart = () => {
+    // Chưa đồng bộ xong phiên đang chạy → không cho tạo phiên mới (máy chủ sẽ báo lỗi vì phiên cũ còn chạy)
+    if (syncing) return;
     if (!selectedUids || !selectedUids.length) {
       toast.warning("Chưa chọn tài khoản", { key: "m11-followers-start" });
       return;
@@ -591,6 +613,7 @@ export default function PageScannerFollowers() {
   /** "Quét mới": bỏ phiên đang xem (dữ liệu trong kho không bị xóa). */
   const handleNewScan = () => {
     restoreSeqRef.current += 1;
+    setSyncing(false); // huỷ lần khôi phục đang dở → nó không tự mở khoá được nữa
     stopPolling();
     clearScanState("followers");
     setRunPhase("idle");
@@ -797,15 +820,20 @@ export default function PageScannerFollowers() {
               <div className="flex flex-wrap items-center gap-3">
                 <button
                   type="button"
-                  disabled={isBusy}
+                  disabled={pagesLocked}
                   onClick={() => setShowPageModal(true)}
-                  className="inline-flex h-8 items-center gap-2 rounded-lg bg-[#2563EB] px-4 text-xs font-semibold text-white shadow-sm transition hover:bg-[#1D4ED8] disabled:opacity-60"
+                  className="inline-flex h-8 items-center gap-2 rounded-lg bg-[#2563EB] px-4 text-xs font-semibold text-white shadow-sm transition hover:bg-[#1D4ED8] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Plus className="size-3.5 stroke-[2.5]" />
                   Chọn page muốn quét
                 </button>
                 <SelectedBadge count={selectedPages.length} unit="page" emptyText="Chưa chọn page" />
               </div>
+              {pagesLocked && !isBusy && (
+                <p className="mt-2 text-[11px] text-amber-600">
+                  Phiên quét đã kết thúc — bấm <b>Quét mới</b> để chọn page cho lần quét tiếp theo.
+                </p>
+              )}
             </div>
 
             <div className="pt-0.5">
@@ -984,7 +1012,7 @@ export default function PageScannerFollowers() {
                     <td className="px-6 py-3.5 text-center">
                       <button
                         type="button"
-                        disabled={isBusy}
+                        disabled={pagesLocked}
                         onClick={() =>
                           setSelectedPages((prev) =>
                             prev.filter((p) => p.page_key !== page.page_key),
@@ -1009,8 +1037,9 @@ export default function PageScannerFollowers() {
         live={isBusy}
         paused={isPaused}
         showNewScan={showResults}
-        startDisabled={isToggling || accountsLoading}
+        startDisabled={isToggling || accountsLoading || syncing}
         controlDisabled={isToggling || isPausing}
+        syncing={syncing}
         onStart={() => guardToggle(handleToggleExecution)}
         onPauseResume={() => guardPause(handlePauseResume)}
         onStop={() => guardToggle(handleToggleExecution)}
@@ -1372,6 +1401,7 @@ export default function PageScannerFollowers() {
         open={showPageModal}
         onClose={() => setShowPageModal(false)}
         selectedPages={selectedPages}
+        manageCategories={false}
         onConfirm={(pages) => {
           setSelectedPages(pages.map((p, i) => mapKhoToPage(p, i)));
           setShowPageModal(false);

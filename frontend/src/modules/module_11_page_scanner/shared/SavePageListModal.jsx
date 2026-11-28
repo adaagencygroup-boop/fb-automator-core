@@ -11,6 +11,8 @@ import { toast } from "@/lib/toast";
 import { savePagesToList } from "../service";
 import { usePageLists } from "./usePageLists";
 import { useActionLock } from "./useActionLock";
+import { CATEGORY_COLORS } from "@/modules/module_10_group_scan/member-list/_components/CreateCategoryModal";
+import { pageListColor } from "./pageListColor";
 
 export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSaved }) {
   const [mounted, setMounted] = useState(false);
@@ -22,7 +24,8 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedId, setSelectedId] = useState(null);
   const [newCatName, setNewCatName] = useState("");
-  const [deduplicate, setDeduplicate] = useState(true);
+  const [showNew, setShowNew] = useState(false); // ô tạo danh mục mới: ẩn, bấm tiêu đề mới hiện
+  const [newColor, setNewColor] = useState(CATEGORY_COLORS[0]);
   const [saving, guardSave, savingApi] = useActionLock();
 
   // Mỗi lần mở: làm sạch ô nhập
@@ -31,6 +34,7 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
     setSearchQuery("");
     setNewCatName("");
     setSelectedId(null);
+    setShowNew(false);
   }, [isOpen]);
 
   // Mặc định chọn danh mục đầu tiên (mới dùng gần nhất)
@@ -54,6 +58,7 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
     return categories.filter((c) => (c.name || "").toLowerCase().includes(q));
   }, [categories, searchQuery]);
 
+  const newInputVisible = showNew; // chỉ hiện khi người dùng bấm "HOẶC TẠO DANH MỤC MỚI"
   const typedName = newCatName.trim();
   const canSave = !saving && pageKeys.length > 0 && (typedName || selectedId != null);
 
@@ -70,8 +75,8 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
       try {
         const res = await savePagesToList(
           typedName
-            ? { categoryName: typedName, pageKeys, deduplicate }
-            : { categoryId: selectedId, pageKeys, deduplicate },
+            ? { categoryName: typedName, pageKeys, color: newColor }
+            : { categoryId: selectedId, pageKeys },
         );
         toast.success(res?.message || "Đã lưu page vào danh mục.", { key: "m11-save-list" });
         onSaved?.(res);
@@ -175,7 +180,10 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
                     </div>
 
                     <div className="flex flex-col min-w-0 pr-1">
-                      <span className="text-xs font-bold text-[#0F172A] leading-tight truncate">{cat.name}</span>
+                      <span className="flex items-center gap-1.5 text-xs font-bold text-[#0F172A] leading-tight">
+                        <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: pageListColor(cat) }} />
+                        <span className="truncate">{cat.name}</span>
+                      </span>
                       <span className="text-[11px] text-slate-500 mt-1">
                         Hiện có:{" "}
                         <b className="font-bold text-slate-800">{(cat.page_count ?? 0).toLocaleString("vi-VN")}</b> page
@@ -190,14 +198,26 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
 
         {/* Hoặc tạo danh mục mới */}
         <div className="space-y-2 pt-1">
-          <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-700">
-            <PlusCircle className="size-3.5 text-slate-600" />
+          <button
+            type="button"
+            onClick={() => {
+              if (newInputVisible) setNewCatName("");
+              setShowNew(!newInputVisible);
+            }}
+            aria-expanded={newInputVisible}
+            className={`flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider transition-colors ${
+              newInputVisible ? "text-[#2563EB]" : "text-slate-700 hover:text-[#2563EB]"
+            }`}
+          >
+            <PlusCircle className="size-3.5" />
             <span>HOẶC TẠO DANH MỤC MỚI</span>
-          </div>
+          </button>
 
+          {newInputVisible && (
           <div className="relative">
             <input
               type="text"
+              autoFocus
               value={newCatName}
               maxLength={255}
               onChange={(e) => setNewCatName(e.target.value)}
@@ -205,21 +225,25 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
               className="w-full h-10 px-3.5 pr-10 rounded-xl border border-slate-300 bg-white text-xs text-[#0F172A] placeholder:text-slate-400 focus:outline-none focus:border-[#2563EB] transition-colors"
               onKeyDown={(e) => e.key === "Enter" && canSave && guardSave(handleConfirmSave)}
             />
-            <Palette className="size-4 absolute right-3.5 top-3 text-slate-400 pointer-events-none" />
+            <Palette className="size-4 absolute right-3.5 top-3 pointer-events-none" style={{ color: newColor }} />
           </div>
-
-          {/* Checkbox lọc trùng */}
-          <label className="flex items-center gap-2 pt-1 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={deduplicate}
-              onChange={(e) => setDeduplicate(e.target.checked)}
-              className="size-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer accent-[#2563EB]"
-            />
-            <span className="text-xs text-slate-700">
-              <b className="font-semibold text-slate-900">Tự động lọc trùng</b> các page đã tồn tại trong danh mục này
-            </span>
-          </label>
+          )}
+          {newInputVisible && (
+            <div className="flex flex-wrap items-center gap-2 pt-0.5">
+              <span className="text-[11px] text-slate-500">Màu:</span>
+              {CATEGORY_COLORS.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  aria-label={`Màu ${c}`}
+                  aria-pressed={c === newColor}
+                  onClick={() => setNewColor(c)}
+                  className={`size-5 rounded-full ring-offset-2 transition ${c === newColor ? "ring-2 ring-slate-900" : "hover:scale-110"}`}
+                  style={{ backgroundColor: c }}
+                />
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Footer Actions */}

@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink, FileText, Folder, Info, Loader2, LogOut, Play, Square } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { attachDragSelection } from "@/modules/module_02_account_manager/utils/drag-selection.mjs";
 import { LiveLogConsole, Pager } from "@/modules/module_11_page_scanner/_shared";
 import { useFarmAccounts } from "../hooks/useFarmAccounts";
 import {
@@ -291,6 +292,29 @@ export default function TikTokDownloadView() {
       return next;
     });
 
+  // Kéo chuột để chọn nhiều tài khoản (giống bảng chọn tài khoản ở phần Đăng bài)
+  const tableScrollRef = useRef(null);
+  const selectionRef = useRef(selected);
+  const usableUidsRef = useRef([]);
+  useLayoutEffect(() => {
+    selectionRef.current = selected;
+    usableUidsRef.current = usable.map((a) => a.uid);
+  }, [selected, usable]);
+  useEffect(() => {
+    if (!tableScrollRef.current || running || loading || loadError) return undefined;
+    return attachDragSelection(tableScrollRef.current, {
+      getVisibleUids: () => usableUidsRef.current,
+      getAvailableUids: () => usableUidsRef.current,
+      getSelectedUids: () => [...selectionRef.current],
+      onSelectionChange: (uids) => {
+        const ok = new Set(usableUidsRef.current);
+        const next = new Set(uids.filter((uid) => ok.has(uid)));
+        selectionRef.current = next;
+        setSelected(next);
+      },
+    });
+  }, [running, loading, loadError]);
+
   const toggleAll = () =>
     setSelected((current) => {
       const next = new Set(current);
@@ -478,7 +502,7 @@ export default function TikTokDownloadView() {
           </StepHeading>
           <p className="mt-0.5 pl-[34px] text-xs text-[#64748B]">Lựa chọn tài khoản Facebook mà bạn muốn tải video</p>
         </div>
-        <div className="max-h-[360px] overflow-auto">
+        <div ref={tableScrollRef} className="max-h-[360px] overflow-auto">
           <table className="w-full min-w-[720px]">
             <thead className="sticky top-0 z-10">
               <tr>
@@ -494,15 +518,28 @@ export default function TikTokDownloadView() {
             </thead>
             <tbody>
               {usable.map((account, index) => (
-                <tr key={account.uid} className="text-xs hover:bg-[#F8FAFC]">
-                  <td className="px-4 py-2.5">
+                <tr
+                  key={account.uid}
+                  data-account-uid={running ? undefined : account.uid}
+                  aria-selected={selected.has(account.uid)}
+                  onClick={(event) => {
+                    if (running || event.target.closest("button, input, a, select, textarea")) return;
+                    toggle(account.uid);
+                  }}
+                  className={cn(
+                    "text-xs sm:text-sm",
+                    !running && "cursor-pointer",
+                    selected.has(account.uid) ? "bg-primary-subtle/40" : "hover:bg-[#F8FAFC]"
+                  )}
+                >
+                  <td className="px-4 py-3">
                     <Checkbox checked={selected.has(account.uid)} disabled={running} onCheckedChange={() => toggle(account.uid)} aria-label={`Chọn ${account.profile_name || account.uid}`} />
                   </td>
-                  <td className="px-4 py-2.5 font-mono text-[#64748B]">{String(index + 1).padStart(2, "0")}</td>
-                  <td className="px-4 py-2.5"><UidCopy uid={account.uid} /></td>
-                  <td className="px-4 py-2.5 font-semibold text-[#0F172A]">{account.profile_name || "—"}</td>
-                  <td className="px-4 py-2.5 text-center"><StatusPill on>Đã đăng nhập</StatusPill></td>
-                  <td className="px-4 py-2.5 text-center">
+                  <td className="px-4 py-3 font-medium text-[#475569]">{String(index + 1).padStart(2, "0")}</td>
+                  <td className="px-4 py-3"><UidCopy uid={account.uid} className="text-xs sm:text-sm" /></td>
+                  <td className="px-4 py-3 font-bold text-[#0F172A]">{account.profile_name || "—"}</td>
+                  <td className="px-4 py-3 text-center"><StatusPill on>Đã đăng nhập</StatusPill></td>
+                  <td className="px-4 py-3 text-center">
                     <span className="rounded-full bg-[#D1FAE5] px-2.5 py-0.5 text-xs font-semibold text-[#047857]">Live</span>
                   </td>
                 </tr>

@@ -135,6 +135,26 @@ export default function ProfileScanHistory() {
   const [pageSize, setPageSize] = useState(10);
 
   const [search, setSearch] = useState("");
+  // Thanh bộ lọc dính khi cuộn; dải nền che khe p-6 phía trên chỉ hiện khi đã dính
+  const filterBarRef = useRef(null);
+  const [filterStuck, setFilterStuck] = useState(false);
+  useEffect(() => {
+    const el = filterBarRef.current;
+    const scroller = el?.closest("main");
+    if (!el || !scroller) return undefined;
+    const check = () => {
+      const padTop = parseFloat(getComputedStyle(scroller).paddingTop) || 0;
+      const offset = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      setFilterStuck(scroller.scrollTop > 0 && offset <= padTop + 1);
+    };
+    check();
+    scroller.addEventListener("scroll", check, { passive: true });
+    window.addEventListener("resize", check);
+    return () => {
+      scroller.removeEventListener("scroll", check);
+      window.removeEventListener("resize", check);
+    };
+  }, []);
   const [keyword, setKeyword] = useState("");
   const [mode, setMode] = useState("");
   const [status, setStatus] = useState("");
@@ -314,7 +334,14 @@ export default function ProfileScanHistory() {
       <p className="mt-1 text-xs text-[#64748B]">Theo dõi tiến trình, kết quả và nhật ký các phiên quét thông tin profile.</p>
 
       {/* Bộ lọc */}
-      <section className="mt-6 flex flex-wrap items-center gap-2.5 rounded-xl border border-[#E2E8F0] bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
+      <section
+        ref={filterBarRef}
+        className={`sticky top-0 z-30 mt-6 flex flex-wrap items-center gap-2.5 rounded-xl border border-[#E2E8F0] bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.05)] ${
+          filterStuck
+            ? "shadow-md before:pointer-events-none before:absolute before:-inset-x-px before:-top-6 before:h-6 before:bg-background before:content-['']"
+            : ""
+        }`}
+      >
         <div className="relative min-w-[240px] flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#94A3B8]" />
           <input
