@@ -125,7 +125,8 @@ export default function AccFarmModule({ subPage = "interact.post" }) {
           <div className={postMode === "status" ? "block" : "hidden"}>
             <StatusPostView isActive={postMode === "status"} />
           </div>
-          {postMode !== "status" && <ReelsPostView mode={postMode} />}
+          {/* key: Reels và Story là 2 màn riêng — không dùng chung state tiến trình */}
+          {postMode !== "status" && <ReelsPostView key={postMode} mode={postMode} />}
         </div>
       </div>
     );

@@ -26,14 +26,29 @@ function progressViewButtonLabel(row, permalink) {
   return "Xem bài viết";
 }
 
-export function ProgressActivityCell({ row }) {
+/** Không lấy được link bài (Reels/Story thường không trả permalink) → mở trang Reels / Story / trang cá nhân của nick. */
+function fallbackProfileUrl(row, uid) {
+  if (!uid) return null;
+  const ptype = String(row?.postType || row?.post_type || "").toLowerCase();
+  if (ptype === "reels" || ptype === "reel") return `https://www.facebook.com/${uid}/reels`;
+  if (ptype === "story") return `https://www.facebook.com/stories/${uid}`;
+  return `https://www.facebook.com/${uid}`;
+}
+
+export function ProgressActivityCell({ row, postType }) {
   const [opening, setOpening] = useState(false);
-  const url = resolveProgressPostUrl(row);
-  const label = progressActivityLabel(row);
-  const permalink = isProgressPermalink(row, url);
+  const rowWithType = postType && !row?.postType && !row?.post_type ? { ...row, postType } : row;
   const uid = row?.accountUid || row?.account_uid || "";
+  const directUrl = resolveProgressPostUrl(row);
+  const url = directUrl || fallbackProfileUrl(rowWithType, uid);
+  const label = progressActivityLabel(row);
+  const permalink = directUrl ? isProgressPermalink(row, directUrl) : false;
   const published = isProgressPublishSuccess(row);
-  const viewLabel = progressViewButtonLabel(row, permalink);
+  const viewLabel = directUrl
+    ? progressViewButtonLabel(rowWithType, permalink)
+    : String(rowWithType?.postType || rowWithType?.post_type || "").toLowerCase().startsWith("reel")
+      ? "Xem trang Reels"
+      : progressViewButtonLabel(rowWithType, false);
   const showViewBtn = Boolean(published && url);
 
   const handleOpen = async (e) => {

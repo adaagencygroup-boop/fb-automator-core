@@ -2726,6 +2726,7 @@ def _read_detail_in_verify_tab(
             _EXTRA_DETAIL_FIELDS,
             _READ_HEADER_JS,
             clean_category,
+            exec_json_js,
             dump_debug_text,
             extract_category,
             extract_contact_info,
@@ -2751,13 +2752,14 @@ def _read_detail_in_verify_tab(
                 result["panel_headings"] = _format_panel_headings(seen)
             if now >= t_end:
                 break
-            if len(seen) >= 2:
+            # FB vẽ Chi tiết / Liên kết trước, "Thông tin liên hệ" sau → có mục liên hệ là đủ
+            if "contact" in seen:
                 break
-            if last_new_at is not None and (now - last_new_at) >= _MAIN_PANEL_SETTLE_GRACE_SEC:
+            if last_new_at is not None and (now - last_new_at) >= _PANEL_CONTACT_GRACE_SEC:
                 break
             time.sleep(_PANEL_POLL_SEC)
 
-        raw_main = driver.execute_script(_READ_HEADER_JS) or {}
+        raw_main = exec_json_js(driver, _READ_HEADER_JS) or {}
         main_header_text = raw_main.get("header_text") or ""
         main_links = raw_main.get("links") or []
         main_panel_items = raw_main.get("panel_items") or []
@@ -2766,16 +2768,26 @@ def _read_detail_in_verify_tab(
         if main_category:
             result["category"] = main_category
 
-        # 2. Mở /about -> /directory_contact_info (đồng bộ luồng Dán link)
+        # 2. Cột trái trang chính đã có liên hệ → dùng luôn, KHÔNG mở /about (nhanh ~2s thay vì 8–19s).
+        #    Chưa có mục liên hệ / SĐT / email → mới mở /about -> /directory_contact_info (đồng bộ luồng Dán link).
         ev = stop_event if stop_event is not None else threading.Event()
-        if ev.is_set():
-            contacts = extract_contact_info(
-                intro_text(main_header_text),
-                main_links,
-                main_panel_items,
-                page_url=page_url,
-                page_name=page_name,
-            )
+        main_contacts = extract_contact_info(
+            intro_text(main_header_text),
+            main_links,
+            main_panel_items,
+            page_url=page_url,
+            page_name=page_name,
+        )
+        main_has_contact_rows = any((p or {}).get("section") == "contact" for p in main_panel_items)
+        # Chỉ có website / địa chỉ chưa đủ: SĐT + email thường nằm ở /directory_contact_info
+        main_enough = bool(
+            main_has_contact_rows or main_contacts.get("phone") or main_contacts.get("email")
+        )
+        if ev.is_set() or main_enough:
+            if main_enough:
+                logger.debug(f"[Scanner] detail({page_key}): đủ liên hệ trên trang chính — bỏ qua /about")
+            contacts = dict(main_contacts)
+            contacts.setdefault("category", None)
             raw_abouts: List[Dict[str, Any]] = []
         else:
             contacts = scan_page_contacts(
@@ -2863,7 +2875,7 @@ def _read_panel_in_verify_tab(driver, deadline: float) -> Dict[str, Any]:
     result: Dict[str, Any] = {"detail_status": "NOT_SCANNED"}
     try:
         # Import trong hàm: page_detail_scan import ngược scanner ở đầu file
-        from .page_detail_scan import _EXTRA_DETAIL_FIELDS, _READ_HEADER_JS, extract_contact_info
+        from .page_detail_scan import _EXTRA_DETAIL_FIELDS, _READ_HEADER_JS, exec_json_js, extract_contact_info
 
         t0 = time.time()
         t_end = min(t0 + _PANEL_BUDGET_SEC, deadline)
@@ -2900,7 +2912,7 @@ def _read_panel_in_verify_tab(driver, deadline: float) -> Dict[str, Any]:
             logger.info(f"[Scanner] panel_not_loaded sau {time.time() - t0:.1f}s — giữ NOT_SCANNED")
             return result
 
-        raw = driver.execute_script(_READ_HEADER_JS) or {}
+        raw = exec_json_js(driver, _READ_HEADER_JS) or {}
         panel_items = raw.get("panel_items") or []
         info = extract_contact_info("", raw.get("links") or [], panel_items) if panel_items else {}
         has_contact_rows = any(p.get("section") == "contact" for p in panel_items)
@@ -2928,7 +2940,7 @@ def _read_panel_in_verify_tab(driver, deadline: float) -> Dict[str, Any]:
                         break
                 result["panel_headings"] = _format_panel_headings(seen)
                 if time.time() < deadline:
-                    raw2 = driver.execute_script(_READ_HEADER_JS) or {}
+                    raw2 = exec_json_js(driver, _READ_HEADER_JS) or {}
                     items2 = raw2.get("panel_items") or []
                     if items2:
                         info2 = extract_contact_info("", raw2.get("links") or [], items2)

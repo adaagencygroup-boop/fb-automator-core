@@ -1286,6 +1286,30 @@ def has_session_cookie(driver) -> bool:
     return bool(cookie and (cookie.get("value") if isinstance(cookie, dict) else cookie))
 
 
+# Chạy JS đọc trang và nhận kết quả qua JSON. Một số Page có ký tự UTF-16 lỗi (surrogate lẻ — vd. nhãn
+# "Được tài trợ" bị FB làm rối chữ) khiến ChromeDriver báo "cannot deserialize the result value" và làm hỏng
+# cả bước đọc thông tin. Lọc surrogate lẻ ngay trong JS rồi JSON.stringify → Python json.loads.
+_JSON_RESULT_WRAP = (
+    "const __f = function(){\n%s\n};"
+    "const __r = __f.apply(null, arguments);"
+    "if (__r === undefined) return null;"
+    "const __clean = (v) => typeof v === 'string'"
+    " ? v.replace(/[\\uD800-\\uDBFF](?![\\uDC00-\\uDFFF])|(?<![\\uD800-\\uDBFF])[\\uDC00-\\uDFFF]/g, '')"
+    " : ((typeof v === 'number' && !isFinite(v)) ? null : v);"
+    "return JSON.stringify(__r, (k, v) => __clean(v));"
+)
+
+
+def exec_json_js(driver, js: str, *args):
+    """execute_script an toàn với ký tự lạ: trả object Python (dict/list/...) hoặc None."""
+    raw = driver.execute_script(_JSON_RESULT_WRAP % js, *args)
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        return raw
+    return json.loads(raw)
+
+
 def _open_and_wait(driver, url: str, stop_event: threading.Event) -> None:
     try:
         driver.get(url)
@@ -1307,7 +1331,7 @@ def _open_and_wait(driver, url: str, stop_event: threading.Event) -> None:
 def _read_about(driver, url: str, stop_event: threading.Event) -> Dict[str, Any]:
     _open_and_wait(driver, url, stop_event)
     try:
-        return driver.execute_script(_READ_ABOUT_JS) or {}
+        return exec_json_js(driver, _READ_ABOUT_JS) or {}
     except Exception as exc:
         logger.debug(f"[DETAIL] read about {url}: {exc}")
         return {}
@@ -1322,7 +1346,7 @@ def scan_page_detail(driver, page_url: str, stop_event: threading.Event) -> Dict
         # Page công khai vẫn hiện khi đã bị đăng xuất → không được quét bằng phiên khách
         return {"ok": False, "reason": "logged_out"}
     try:
-        header = driver.execute_script(_READ_HEADER_JS) or {}
+        header = exec_json_js(driver, _READ_HEADER_JS) or {}
     except Exception as exc:
         return {"ok": False, "reason": f"header_error: {str(exc)[:120]}"}
     if header.get("unavailable"):

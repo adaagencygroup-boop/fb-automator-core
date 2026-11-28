@@ -253,7 +253,7 @@ export function PostSessionDetailView({ sessionId }) {
 
         {/* Action Controls */}
         <div className="flex items-center gap-2">
-          {!isFinished && !isStopped && !(metrics.running === 0 && metrics.waiting === 0 && (metrics.completed + metrics.systemError + metrics.deadAccount + metrics.stopped > 0)) && (
+          {!isFinished && !isStopped && !(metrics.running === 0 && !isPaused && (metrics.paused || 0) === 0 && metrics.waiting === 0 && (metrics.completed + metrics.systemError + metrics.deadAccount + metrics.stopped > 0)) && (
             <button
               type="button"
               onClick={handleTogglePause}
@@ -280,7 +280,7 @@ export function PostSessionDetailView({ sessionId }) {
             </button>
           )}
 
-          {!isFinished && !isStopped && !(metrics.running === 0 && metrics.waiting === 0 && (metrics.completed + metrics.systemError + metrics.deadAccount + metrics.stopped > 0)) && (
+          {!isFinished && !isStopped && !(metrics.running === 0 && !isPaused && (metrics.paused || 0) === 0 && metrics.waiting === 0 && (metrics.completed + metrics.systemError + metrics.deadAccount + metrics.stopped > 0)) && (
             <button
               type="button"
               onClick={() => setShowEmergencyModal(true)}

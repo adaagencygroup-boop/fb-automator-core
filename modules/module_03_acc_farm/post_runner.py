@@ -144,7 +144,18 @@ def humanize_post_error(exc_or_msg: Any) -> str:
     return f"Lỗi đăng bài: {short}"
 
 
+class PostLoginFailed(RuntimeError):
+    """Mất phiên đăng nhập (cookie hết hạn / profile bị đăng xuất) và đăng nhập lại không được.
+    KHÔNG phải acc chết → không đánh dấu die ở Module 2."""
+
+
+# Lý do từ check_account_health cho thấy acc thật sự bị khóa/checkpoint (không đăng nhập lại được)
+_REAL_DEAD_HINTS = ("khóa", "checkpoint", "xác minh", "vô hiệu")
+
+
 def classify_error(exc: Exception) -> tuple[str, str]:
+    if isinstance(exc, PostLoginFailed):
+        return "FAILED", str(exc)[:500]
     if isinstance(exc, PostAccountDead):
         return "DIE", humanize_post_error(exc)
     if isinstance(exc, PostFeatureBlocked):
@@ -162,6 +173,9 @@ class PostRunner:
         self._session_accounts: List[str] = []
         self._pause_event = threading.Event()
         self._pause_event.set() # Mặc định set = đang chạy, clear = tạm dừng
+        # Luồng đã thực sự đứng yên khi tạm dừng (đã ghi checkpoint / đang chờ ở đầu vòng lặp).
+        # FE chỉ mở nút "Tiếp tục" khi mọi luồng còn sống đã vào đây.
+        self._parked_threads: set = set()
         self._stop_event = threading.Event()
         self._schedule_event = threading.Event()
         self._schedule_event.set() # Mặc định set = không hẹn giờ hoặc đã đến giờ
@@ -619,11 +633,15 @@ class PostRunner:
                 "session_accounts": list(self._session_accounts),
                 "is_running": (self._active_session_id is not None) and (not self._stop_event.is_set()) and (not all_done),
                 "is_paused": not self._pause_event.is_set(),
+                "pause_settled": (not self._pause_event.is_set()) and (
+                    len(self._parked_threads)
+                    >= max(0, int(self._total_thread_count or 0) - int(self._finished_thread_count or 0))
+                ),
                 "is_stopped": self._stop_event.is_set(),
                 "is_waiting_schedule": not self._schedule_event.is_set(),
                 "schedule_time": self._scheduled_time_str if self._schedule_enabled else None,
                 "session_finished": is_finished,
-                "metrics": dict(self._metrics),
+                "metrics": self._live_metrics(source_rows, is_finished),
                 "threads": threads_list,
                 "recent_logs": list(self._logs[-50:])
             }
@@ -883,6 +901,19 @@ class PostRunner:
 
         return session_id
 
+    def _live_metrics(self, rows, is_finished: bool) -> dict:
+        """Metrics gửi FE. Khi đang tạm dừng: luồng bị dừng lúc đang nghỉ giữa 2 bài (status chưa là
+        "Đang chạy") khiến paused=0 → FE tưởng phiên đã xong và ẩn nút Tạm dừng / Dừng khẩn cấp.
+        Đếm lại từ trạng thái từng dòng + số luồng chưa xong."""
+        m = dict(self._metrics)
+        if is_finished or self._stop_event.is_set() or self._pause_event.is_set():
+            return m
+        live_paused = sum(1 for r in rows if r.get("status") in ("Tạm dừng", "Đang chạy"))
+        unfinished = max(0, int(self._total_thread_count or 0) - int(self._finished_thread_count or 0))
+        m["paused"] = max(int(m.get("paused") or 0), live_paused, unfinished)
+        m["running"] = 0
+        return m
+
     def pause_session(self):
         """Tạm dừng phiên chạy."""
         self._pause_event.clear()
@@ -991,6 +1022,7 @@ class PostRunner:
             self._progress_order.clear()
             self._finished_thread_count = 0
             self._total_thread_count = 1
+            self._parked_threads.clear()
             self._stop_event.clear()
             self._pause_event.set()
             self._schedule_event.set()
@@ -1081,10 +1113,17 @@ class PostRunner:
 
             while not self._stop_event.is_set():
                 # Kiểm tra cờ Pause
-                while not self._pause_event.is_set():
-                    if self._stop_event.is_set():
-                        return
-                    time.sleep(1)
+                if not self._pause_event.is_set():
+                    with self._lock:
+                        self._parked_threads.add(thread_name)
+                    try:
+                        while not self._pause_event.is_set():
+                            if self._stop_event.is_set():
+                                return
+                            time.sleep(1)
+                    finally:
+                        with self._lock:
+                            self._parked_threads.discard(thread_name)
 
                 # Ưu tiên clip cùng nick đang giữ browser — không đóng Chrome giữa các vid
                 post = post_repository.claim_next_pending_post(
@@ -1316,20 +1355,60 @@ class PostRunner:
                             pass
 
                         on_progress("Kiểm tra phiên đăng nhập Facebook từ Chrome Profile...")
+                        session_ok = False
+                        dead_reason = ""
                         try:
-                            _post_flow_mod.ensure_facebook_session(
-                                driver=driver,
-                                uid=uid,
-                                password=creds.get("password", ""),
-                                two_fa_secret=creds.get("two_fa", ""),
-                                cookie_str=creds.get("cookie", ""),
-                                account_name=name,
-                                log_cb=on_progress,
+                            session_ok = bool(
+                                _post_flow_mod.ensure_facebook_session(
+                                    driver=driver,
+                                    uid=uid,
+                                    password=creds.get("password", ""),
+                                    two_fa_secret=creds.get("two_fa", ""),
+                                    cookie_str=creds.get("cookie", ""),
+                                    account_name=name,
+                                    log_cb=on_progress,
+                                )
                             )
                         except _post_flow_mod.PostAccountDead as _dead:
-                            raise PostAccountDead(
-                                f"Chrome Profile chưa đăng nhập hoặc gặp sự cố: {_dead}"
+                            dead_reason = str(_dead)
+                        if not session_ok:
+                            if dead_reason and any(h in dead_reason.lower() for h in _REAL_DEAD_HINTS):
+                                raise PostAccountDead(f"Tài khoản bị khóa/checkpoint: {dead_reason}")
+                            # Mất cookie / bị đăng xuất → đăng nhập lại bằng luồng của Quản lý tài khoản
+                            # (cookie → UID + mật khẩu + 2FA) ngay trên Chrome đang mở rồi đăng tiếp.
+                            on_progress(
+                                "Mất phiên đăng nhập"
+                                + (f" ({dead_reason})" if dead_reason else "")
+                                + " — đang đăng nhập lại (cookie → mật khẩu + 2FA)..."
                             )
+                            fresh = self.get_account_credentials(uid)
+                            from modules.module_02_account_manager.automation.login_flow import (
+                                ensure_logged_in as _m2_ensure_logged_in,
+                            )
+                            try:
+                                relog = _m2_ensure_logged_in(
+                                    driver,
+                                    uid,
+                                    password=fresh.get("password", ""),
+                                    two_fa=fresh.get("two_fa") or None,
+                                    cookie=fresh.get("cookie") or None,
+                                ) or {}
+                            except Exception as _rl_err:
+                                relog = {"success": False, "error": str(_rl_err)}
+                            if relog.get("success"):
+                                # Cookie mới đã được Module 2 ghi vào DB → bỏ cache cũ
+                                self._account_credentials.pop(str(uid), None)
+                                on_progress("Đăng nhập lại thành công — tiếp tục đăng bài...")
+                            elif relog.get("checkpoint"):
+                                raise PostAccountDead(
+                                    f"Tài khoản dính checkpoint khi đăng nhập lại: {relog.get('error') or ''}".strip()
+                                )
+                            else:
+                                raise PostLoginFailed(
+                                    "Lỗi đăng nhập: mất phiên đăng nhập và đăng nhập lại không thành công"
+                                    + (f" — {relog.get('error')}" if relog.get("error") else "")
+                                    + ". Kiểm tra mật khẩu / 2FA ở Quản lý tài khoản."
+                                )
                         on_progress("Phiên đăng nhập hợp lệ — bắt đầu đăng bài...")
                     else:
                         on_progress(
@@ -1361,10 +1440,16 @@ class PostRunner:
                                     status="Tạm dừng",
                                     currentActivity=pause_msg,
                                 )
-                            while not self._pause_event.is_set():
-                                if self._stop_event.is_set():
-                                    return
-                                time.sleep(0.5)
+                            with self._lock:
+                                self._parked_threads.add(thread_name)
+                            try:
+                                while not self._pause_event.is_set():
+                                    if self._stop_event.is_set():
+                                        return
+                                    time.sleep(0.5)
+                            finally:
+                                with self._lock:
+                                    self._parked_threads.discard(thread_name)
                             with self._lock:
                                 cp = None
                                 if thread_name in self._active_threads:
