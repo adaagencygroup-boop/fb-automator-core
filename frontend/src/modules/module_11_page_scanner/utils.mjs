@@ -104,35 +104,96 @@ export function foldVietnamese(value) {
     .trim();
 }
 
-const REGION_MATCHERS = {
-  "ha noi": /(ha\s*noi|hanoi|(?:^|[^a-z0-9])tp\s*hn(?:[^a-z0-9]|$))/i,
-  hanoi: /(ha\s*noi|hanoi|(?:^|[^a-z0-9])tp\s*hn(?:[^a-z0-9]|$))/i,
-  "ho chi minh": /(ho\s*chi\s*minh|sai\s*gon|saigon|(?:^|[^a-z0-9])(?:tp\s*)?hcm(?:[^a-z0-9]|$))/i,
-  "tp ho chi minh": /(ho\s*chi\s*minh|sai\s*gon|saigon|(?:^|[^a-z0-9])(?:tp\s*)?hcm(?:[^a-z0-9]|$))/i,
-  hcm: /(ho\s*chi\s*minh|sai\s*gon|saigon|(?:^|[^a-z0-9])(?:tp\s*)?hcm(?:[^a-z0-9]|$))/i,
-  "da nang": /(da\s*nang|danang)/i,
-  danang: /(da\s*nang|danang)/i,
+/** Danh sách đầy đủ 34 đơn vị hành chính cấp tỉnh Việt Nam theo Nghị quyết 202/2025/QH15. */
+export const VN_PROVINCES_34 = {
+  cities: [
+    { value: "Hà Nội", label: "Hà Nội" },
+    { value: "TP. Hồ Chí Minh", label: "TP. Hồ Chí Minh" },
+    { value: "Đà Nẵng", label: "Đà Nẵng" },
+    { value: "Hải Phòng", label: "Hải Phòng" },
+    { value: "Cần Thơ", label: "Cần Thơ" },
+    { value: "Huế", label: "Huế" },
+  ],
+  provinces: [
+    "An Giang",
+    "Bắc Ninh",
+    "Cà Mau",
+    "Cao Bằng",
+    "Đắk Lắk",
+    "Điện Biên",
+    "Đồng Nai",
+    "Đồng Tháp",
+    "Gia Lai",
+    "Hà Tĩnh",
+    "Hưng Yên",
+    "Khánh Hòa",
+    "Lai Châu",
+    "Lâm Đồng",
+    "Lạng Sơn",
+    "Lào Cai",
+    "Nghệ An",
+    "Ninh Bình",
+    "Phú Thọ",
+    "Quảng Ngãi",
+    "Quảng Ninh",
+    "Quảng Trị",
+    "Sơn La",
+    "Tây Ninh",
+    "Thái Nguyên",
+    "Thanh Hóa",
+    "Tuyên Quang",
+    "Vĩnh Long",
+  ].map((name) => ({ value: name, label: name })),
 };
 
-/** Khớp địa chỉ Page với khu vực đã chọn (hỗ trợ cả tiếng Việt có/không dấu, tiếng Anh, viết tắt). */
+const REGION_MATCHERS = {
+  "ha noi": /(?:^|[^a-z0-9])(ha\s+noi|hanoi|tp\s+hn)(?:[^a-z0-9]|$)/i,
+  hanoi: /(?:^|[^a-z0-9])(ha\s+noi|hanoi|tp\s+hn)(?:[^a-z0-9]|$)/i,
+  "ho chi minh": /(?:^|[^a-z0-9])(ho\s+chi\s+minh|hochiminh|sai\s+gon|saigon|(?:tp\s+)?hcm)(?:[^a-z0-9]|$)/i,
+  "tp ho chi minh": /(?:^|[^a-z0-9])(ho\s+chi\s+minh|hochiminh|sai\s+gon|saigon|(?:tp\s+)?hcm)(?:[^a-z0-9]|$)/i,
+  hcm: /(?:^|[^a-z0-9])(ho\s+chi\s+minh|hochiminh|sai\s+gon|saigon|(?:tp\s+)?hcm)(?:[^a-z0-9]|$)/i,
+  "da nang": /(?:^|[^a-z0-9])(da\s+nang|danang)(?:[^a-z0-9]|$)/i,
+  danang: /(?:^|[^a-z0-9])(da\s+nang|danang)(?:[^a-z0-9]|$)/i,
+  "hai phong": /(?:^|[^a-z0-9])(hai\s+phong|haiphong)(?:[^a-z0-9]|$)/i,
+  haiphong: /(?:^|[^a-z0-9])(hai\s+phong|haiphong)(?:[^a-z0-9]|$)/i,
+  "can tho": /(?:^|[^a-z0-9])(can\s+tho|cantho)(?:[^a-z0-9]|$)/i,
+  cantho: /(?:^|[^a-z0-9])(can\s+tho|cantho)(?:[^a-z0-9]|$)/i,
+  hue: /(?:^|[^a-z0-9])hue(?:[^a-z0-9]|$)/i,
+  "dak lak": /(?:^|[^a-z0-9])(dak\s+lak|daklak|dac\s+lac|daclac)(?:[^a-z0-9]|$)/i,
+  daklak: /(?:^|[^a-z0-9])(dak\s+lak|daklak|dac\s+lac|daclac)(?:[^a-z0-9]|$)/i,
+};
+
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Khớp địa chỉ Page với 34 tỉnh/thành mới hoặc NO_ADDRESS (chỉ khớp đúng tỉnh/thành mới, có ranh giới từ). */
 export function matchesRegion(address, region) {
   const reg = String(region || "").trim();
   if (!reg || reg.toUpperCase() === "ALL") return true;
+  if (reg.toUpperCase() === "NO_ADDRESS") return !String(address || "").trim();
   const addrFolded = foldVietnamese(address);
   if (!addrFolded) return false;
-  const key = foldVietnamese(reg).replace(/^(tp|thanh pho)\s+/, "").trim();
+  const key = foldVietnamese(reg).replace(/^(tp|thanh pho|tinh)\s+/, "").trim();
+  if (!key) return true;
   const re = REGION_MATCHERS[key];
   if (re) return re.test(addrFolded);
-  return addrFolded.includes(key);
+  const parts = key.split(/\s+/).filter(Boolean).map(escapeRegex);
+  if (!parts.length) return true;
+  const body = parts.length >= 2 ? `(?:${parts.join("\\s+")}|${parts.join("")})` : parts[0];
+  return new RegExp(`(?:^|[^a-z0-9])${body}(?:[^a-z0-9]|$)`, "i").test(addrFolded);
 }
 
-/** Khớp bộ lọc tình trạng thông tin liên hệ (HAS_PHONE | HAS_EMAIL | HAS_BOTH). */
+/** Khớp bộ lọc tình trạng thông tin liên hệ (HAS_PHONE | HAS_EMAIL | HAS_BOTH | HAS_WEBSITE | NO_CONTACT). */
 export function matchesInfoFilter(row, infoFilter) {
   const f = String(infoFilter || "ALL").toUpperCase();
   const hasPhone = Boolean(String(row?.phone || "").trim());
   const hasEmail = Boolean(String(row?.email || "").trim());
+  const hasWebsite = Boolean(String(row?.website || "").trim());
   if (f === "HAS_PHONE") return hasPhone;
   if (f === "HAS_EMAIL") return hasEmail;
   if (f === "HAS_BOTH") return hasPhone && hasEmail;
+  if (f === "HAS_WEBSITE") return hasWebsite;
+  if (f === "NO_CONTACT") return !hasPhone && !hasEmail;
   return true;
 }

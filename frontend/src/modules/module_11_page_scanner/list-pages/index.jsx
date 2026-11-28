@@ -8,6 +8,7 @@ import {
   Phone,
   Plus,
   RefreshCw,
+  RotateCcw,
   Hash,
   Search,
   Trash2,
@@ -45,7 +46,7 @@ import {
 import { usePageLists } from "../shared/usePageLists";
 import SavePageListModal from "../shared/SavePageListModal";
 import { runDelete, notifyExportResult } from "../_shared";
-import { matchesInfoFilter, matchesRegion } from "../utils.mjs";
+import { matchesInfoFilter, matchesRegion, VN_PROVINCES_34 } from "../utils.mjs";
 import CreateCategoryModal from "@/modules/module_10_group_scan/member-list/_components/CreateCategoryModal";
 
 const ALL_ID = "__all__";
@@ -116,6 +117,7 @@ export default function PageScannerListPages() {
   const reqSeqRef = useRef(0);
   const searchTimerRef = useRef(null);
   const mountedRef = useRef(false);
+  const skipNextKeywordEffectRef = useRef(false);
 
   const loadKeywords = useCallback(() => {
     return getSearchKeywords()
@@ -264,6 +266,10 @@ export default function PageScannerListPages() {
   // Tự tìm kiếm tức thì khi gõ vào ô tìm kiếm (debounce 250ms, không cần nhấn Enter)
   useEffect(() => {
     if (!mountedRef.current) return undefined;
+    if (skipNextKeywordEffectRef.current) {
+      skipNextKeywordEffectRef.current = false;
+      return undefined;
+    }
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     searchTimerRef.current = setTimeout(() => {
       searchTimerRef.current = null;
@@ -277,6 +283,27 @@ export default function PageScannerListPages() {
       }
     };
   }, [keyword]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleResetFilters = () => {
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
+      searchTimerRef.current = null;
+    }
+    const hadKeyword = Boolean(keyword);
+    const hadDropdown = infoFilter !== "ALL" || regionFilter !== "ALL";
+    if (!hadKeyword && !hadDropdown) return;
+    if (hadKeyword) {
+      skipNextKeywordEffectRef.current = true;
+      setKeyword("");
+    }
+    if (hadDropdown) {
+      setInfoFilter("ALL");
+      setRegionFilter("ALL");
+    } else {
+      setLoading(true);
+      load(1, { keyword: "", infoFilter: "ALL", regionFilter: "ALL" });
+    }
+  };
 
   const reload = (p = 1) => {
     if (searchTimerRef.current) {
@@ -613,7 +640,9 @@ export default function PageScannerListPages() {
               <option value="ALL">Tình trạng: Tất cả thông tin</option>
               <option value="HAS_PHONE">Có Số điện thoại</option>
               <option value="HAS_EMAIL">Có Email</option>
-              <option value="HAS_BOTH">Đầy đủ SĐT & Email</option>
+              <option value="HAS_BOTH">Đầy đủ SĐT &amp; Email</option>
+              <option value="HAS_WEBSITE">Có Website</option>
+              <option value="NO_CONTACT">Chưa có SĐT &amp; Email</option>
             </select>
             <select
               value={regionFilter}
@@ -621,10 +650,33 @@ export default function PageScannerListPages() {
               className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-700 outline-none"
             >
               <option value="ALL">Khu vực: Toàn quốc</option>
-              <option value="Hà Nội">Hà Nội</option>
-              <option value="Hồ Chí Minh">TP. Hồ Chí Minh</option>
-              <option value="Đà Nẵng">Đà Nẵng</option>
+              <optgroup label="Thành phố trực thuộc TW (6)">
+                {VN_PROVINCES_34.cities.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="Các tỉnh (28)">
+                {VN_PROVINCES_34.provinces.map((p) => (
+                  <option key={p.value} value={p.value}>
+                    {p.label}
+                  </option>
+                ))}
+              </optgroup>
+              <option value="NO_ADDRESS">Chưa có địa chỉ</option>
             </select>
+            {hasActiveFilter ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-9 gap-1.5 text-[11px] text-slate-600 hover:text-slate-900"
+                onClick={handleResetFilters}
+              >
+                <RotateCcw className="size-3.5" /> Xóa bộ lọc
+              </Button>
+            ) : null}
           </div>
 
           <div className="flex items-center gap-3 px-5 pb-2">

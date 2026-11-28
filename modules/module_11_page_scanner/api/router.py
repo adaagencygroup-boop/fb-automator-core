@@ -757,28 +757,70 @@ async def list_search_keywords():
     return {"items": items, "total": len(items)}
 
 
+_VI_ACCENT_SRC = "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ"
+_VI_ACCENT_DST = "aaaaaaaaaaaaaaaaaeeeeeeeeeeeiiiiiooooooooooooooooouuuuuuuuuuuyyyyyd"
+
 _REGION_REGEX_MAP = {
-    "ha noi": r"(hà\s*nội|ha\s*noi|hanoi|(^|[^a-z0-9])tp\.?\s*hn([^a-z0-9]|$))",
-    "hanoi": r"(hà\s*nội|ha\s*noi|hanoi|(^|[^a-z0-9])tp\.?\s*hn([^a-z0-9]|$))",
-    "ho chi minh": r"(hồ\s*chí\s*minh|ho\s*chi\s*minh|sài\s*gòn|sai\s*gon|saigon|(^|[^a-z0-9])(tp\.?\s*)?hcm([^a-z0-9]|$))",
-    "tp ho chi minh": r"(hồ\s*chí\s*minh|ho\s*chi\s*minh|sài\s*gòn|sai\s*gon|saigon|(^|[^a-z0-9])(tp\.?\s*)?hcm([^a-z0-9]|$))",
-    "hcm": r"(hồ\s*chí\s*minh|ho\s*chi\s*minh|sài\s*gòn|sai\s*gon|saigon|(^|[^a-z0-9])(tp\.?\s*)?hcm([^a-z0-9]|$))",
-    "da nang": r"(đà\s*nẵng|da\s*nang|danang)",
-    "danang": r"(đà\s*nẵng|da\s*nang|danang)",
+    "ha noi": r"(^|[^a-z0-9])(ha\s+noi|hanoi|tp\s+hn)([^a-z0-9]|$)",
+    "hanoi": r"(^|[^a-z0-9])(ha\s+noi|hanoi|tp\s+hn)([^a-z0-9]|$)",
+    "ho chi minh": r"(^|[^a-z0-9])(ho\s+chi\s+minh|hochiminh|sai\s+gon|saigon|(tp\s+)?hcm)([^a-z0-9]|$)",
+    "tp ho chi minh": r"(^|[^a-z0-9])(ho\s+chi\s+minh|hochiminh|sai\s+gon|saigon|(tp\s+)?hcm)([^a-z0-9]|$)",
+    "hcm": r"(^|[^a-z0-9])(ho\s+chi\s+minh|hochiminh|sai\s+gon|saigon|(tp\s+)?hcm)([^a-z0-9]|$)",
+    "da nang": r"(^|[^a-z0-9])(da\s+nang|danang)([^a-z0-9]|$)",
+    "danang": r"(^|[^a-z0-9])(da\s+nang|danang)([^a-z0-9]|$)",
+    "hai phong": r"(^|[^a-z0-9])(hai\s+phong|haiphong)([^a-z0-9]|$)",
+    "haiphong": r"(^|[^a-z0-9])(hai\s+phong|haiphong)([^a-z0-9]|$)",
+    "can tho": r"(^|[^a-z0-9])(can\s+tho|cantho)([^a-z0-9]|$)",
+    "cantho": r"(^|[^a-z0-9])(can\s+tho|cantho)([^a-z0-9]|$)",
+    "hue": r"(^|[^a-z0-9])hue([^a-z0-9]|$)",
+    "dak lak": r"(^|[^a-z0-9])(dak\s+lak|daklak|dac\s+lac|daclac)([^a-z0-9]|$)",
+    "daklak": r"(^|[^a-z0-9])(dak\s+lak|daklak|dac\s+lac|daclac)([^a-z0-9]|$)",
 }
 
 
-def _normalize_region_key(value: Optional[str]) -> str:
+def _vi_fold_sql(expr: str) -> str:
+    """Bỏ dấu tiếng Việt + viết thường bằng SQL thuần PostgreSQL (không cần extension unaccent)."""
+    return (
+        f"TRANSLATE(LOWER(NORMALIZE(COALESCE({expr}, ''), NFC)), "
+        f"'{_VI_ACCENT_SRC}', '{_VI_ACCENT_DST}')"
+    )
+
+
+def _fold_vi(value: Optional[str]) -> str:
+    """Chuẩn hóa chuỗi tiếng Việt về chữ thường không dấu, gom khoảng trắng."""
     import unicodedata
 
     raw = str(value or "").strip().lower().replace("đ", "d")
     folded = "".join(
         ch for ch in unicodedata.normalize("NFD", raw) if unicodedata.category(ch) != "Mn"
     )
+    return re.sub(r"\s+", " ", folded).strip()
+
+
+def _normalize_region_key(value: Optional[str]) -> str:
+    folded = _fold_vi(value)
     folded = re.sub(r"[.,/\\\-]+", " ", folded)
     folded = re.sub(r"\s+", " ", folded).strip()
-    folded = re.sub(r"^(tp|thanh pho)\s+", "", folded).strip()
+    folded = re.sub(r"^(tp|thanh pho|tinh)\s+", "", folded).strip()
     return folded
+
+
+def _build_region_regex(region: Optional[str]) -> Optional[str]:
+    """Tạo regex ranh giới từ trên địa chỉ đã fold không dấu (chỉ khớp đúng tỉnh/thành mới, không gộp tỉnh cũ)."""
+    reg_key = _normalize_region_key(region)
+    if not reg_key:
+        return None
+    mapped = _REGION_REGEX_MAP.get(reg_key)
+    if mapped:
+        return mapped
+    parts = [re.escape(part) for part in reg_key.split() if part]
+    if not parts:
+        return None
+    if len(parts) >= 2:
+        spaced = r"\s+".join(parts)
+        joined = "".join(parts)
+        return rf"(^|[^a-z0-9])({spaced}|{joined})([^a-z0-9]|$)"
+    return rf"(^|[^a-z0-9]){parts[0]}([^a-z0-9]|$)"
 
 
 def _build_page_filter_sql(
@@ -787,31 +829,31 @@ def _build_page_filter_sql(
     info_filter: Optional[str],
     region: Optional[str],
 ) -> tuple[List[str], List[Any]]:
-    """Tạo điều kiện WHERE + params dùng chung cho GET /pages (tìm keyword/ID, tình trạng SĐT/Email, khu vực)."""
+    """Tạo điều kiện WHERE + params dùng chung cho GET /pages (tìm không dấu, tình trạng liên hệ, 34 tỉnh/thành)."""
     conds: List[str] = []
     params: List[Any] = []
     p = f"{prefix}." if prefix else ""
 
     kw = str(keyword or "").strip()
     if kw:
-        kw_like = f"%{kw}%"
+        kw_folded = _fold_vi(kw)
+        kw_like = f"%{kw_folded}%"
         kw_digits = re.sub(r"[^0-9+]", "", kw)
+        search_exprs = [
+            f"{_vi_fold_sql(f'{p}page_name')} LIKE %s",
+            f"{_vi_fold_sql(f'{p}page_key')} LIKE %s",
+            f"{_vi_fold_sql(f'{p}page_url')} LIKE %s",
+            f"{_vi_fold_sql(f'{p}phone')} LIKE %s",
+            f"{_vi_fold_sql(f'{p}email')} LIKE %s",
+            f"{_vi_fold_sql(f'{p}website')} LIKE %s",
+            f"{_vi_fold_sql(f'{p}address')} LIKE %s",
+        ]
+        kw_params = [kw_like] * len(search_exprs)
         if len(kw_digits) >= 3:
-            conds.append(
-                f"({p}page_name ILIKE %s OR {p}page_key ILIKE %s OR {p}page_url ILIKE %s"
-                f" OR COALESCE({p}phone,'') ILIKE %s"
-                f" OR REGEXP_REPLACE(COALESCE({p}phone,''), '[^0-9+]', '', 'g') ILIKE %s"
-                f" OR COALESCE({p}email,'') ILIKE %s OR COALESCE({p}website,'') ILIKE %s"
-                f" OR COALESCE({p}address,'') ILIKE %s)"
-            )
-            params.extend([kw_like, kw_like, kw_like, kw_like, f"%{kw_digits}%", kw_like, kw_like, kw_like])
-        else:
-            conds.append(
-                f"({p}page_name ILIKE %s OR {p}page_key ILIKE %s OR {p}page_url ILIKE %s"
-                f" OR COALESCE({p}phone,'') ILIKE %s OR COALESCE({p}email,'') ILIKE %s"
-                f" OR COALESCE({p}website,'') ILIKE %s OR COALESCE({p}address,'') ILIKE %s)"
-            )
-            params.extend([kw_like, kw_like, kw_like, kw_like, kw_like, kw_like, kw_like])
+            search_exprs.append(f"REGEXP_REPLACE(COALESCE({p}phone,''), '[^0-9+]', '', 'g') ILIKE %s")
+            kw_params.append(f"%{kw_digits}%")
+        conds.append("(" + " OR ".join(search_exprs) + ")")
+        params.extend(kw_params)
 
     info = str(info_filter or "").strip().upper()
     if info == "HAS_PHONE":
@@ -823,17 +865,24 @@ def _build_page_filter_sql(
             f"(NULLIF(TRIM(COALESCE({p}phone, '')), '') IS NOT NULL"
             f" AND NULLIF(TRIM(COALESCE({p}email, '')), '') IS NOT NULL)"
         )
+    elif info == "HAS_WEBSITE":
+        conds.append(f"NULLIF(TRIM(COALESCE({p}website, '')), '') IS NOT NULL")
+    elif info == "NO_CONTACT":
+        conds.append(
+            f"(NULLIF(TRIM(COALESCE({p}phone, '')), '') IS NULL"
+            f" AND NULLIF(TRIM(COALESCE({p}email, '')), '') IS NULL)"
+        )
 
     reg = str(region or "").strip()
     if reg and reg.upper() != "ALL":
-        reg_key = _normalize_region_key(reg)
-        pattern = _REGION_REGEX_MAP.get(reg_key)
-        if pattern:
-            conds.append(f"COALESCE({p}address, '') ~* %s")
-            params.append(pattern)
+        if reg.upper() == "NO_ADDRESS":
+            conds.append(f"NULLIF(TRIM(COALESCE({p}address, '')), '') IS NULL")
         else:
-            conds.append(f"COALESCE({p}address, '') ILIKE %s")
-            params.append(f"%{reg}%")
+            pattern = _build_region_regex(reg)
+            if pattern:
+                addr_norm = f"REGEXP_REPLACE({_vi_fold_sql(f'{p}address')}, '[.,/\\\\-]+', ' ', 'g')"
+                conds.append(f"{addr_norm} ~* %s")
+                params.append(pattern)
 
     return conds, params
 
@@ -844,12 +893,12 @@ async def list_scanned_pages(
     source_keyword: Optional[str] = Query(
         None, description="Lọc page thuộc phiên DISCOVERY có đúng từ khóa/hashtag này"
     ),
-    keyword: Optional[str] = Query(None, description="Tìm theo tên, ID, url, SĐT, email, địa chỉ"),
+    keyword: Optional[str] = Query(None, description="Tìm không dấu theo tên, ID, url, SĐT, email, website, địa chỉ"),
     info_filter: Optional[str] = Query(
-        None, description="Lọc tình trạng thông tin: HAS_PHONE | HAS_EMAIL | HAS_BOTH"
+        None, description="Lọc tình trạng thông tin: HAS_PHONE | HAS_EMAIL | HAS_BOTH | HAS_WEBSITE | NO_CONTACT"
     ),
     region: Optional[str] = Query(
-        None, description="Lọc khu vực địa chỉ (khớp cả tiếng Việt có/không dấu, tiếng Anh, viết tắt)"
+        None, description="Lọc khu vực theo 34 tỉnh/thành mới hoặc NO_ADDRESS (khớp có/không dấu, tiếng Anh)"
     ),
     list_id: Optional[int] = Query(None, description="Lọc page trong danh mục đã lưu (page_list_categories.id)"),
     relevance_status: Optional[str] = Query(None, description="Lọc theo độ liên quan (RELEVANT, REVIEW, EXCLUDED)"),

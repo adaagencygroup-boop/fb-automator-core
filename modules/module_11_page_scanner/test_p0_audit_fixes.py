@@ -523,15 +523,25 @@ class TestHashtagDetailSync(unittest.TestCase):
 
 
 class TestListPagesFilterSql(unittest.TestCase):
-    def test_region_regex_matches_vi_en_and_abbreviations(self):
+    def test_region_regex_matches_vi_en_strict_word_boundary_and_no_old_province_merge(self):
         import re
-        from modules.module_11_page_scanner.api.router import _build_page_filter_sql, _normalize_region_key
+        from modules.module_11_page_scanner.api.router import (
+            _build_page_filter_sql,
+            _fold_vi,
+            _normalize_region_key,
+        )
+
+        def _norm_addr(addr: str) -> str:
+            return re.sub(r"[.,/\\\-]+", " ", _fold_vi(addr))
 
         self.assertEqual(_normalize_region_key("TP. Hồ Chí Minh"), "ho chi minh")
         self.assertEqual(_normalize_region_key("Hà Nội"), "ha noi")
         self.assertEqual(_normalize_region_key("Đà Nẵng"), "da nang")
+        self.assertEqual(_normalize_region_key("Huế"), "hue")
+        self.assertEqual(_normalize_region_key("Đắk Lắk"), "dak lak")
 
-        conds_hcm, params_hcm = _build_page_filter_sql("sp", None, None, "Hồ Chí Minh")
+        # TP. Hồ Chí Minh — khớp tên mới & tiếng Anh/viết tắt, KHÔNG gộp Bình Dương / Bà Rịa - Vũng Tàu
+        conds_hcm, params_hcm = _build_page_filter_sql("sp", None, None, "TP. Hồ Chí Minh")
         self.assertEqual(len(conds_hcm), 1)
         pat_hcm = re.compile(params_hcm[0], re.IGNORECASE)
         for ok_addr in (
@@ -542,9 +552,15 @@ class TestListPagesFilterSql(unittest.TestCase):
             "TP.HCM, Việt Nam",
             "Saigon, Vietnam",
         ):
-            self.assertRegex(ok_addr, pat_hcm)
-        self.assertNotRegex("Hanoi, Vietnam, 10000", pat_hcm)
+            self.assertRegex(_norm_addr(ok_addr), pat_hcm)
+        for bad_addr in (
+            "Hanoi, Vietnam, 10000",
+            "Thủ Dầu Một, Bình Dương, Vietnam",
+            "TP. Vũng Tàu, Bà Rịa - Vũng Tàu",
+        ):
+            self.assertNotRegex(_norm_addr(bad_addr), pat_hcm)
 
+        # Hà Nội
         conds_hn, params_hn = _build_page_filter_sql("sp", None, None, "Hà Nội")
         pat_hn = re.compile(params_hn[0], re.IGNORECASE)
         for ok_addr in (
@@ -553,24 +569,66 @@ class TestListPagesFilterSql(unittest.TestCase):
             "Hà Nội, 100000",
             "Ha Noi, Vietnam",
         ):
-            self.assertRegex(ok_addr, pat_hn)
-        self.assertNotRegex("Ho Chi Minh City, Vietnam", pat_hn)
+            self.assertRegex(_norm_addr(ok_addr), pat_hn)
+        self.assertNotRegex(_norm_addr("Ho Chi Minh City, Vietnam"), pat_hn)
 
+        # Đà Nẵng — KHÔNG gộp Quảng Nam
         conds_dn, params_dn = _build_page_filter_sql("", None, None, "Đà Nẵng")
         pat_dn = re.compile(params_dn[0], re.IGNORECASE)
-        self.assertRegex("194 Phạm Cự Lượng, TP Đà Nẵng, Da Nang, Vietnam", pat_dn)
-        self.assertRegex("Da Nang, Vietnam", pat_dn)
+        self.assertRegex(_norm_addr("194 Phạm Cự Lượng, TP Đà Nẵng, Da Nang, Vietnam"), pat_dn)
+        self.assertRegex(_norm_addr("Da Nang, Vietnam"), pat_dn)
+        self.assertNotRegex(_norm_addr("Hội An, Quảng Nam, Vietnam"), pat_dn)
 
-    def test_keyword_includes_page_key_and_info_filter(self):
-        from modules.module_11_page_scanner.api.router import _build_page_filter_sql
+        # Huế — ranh giới từ nghiêm ngặt: KHÔNG khớp nhầm "Nhà Thuê" hay "Sông Nhuệ"
+        _, params_hue = _build_page_filter_sql("sp", None, None, "Huế")
+        pat_hue = re.compile(params_hue[0], re.IGNORECASE)
+        self.assertRegex(_norm_addr("TP. Huế, Việt Nam"), pat_hue)
+        self.assertRegex(_norm_addr("Hue, Vietnam"), pat_hue)
+        self.assertNotRegex(_norm_addr("Quang Vĩ Nhà Thuê Hà Nội"), pat_hue)
+        self.assertNotRegex(_norm_addr("Đường Sông Nhuệ, Hà Nội"), pat_hue)
+
+        # Tỉnh khác trong 34 tỉnh/thành (Đắk Lắk, Bắc Ninh, Cần Thơ, Hải Phòng)
+        _, params_dl = _build_page_filter_sql("sp", None, None, "Đắk Lắk")
+        pat_dl = re.compile(params_dl[0], re.IGNORECASE)
+        self.assertRegex(_norm_addr("Buôn Ma Thuột, Đắk Lắk"), pat_dl)
+        self.assertRegex(_norm_addr("Dak Lak, Vietnam"), pat_dl)
+        self.assertNotRegex(_norm_addr("Tuy Hòa, Phú Yên"), pat_dl)
+
+        _, params_bn = _build_page_filter_sql("sp", None, None, "Bắc Ninh")
+        pat_bn = re.compile(params_bn[0], re.IGNORECASE)
+        self.assertRegex(_norm_addr("TP. Bắc Ninh, Vietnam"), pat_bn)
+        self.assertRegex(_norm_addr("BacNinh, Vietnam"), pat_bn)
+        self.assertNotRegex(_norm_addr("TP. Bắc Giang, Vietnam"), pat_bn)
+
+        # NO_ADDRESS
+        conds_no_addr, params_no_addr = _build_page_filter_sql("sp", None, None, "NO_ADDRESS")
+        self.assertEqual(params_no_addr, [])
+        self.assertIn("IS NULL", conds_no_addr[0])
+        self.assertIn("sp.address", conds_no_addr[0])
+
+    def test_keyword_diacritics_insensitive_and_all_info_filters(self):
+        from modules.module_11_page_scanner.api.router import _build_page_filter_sql, _fold_vi
+
+        self.assertEqual(_fold_vi("Bán Mình Cho Tư Bản"), "ban minh cho tu ban")
 
         conds, params = _build_page_filter_sql("sp", "024 6656 6595", "HAS_BOTH", "ALL")
         self.assertEqual(len(conds), 2)
-        self.assertIn("sp.page_key ILIKE %s", conds[0])
+        self.assertIn("TRANSLATE(LOWER(NORMALIZE(COALESCE(sp.page_key", conds[0])
         self.assertIn("REGEXP_REPLACE(COALESCE(sp.phone,''), '[^0-9+]', '', 'g') ILIKE %s", conds[0])
         self.assertIn("%02466566595%", params)
         self.assertIn("sp.phone", conds[1])
         self.assertIn("sp.email", conds[1])
+
+        conds_kw, params_kw = _build_page_filter_sql("sp", "Bán Mình", "HAS_WEBSITE", "ALL")
+        self.assertEqual(len(conds_kw), 2)
+        self.assertTrue(all(p == "%ban minh%" for p in params_kw))
+        self.assertIn("sp.website", conds_kw[1])
+
+        conds_nc, params_nc = _build_page_filter_sql("sp", None, "NO_CONTACT", "ALL")
+        self.assertEqual(params_nc, [])
+        self.assertIn("sp.phone", conds_nc[0])
+        self.assertIn("sp.email", conds_nc[0])
+        self.assertEqual(conds_nc[0].count("IS NULL"), 2)
 
 
 class TestVietnameseSessionLogs(unittest.TestCase):
