@@ -1071,6 +1071,11 @@ def run_page_search_flow(
             signature = frozenset(keys_batch)
             if new_keys_count == 0 and signature and signature in seen_batch_signatures:
                 stop_reason = "CYCLE_DETECTED"
+                append_session_log(
+                    session_id,
+                    "Facebook lặp lại các kết quả đã quét (trùng kết quả) — kết thúc tìm kiếm.",
+                    "info",
+                )
                 break
             if signature:
                 seen_batch_signatures.add(signature)
@@ -1079,6 +1084,11 @@ def run_page_search_flow(
                 no_new_streak += 1
                 if no_new_streak >= NO_NEW_LIMIT:
                     stop_reason = "NO_NEW_RESULTS"
+                    append_session_log(
+                        session_id,
+                        f"Không còn Page mới sau {NO_NEW_LIMIT} lần cuộn — kết thúc tìm kiếm.",
+                        "info",
+                    )
                     break
             else:
                 no_new_streak = 0
@@ -4211,11 +4221,17 @@ def run_hashtag_search_flow(
                         logger.debug(
                             f"[Scanner] #{session_id} #{current_tag}: {stop_reason} sau {NO_NEW_LIMIT} batch (extract={len(posts)})"
                         )
-                        append_session_log(
-                            session_id,
-                            f"Đã hết bài viết mới cho #{current_tag} — kết thúc tìm kiếm.",
-                            "info",
-                        )
+                        if stop_reason == "CYCLE_DETECTED":
+                            stop_msg = (
+                                f"Facebook lặp lại các bài viết #{current_tag} đã quét (trùng kết quả)"
+                                f" sau {NO_NEW_LIMIT} lần cuộn — kết thúc tìm kiếm."
+                            )
+                        else:
+                            stop_msg = (
+                                f"Không còn bài viết mới cho #{current_tag}"
+                                f" sau {NO_NEW_LIMIT} lần cuộn — kết thúc tìm kiếm."
+                            )
+                        append_session_log(session_id, stop_msg, "info")
                         break
                 else:
                     no_new_streak = 0

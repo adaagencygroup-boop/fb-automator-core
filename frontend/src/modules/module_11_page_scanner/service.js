@@ -129,6 +129,17 @@ export async function getScannedPages(params = {}) {
   });
 }
 
+/** Xóa tag (từ khóa / hashtag ở sidebar DS page) + các page liên quan + các phiên tìm của tag. */
+export async function deleteSearchKeyword(keyword) {
+  return api.delete("/api/page-scanner/keywords", { params: { keyword } });
+}
+
+/** Số page chưa thuộc danh mục đã lưu nào. */
+export async function countUnlistedPages() {
+  const res = await api.get("/api/page-scanner/pages", { params: { no_list: true, page: 1, page_size: 1 } });
+  return Number(res?.total) || 0;
+}
+
 /** Danh mục từ khóa / hashtag đã tìm (sidebar DS page). */
 export async function getSearchKeywords() {
   try {
@@ -236,15 +247,15 @@ function notifyPageListsChanged() {
   if (typeof window !== "undefined") window.dispatchEvent(new Event(PAGE_LISTS_EVENT));
 }
 
-/** [{ id, name, page_count, created_at, updated_at }] — mới dùng gần nhất trước. */
+/** [{ id, name, color, page_count, created_at, updated_at }] — mới dùng gần nhất trước. */
 export async function getPageLists() {
   const res = await api.get("/api/page-scanner/page-lists");
   return res?.items || [];
 }
 
 /** Tạo danh mục (trùng tên → trả danh mục cũ): { id, name, created }. */
-export async function createPageList(name) {
-  const res = await api.post("/api/page-scanner/page-lists", { name });
+export async function createPageList(name, color) {
+  const res = await api.post("/api/page-scanner/page-lists", { name, color: color || undefined });
   notifyPageListsChanged();
   return res;
 }
@@ -259,12 +270,13 @@ export async function deletePageList(id) {
  * Lưu page (theo page_key) vào danh mục có sẵn (categoryId) hoặc theo tên (chưa có thì tạo).
  * → { category: { id, name, page_count }, created, added, skipped_existing, not_found, message }
  */
-export async function savePagesToList({ categoryId, categoryName, pageKeys, deduplicate = true }) {
+export async function savePagesToList({ categoryId, categoryName, pageKeys, deduplicate = true, color }) {
   const res = await api.post("/api/page-scanner/page-lists/save", {
     category_id: categoryId ?? null,
     category_name: categoryName || null,
     page_keys: pageKeys,
     deduplicate,
+    color: categoryName && color ? color : undefined,
   });
   notifyPageListsChanged();
   return res;

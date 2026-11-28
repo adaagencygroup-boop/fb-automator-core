@@ -203,9 +203,14 @@ export default function ProfileScanInfo() {
     return () => clearTimeout(id);
   }, []);
 
-  // Mở trang: hiện lại phiên gần nhất (đang chạy thì theo dõi tiếp)
+  // Mở trang: hiện lại phiên gần nhất (đang chạy thì theo dõi tiếp).
+  // syncing: chờ biết phiên còn chạy hay không → khoá nút Bắt đầu (bấm lúc này máy chủ sẽ báo lỗi vì phiên cũ còn chạy)
+  const [syncing, setSyncing] = useState(true);
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("demo") === "1") return undefined;
+    if (new URLSearchParams(window.location.search).get("demo") === "1") {
+      setSyncing(false);
+      return undefined;
+    }
     let ignore = false;
     getLatestScan()
       .then((s) => {
@@ -215,7 +220,8 @@ export default function ProfileScanInfo() {
         if (!running && loadScanState("profile_scan")?.dismissedId === s.id) return;
         setSession((cur) => cur || s);
       })
-      .catch((err) => !ignore && toast.error(`Lỗi tải phiên quét: ${err.message}`));
+      .catch((err) => !ignore && toast.error(`Lỗi tải phiên quét: ${err.message}`))
+      .finally(() => !ignore && setSyncing(false));
     return () => {
       ignore = true;
     };
@@ -350,6 +356,7 @@ export default function ProfileScanInfo() {
   };
 
   const start = async () => {
+    if (syncing) return; // chưa đồng bộ xong phiên đang chạy
     if (demo) return toast.warning("Đang ở chế độ xem mẫu (?demo=1).");
     if (!uids.length) return toast.warning("Chưa chọn tài khoản.");
     if (!targets.length) return toast.warning("Chưa có profile hợp lệ để quét.");
@@ -639,8 +646,9 @@ export default function ProfileScanInfo() {
         paused={paused}
         stopping={controlling === "stop"}
         showNewScan={showResults}
-        startDisabled={starting}
+        startDisabled={starting || syncing}
         controlDisabled={Boolean(controlling)}
+        syncing={syncing}
         onStart={start}
         onPauseResume={() => control(paused ? "resume" : "pause")}
         onStop={emergencyStop}

@@ -232,6 +232,7 @@ DDL_STATEMENTS = [
         id SERIAL PRIMARY KEY,
         owner_key VARCHAR(100),
         name VARCHAR(255) NOT NULL,
+        color VARCHAR(7),
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -298,6 +299,8 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE scanned_pages ADD COLUMN IF NOT EXISTS relevance_score INT DEFAULT 0;",
     "ALTER TABLE scanned_pages ADD COLUMN IF NOT EXISTS relevance_status VARCHAR(20) DEFAULT 'RELEVANT';",
     "ALTER TABLE scanned_pages ADD COLUMN IF NOT EXISTS matched_hashtags TEXT;",
+    # Màu danh mục page đã lưu (giống danh mục profile Module 13)
+    "ALTER TABLE page_list_categories ADD COLUMN IF NOT EXISTS color VARCHAR(7);",
     "ALTER TABLE scanned_pages ADD COLUMN IF NOT EXISTS hashtag_post_count INT DEFAULT 0;",
     # 6. Bổ sung trường liên hệ và quét sâu cho scanned_pages (GĐ 2 + 3)
     "ALTER TABLE scanned_pages ADD COLUMN IF NOT EXISTS phone TEXT;",

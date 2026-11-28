@@ -162,14 +162,34 @@ export function SelectionBar({
   );
 }
 
-export function ListPagination({ page, pageSize, total, onPageChange }) {
+/** onPageSizeChange (tuỳ chọn): hiện ô chọn số dòng / trang trước dòng "Hiển thị …" */
+export function ListPagination({ page, pageSize, total, onPageChange, onPageSizeChange, pageSizeOptions = [10, 15, 20, 50, 100] }) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const sizes = pageSizeOptions.includes(pageSize) ? pageSizeOptions : [...pageSizeOptions, pageSize].sort((a, b) => a - b);
   return (
     <div className="flex items-center justify-between border-t border-slate-100 px-5 py-3">
-      <span className="text-[11px] text-slate-400">
-        Hiển thị {total === 0 ? 0 : (page - 1) * pageSize + 1} - {Math.min(page * pageSize, total)} của{" "}
-        {total.toLocaleString("vi-VN")}
-      </span>
+      <div className="flex items-center gap-3 text-[11px] text-slate-400">
+        {onPageSizeChange ? (
+          <label className="flex items-center gap-1.5 text-slate-500">
+            Hàng mỗi trang:
+            <select
+              value={pageSize}
+              onChange={(e) => onPageSizeChange(Number(e.target.value) || pageSize)}
+              className="h-7 rounded border border-slate-200 bg-white px-2 text-[11px] font-semibold text-slate-700 outline-none"
+            >
+              {sizes.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        <span>
+          Hiển thị {total === 0 ? 0 : (page - 1) * pageSize + 1} - {Math.min(page * pageSize, total)} của{" "}
+          {total.toLocaleString("vi-VN")}
+        </span>
+      </div>
       <div className="flex items-center gap-1">
         <Button type="button" variant="outline" size="icon" className="size-7" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
           <ChevronLeft className="size-3.5" />

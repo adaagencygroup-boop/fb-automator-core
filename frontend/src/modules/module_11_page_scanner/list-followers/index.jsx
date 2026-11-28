@@ -18,6 +18,7 @@ import { toast } from "@/lib/toast";
 import { useActionLock } from "../shared/useActionLock";
 import { saveCsvContent } from "../shared/saveFile.mjs";
 import { runDelete, notifyExportResult } from "../_shared";
+import useDragRowSelect from "../shared/useDragRowSelect";
 import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
 import {
@@ -166,7 +167,7 @@ export default function PageScannerListFollowers() {
     setActivePageKey(key);
   };
 
-  const rowId = (r) => r.id || `${r.page_key}-${r.follower_key}`;
+  const rowId = (r) => String(r.id || `${r.page_key}-${r.follower_key}`);
 
   const handleExport = async () => {
     const rowsSrc = selectedIds.length
@@ -276,6 +277,14 @@ export default function PageScannerListFollowers() {
   };
 
   const allSelected = items.length > 0 && selectedIds.length === items.length;
+
+  /* Kéo chuột trên bảng để chọn nhiều follower (Ctrl giữ lựa chọn cũ, Shift + click chọn dải) */
+  const drag = useDragRowSelect({
+    ids: items.map(rowId),
+    isSelected: (k) => selectedIds.includes(k),
+    onSet: setSelectedIds,
+    onToggle: (k) => setSelectedIds((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k])),
+  });
   const detailTitle = activePage?.page_name || "Tất cả followers";
 
   return (
@@ -439,7 +448,7 @@ export default function PageScannerListFollowers() {
           </div>
 
           {/* Màn rộng: bỏ overflow để tiêu đề cột dính theo trang, ngay dưới phần đầu; màn hẹp: cuộn ngang */}
-          <div className="overflow-x-auto lg:overflow-visible">
+          <div ref={drag.setContainer} className="overflow-x-auto lg:overflow-visible">
             <table className="w-full min-w-[720px] text-left text-[11px]">
               <thead
                 className="z-20 bg-slate-50 text-slate-500 lg:sticky lg:top-[var(--m11-head-h)]"
@@ -491,11 +500,12 @@ export default function PageScannerListFollowers() {
                     return (
                       <tr
                         key={id}
-                        className={
+                        {...drag.rowProps(id)}
+                        className={`cursor-pointer ${
                           selected ? "bg-blue-50/50" : "hover:bg-slate-50"
-                        }
+                        }`}
                       >
-                        <td className="px-4 py-2.5">
+                        <td className="px-4 py-2.5" data-no-row-selection onClick={(e) => e.stopPropagation()}>
                           <Checkbox
                             checked={selected}
                             onCheckedChange={(c) =>

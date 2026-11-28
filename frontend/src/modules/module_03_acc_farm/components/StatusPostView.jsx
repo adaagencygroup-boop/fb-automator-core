@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   Settings,
@@ -51,16 +51,12 @@ import { EmergencyStopModal } from "./EmergencyStopModal";
 import { PastScheduleModal } from "./PastScheduleModal";
 import { PostProgressPreview } from "./PostProgressPreview";
 import { ProgressActivityCell } from "./ProgressPostLink";
-import { useUnsavedChanges } from "@/components/UnsavedChangesContext";
 import {
   mapProgressThreads,
   shouldRestoreProgressView,
 } from "@/modules/module_03_acc_farm/postSessionUi";
 import { useAccountCategories } from "@/modules/module_02_account_manager/hooks/useAccountCategories";
 import { categoryLabelStyle } from "@/modules/module_02_account_manager/components/CategorySelect";
-
-const STATUS_LEAVE_MESSAGE =
-  "Bạn đang có Prompt AI hoặc bài viết trên màn Đăng Status. Nếu rời đi, bài đã lưu sẽ chuyển về chưa lưu và cần Lưu lại lần sau.";
 
 const DEFAULT_GEMINI_MODELS = [
   { value: "gemini-3.8-flash", label: "Gemini 3.8 Flash (Khuyên dùng - Nhanh & Mới nhất)" },
@@ -118,9 +114,11 @@ const loginFilterOptions = [
   { value: "failed", label: "Đăng nhập lỗi" },
 ];
 
-export function StatusPostView({ initialState = "config", onHasPostsChange, isActive = true }) {
+export function StatusPostView({ initialState = "config", isActive = true }) {
   const router = useRouter();
   const [viewState, setViewState] = useState(initialState);
+  // Vừa mở / quay lại tab: đang hỏi Engine phiên đăng còn chạy không → khoá nút ĐĂNG BÀI
+  const [syncing, setSyncing] = useState(true);
   const [viewingImageCard, setViewingImageCard] = useState(null);
   const [emojiPickerCard, setEmojiPickerCard] = useState(null);
   const textareaRefs = useRef({});
@@ -294,88 +292,83 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
       threadCount: Number(tc) || 0,
     });
 
-  // Có bài viết (nội dung/ảnh) — kể cả đã lưu
-  const hasDisplayedPosts = useMemo(
-    () =>
-      drafts.some(
-        (d) =>
-          ((d.content || "").trim().length > 0) ||
-          (d.imageCount || 0) > 0 ||
-          (d.imagePaths || []).length > 0,
-      ),
-    [drafts],
-  );
+  /* Tự động lưu nháp (như các module khác) — thay cho modal "Ở lại / Rời đi":
+   * bài sửa mà chưa bấm Lưu được ghi ngầm vào DB ở trạng thái DRAFT (vẫn hiện "Chưa lưu"),
+   * rời trang / tải lại vẫn còn nội dung. Bài đã Lưu (READY) không bị đụng tới. */
+  const draftsRef = useRef(drafts);
+  draftsRef.current = drafts;
+  const autosaveSigRef = useRef(new Map()); // uid → chữ ký nội dung đã có trong DB
+  const autosaveChainRef = useRef(Promise.resolve());
 
-  // Có nhập Khung Prompt AI
-  const hasPromptContent = Boolean(String(prompt || "").trim());
+  const draftSignature = (d) => JSON.stringify([d.content || "", normalizeImagePaths(d)]);
 
-  // Chỉ cảnh báo unsaved trên màn thiết lập Status đang hiện.
-  // Tab Story/Reels (Status ẩn) hoặc đã vào giám sát (nút Quay lại cấu hình) → không hiện modal.
-  const needsLeaveConfirm =
-    isActive && viewState === "config" && (hasDisplayedPosts || hasPromptContent);
-
-  useEffect(() => {
-    onHasPostsChange?.(needsLeaveConfirm);
-    return () => onHasPostsChange?.(false);
-  }, [needsLeaveConfirm, onHasPostsChange]);
-
-  const { setUnsavedChanges } = useUnsavedChanges();
-
-  // Màn giám sát / đăng xong (Quay lại cấu hình): tắt guard ngay, kể cả Status vẫn mounted ẩn
-  useEffect(() => {
-    if (viewState !== "running") return;
-    setUnsavedChanges(false);
-    onHasPostsChange?.(false);
-  }, [viewState, setUnsavedChanges, onHasPostsChange]);
-
-  // Option A: bấm "Rời đi" → bỏ trạng thái Đã lưu, lần sau phải Lưu lại
-  useEffect(() => {
-    if (!needsLeaveConfirm) {
-      setUnsavedChanges(false);
-      return;
+  const flushDraftAutosave = useCallback(() => {
+    const dirty = [];
+    for (const d of draftsRef.current) {
+      if (d.isSaved) continue;
+      const uid = String(d.accountUid || "");
+      if (!uid) continue;
+      const sig = draftSignature(d);
+      const isLocal = String(d.id || "").startsWith("local-");
+      const known = autosaveSigRef.current.get(uid);
+      if (known === undefined && !isLocal) {
+        // Bài nạp từ DB / AI vừa sinh (đã có trong DB) → chỉ ghi nhận mốc
+        autosaveSigRef.current.set(uid, sig);
+        continue;
+      }
+      if (known === sig) continue;
+      const hasBody = (d.content || "").trim() || normalizeImagePaths(d).length;
+      if (!hasBody) continue;
+      autosaveSigRef.current.set(uid, sig);
+      dirty.push(d);
     }
-    setUnsavedChanges(
-      true,
-      async () => {
-        const savedDrafts = drafts.filter(
-          (d) =>
-            d.isSaved &&
-            (((d.content || "").trim().length > 0) ||
-              (d.imageCount || 0) > 0 ||
-              (d.imagePaths || []).length > 0),
-        );
-
-        if (savedDrafts.length > 0) {
-          setDrafts((prev) =>
-            prev.map((d) => (d.isSaved ? { ...d, isSaved: false } : d)),
-          );
-        }
-
-        await Promise.all(
-          savedDrafts.map(async (d) => {
-            try {
-              const imgs = normalizeImagePaths(d);
-              await api.post("/api/post/drafts", {
-                id: d.id,
-                account_uid: String(d.accountUid),
-                account_name: d.authorName || "",
-                post_type: "status",
-                content: d.content || "",
-                image_path: imgs[0] || null,
-                image_paths: imgs,
-                status: "DRAFT",
-              });
-            } catch (err) {
-              console.warn("Không thể chuyển draft về DRAFT khi rời trang:", err);
+    if (!dirty.length) return autosaveChainRef.current;
+    autosaveChainRef.current = autosaveChainRef.current.then(() =>
+      Promise.all(
+        dirty.map(async (d) => {
+          const imgs = normalizeImagePaths(d);
+          const isLocal = String(d.id || "").startsWith("local-");
+          try {
+            const res = await api.post("/api/post/drafts", {
+              id: isLocal ? undefined : d.id,
+              account_uid: String(d.accountUid),
+              account_name: d.authorName || "",
+              post_type: "status",
+              content: d.content || "",
+              image_path: imgs[0] || null,
+              image_paths: imgs,
+              status: "DRAFT",
+            });
+            const newId = res?.data?.id ?? res?.id;
+            if (isLocal && newId) {
+              setDrafts((prev) => prev.map((x) => (String(x.id) === String(d.id) ? { ...x, id: newId } : x)));
             }
-          }),
-        );
-      },
-      STATUS_LEAVE_MESSAGE,
+          } catch (err) {
+            autosaveSigRef.current.delete(String(d.accountUid)); // lần sau thử lại
+            console.warn("Tự động lưu nháp lỗi:", err);
+          }
+        }),
+      ),
     );
-  }, [needsLeaveConfirm, drafts, setUnsavedChanges]);
+    return autosaveChainRef.current;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => () => setUnsavedChanges(false), [setUnsavedChanges]);
+  // Lưu ngầm sau khi ngừng gõ ~1 giây
+  useEffect(() => {
+    if (viewState !== "config") return undefined;
+    const t = setTimeout(flushDraftAutosave, 1000);
+    return () => clearTimeout(t);
+  }, [drafts, viewState, flushDraftAutosave]);
+
+  // Rời trang / đóng ứng dụng: lưu nốt phần đang gõ dở
+  useEffect(() => {
+    const onHide = () => flushDraftAutosave();
+    window.addEventListener("pagehide", onHide);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      flushDraftAutosave();
+    };
+  }, [flushDraftAutosave]);
 
   // Load Settings from /api/post/settings
   const loadSettingsFromDb = async () => {
@@ -628,6 +621,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
   };
 
   const checkActiveSessionOnMount = async () => {
+    setSyncing(true);
     try {
       const res = await api.get("/api/post/status");
       const d = res?.data ?? res;
@@ -635,8 +629,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
       if (d.post_type && d.post_type !== "status") return;
 
       setViewState("running");
-      setUnsavedChanges(false);
-      onHasPostsChange?.(false);
+      setSyncing(false); // đã biết phiên còn chạy → mở khoá ngay, phần còn lại nạp sau
       setIsPaused(!!d.is_paused);
       setIsStopped(!!d.is_stopped);
       if (d.metrics) setMetrics(d.metrics);
@@ -656,6 +649,8 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
       }
     } catch {
       // quiet error
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -1144,6 +1139,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
 
   // Lưu 1 bài viết
   const handleSaveDraftItem = async (accountUid, draftId, content, showAlert = true) => {
+    await autosaveChainRef.current.catch(() => {});
     const uidStr = String(accountUid);
     const currentDraft = drafts.find(
       (d) => String(d.accountUid) === uidStr || (draftId && String(d.id) === String(draftId))
@@ -1357,6 +1353,8 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
   };
 
   const startPostingFlow = (forceImmediate = false) => {
+    // Chưa đồng bộ xong phiên đang chạy → không cho tạo phiên mới (Engine sẽ báo lỗi vì phiên cũ còn chạy)
+    if (syncing) return;
     if (!validationStatus.ready) {
       toast.warning(validationStatus.reason, "CHƯA ĐỦ ĐIỀU KIỆN ĐĂNG");
       return;
@@ -1391,9 +1389,6 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
     handleSaveSettingsToDb();
     // Bước 5 UC-M03-07: Lập tức chuyển sang view running để khóa thao tác chỉnh sửa
     setViewState("running");
-    // Đang giám sát / sau đăng → tắt guard (nút Quay lại cấu hình)
-    setUnsavedChanges(false);
-    onHasPostsChange?.(false);
     setIsPaused(false);
     setIsStopped(false);
 
@@ -2062,17 +2057,17 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
                             <input
                               type="checkbox"
                               checked={acc.selected}
-                              disabled={step1Locked}
+                              // Gộp 2 điều kiện: trước đây khai báo disabled 2 lần, cái sau ghi đè → step1Locked bị bỏ qua
+                              disabled={step1Locked || !eligible}
                               onChange={(e) => {
                                 e.stopPropagation();
-                                if (eligible) {
+                                if (eligible && !step1Locked) {
                                   setAccounts((prev) =>
                                     prev.map((a) => (a.id === acc.id ? { ...a, selected: !a.selected } : a))
                                   );
                                 }
                               }}
-                              disabled={!eligible}
-                              className="w-4 h-4 rounded border-[#CBD5E1] accent-[#2563EB] cursor-pointer align-middle"
+                              className="w-4 h-4 rounded border-[#CBD5E1] accent-[#2563EB] cursor-pointer align-middle disabled:cursor-not-allowed"
                             />
                           </td>
                         )}
@@ -2678,17 +2673,22 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
                   <button
                     type="button"
                     onClick={handleStartPost}
-                    disabled={!validationStatus.ready}
-                    className={`w-full py-3.5 rounded-xl font-bold text-xs tracking-wider shadow-sm flex items-center justify-center gap-2 transition-all ${validationStatus.ready
+                    disabled={!validationStatus.ready || syncing}
+                    aria-busy={syncing}
+                    className={`w-full py-3.5 rounded-xl font-bold text-xs tracking-wider shadow-sm flex items-center justify-center gap-2 transition-all ${validationStatus.ready && !syncing
                       ? "bg-blue-600 hover:bg-blue-700 text-white cursor-pointer active:scale-[0.99] shadow-blue-500/20"
                       : "bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed opacity-80"
                       }`}
                   >
-                    <Play size={14} className={validationStatus.ready ? "fill-white" : "fill-slate-400"} />
-                    <span>ĐĂNG BÀI</span>
+                    {syncing ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Play size={14} className={validationStatus.ready ? "fill-white" : "fill-slate-400"} />
+                    )}
+                    <span>{syncing ? "ĐANG ĐỒNG BỘ PHIÊN ĐĂNG..." : "ĐĂNG BÀI"}</span>
                   </button>
 
-                  {!validationStatus.ready && (
+                  {!validationStatus.ready && !syncing && (
                     <p className="text-[11px] text-amber-600 font-medium text-center flex items-center justify-center gap-1.5 pt-0.5">
                       <Info size={13} />
                       <span>{validationStatus.reason}</span>
