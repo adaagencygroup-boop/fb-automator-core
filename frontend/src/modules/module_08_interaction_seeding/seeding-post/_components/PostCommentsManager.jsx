@@ -34,13 +34,22 @@ export default function PostCommentsManager({
     try {
       const text = await navigator.clipboard.readText();
       if (!text) {
-        toast.warning("Clipboard hiện đang trống.", "KHÔNG CÓ VĂN BẢN");
+        toast.warning("Clipboard hiện đang trống.", {
+          key: "module8-paste-comment-text",
+          title: "KHÔNG CÓ VĂN BẢN",
+        });
         return;
       }
       setBulkText((current) => (current ? `${current.replace(/\s+$/, "")}\n${text}` : text));
-      toast.success("Đã dán văn bản từ clipboard vào ô nhập.", "ĐÃ DÁN VĂN BẢN");
+      toast.success("Đã dán văn bản từ clipboard vào ô nhập.", {
+        key: "module8-paste-comment-text",
+        title: "ĐÃ DÁN VĂN BẢN",
+      });
     } catch {
-      toast.error("Không thể đọc clipboard. Hãy cấp quyền clipboard cho trình duyệt rồi thử lại.", "KHÔNG ĐỌC ĐƯỢC CLIPBOARD");
+      toast.error("Không thể đọc clipboard. Hãy cấp quyền clipboard cho trình duyệt rồi thử lại.", {
+        key: "module8-paste-comment-text",
+        title: "KHÔNG ĐỌC ĐƯỢC CLIPBOARD",
+      });
     }
   };
 

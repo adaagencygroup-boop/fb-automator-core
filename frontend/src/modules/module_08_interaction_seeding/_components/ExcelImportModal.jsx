@@ -231,10 +231,16 @@ export default function ExcelImportModal({
 
       const fileName = targetType === "COMMENT" ? "file_mau_binh_luan.xlsx" : "file_mau_seeding.xlsx";
       XLSX.writeFile(wb, fileName);
-      toast.success(`Đã tải file mẫu "${fileName}" thành công!`, "TẢI FILE THÀNH CÔNG");
+      toast.success(`Đã tải file mẫu "${fileName}" thành công!`, {
+        key: "module8-download-excel-sample",
+        title: "TẢI FILE THÀNH CÔNG",
+      });
     } catch (err) {
       console.error("Lỗi tạo file mẫu:", err);
-      toast.error("Không thể tải file mẫu. Vui lòng thử lại!", "LỖI TẢI FILE");
+      toast.error("Không thể tải file mẫu. Vui lòng thử lại!", {
+        key: "module8-download-excel-sample",
+        title: "LỖI TẢI FILE",
+      });
     }
   };
 
