@@ -1042,7 +1042,7 @@ export default function PageScannerFollowers() {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+          <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
             {/* Left — Danh mục Page mục tiêu */}
             <div className="flex flex-col rounded-xl border border-[#E2E8F0] bg-white p-4 shadow-sm lg:col-span-4">
               <div className="mb-3 flex items-center justify-between">
@@ -1062,7 +1062,7 @@ export default function PageScannerFollowers() {
                 />
               </div>
 
-              <div className="max-h-[440px] flex-1 space-y-2.5 overflow-y-auto pr-1">
+              <div className="max-h-[440px] space-y-2.5 overflow-y-auto pr-1">
                 {filteredLeftPages.length === 0 ? (
                   <p className="py-8 text-center text-xs text-[#94A3B8]">Chưa có page trong phiên</p>
                 ) : (
