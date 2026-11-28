@@ -718,7 +718,7 @@ export default function PostSourceFetcher({
                   type="button"
                   onClick={handlePickFirst}
                   disabled={busy || fetchBusy || !sourceKey || restoringSource || !visibleCount || !pickValid}
-                  className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs text-gray-700 hover:bg-slate-200 disabled:opacity-50"
+                  className="rounded-full border border-blue-600 bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:border-blue-700 hover:bg-blue-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-gray-400"
                 >
                   Chọn {pickValid ? fmt(pickN) : "N"} bài
                 </button>
