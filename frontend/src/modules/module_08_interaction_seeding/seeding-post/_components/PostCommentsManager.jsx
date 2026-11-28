@@ -22,6 +22,7 @@ export default function PostCommentsManager({
   const [bulkText, setBulkText] = useState("");
   const [isAddingBulk, setIsAddingBulk] = useState(false);
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
+  const commentActionsDisabled = isRunning || isAddingBulk;
 
   // Dialog states for deleting comments
   const [deleteComment, setDeleteComment] = useState({ isOpen: false, text: "", index: -1 });
@@ -31,6 +32,7 @@ export default function PostCommentsManager({
   const [isClearing, setIsClearing] = useState(false);
 
   const handlePasteClipboard = async () => {
+    if (commentActionsDisabled) return;
     try {
       const text = await navigator.clipboard.readText();
       if (!text) {
@@ -54,6 +56,7 @@ export default function PostCommentsManager({
   };
 
   const handleBulkAdd = async () => {
+    if (commentActionsDisabled) return;
     const lines = bulkText
       .split("\n")
       .map((l) => l.trim())
@@ -115,7 +118,7 @@ export default function PostCommentsManager({
             <button
               type="button"
               onClick={handlePasteClipboard}
-              disabled={isAddingBulk}
+              disabled={commentActionsDisabled}
               className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Clipboard className="size-3.5" aria-hidden="true" />
@@ -125,7 +128,7 @@ export default function PostCommentsManager({
               <button
                 type="button"
                 onClick={() => setIsExcelModalOpen(true)}
-                disabled={isAddingBulk}
+                disabled={commentActionsDisabled}
                 className="flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-gray-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <FileSpreadsheet className="size-3.5 text-emerald-600" aria-hidden="true" />
@@ -134,7 +137,7 @@ export default function PostCommentsManager({
               <button
                 type="button"
                 onClick={handleBulkAdd}
-                disabled={bulkText.trim().length === 0 || isAddingBulk}
+                disabled={commentActionsDisabled || bulkText.trim().length === 0}
                 className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-gray-400 disabled:shadow-none"
               >
                 {isAddingBulk ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Plus className="size-3.5" aria-hidden="true" />}
@@ -239,6 +242,7 @@ export default function PostCommentsManager({
           targetType="COMMENT"
           existingComments={comments}
           onImportComments={(newComments) => {
+            if (commentActionsDisabled) return;
             onAddBulkComments(newComments);
             toast.success(`Đã nhập thành công ${newComments.length} bình luận từ file Excel!`, "THÀNH CÔNG");
           }}

@@ -57,7 +57,6 @@ export default function ExcelImportModal({
 }) {
   const fileInputRef = useRef(null);
   const fileReadIdRef = useRef(0);
-  const isTargetImport = targetType === "POST" || targetType === "PROFILE" || targetType === "PAGE";
 
   // Compute default title and subtitle based on targetType
   const computedTitle =
@@ -524,10 +523,8 @@ export default function ExcelImportModal({
       setParsedTargets(validList);
       setDuplicateTargets(duplicateList);
       setInvalidTargets(invalidList);
-      if (isTargetImport) {
-        setShowPreview(Boolean(validList.length || duplicateList.length || invalidList.length));
-        setPreviewTab(validList.length ? "VALID" : duplicateList.length ? "DUPLICATE" : "INVALID");
-      }
+      setShowPreview(Boolean(validList.length || duplicateList.length || invalidList.length));
+      setPreviewTab(validList.length ? "VALID" : duplicateList.length ? "DUPLICATE" : "INVALID");
       setProgress(100);
       setIsAnalyzing(false);
       setIsCompleted(true);
@@ -540,7 +537,7 @@ export default function ExcelImportModal({
       setIsAnalyzing(false);
       setProgress(0);
     }
-  }, [targetType, allDbTargets, existingComments, existingTargets, isTargetImport]);
+  }, [targetType, allDbTargets, existingComments, existingTargets]);
 
   const handleFileChange = (e) => {
     const selected = e.target.files?.[0];
@@ -729,13 +726,13 @@ export default function ExcelImportModal({
           </div>
 
           {/* Uploaded Dataset Section or Dropzone */}
-          {isTargetImport && isAnalyzing ? (
+          {isAnalyzing ? (
             <div
               role="status"
               className="flex min-h-48 flex-col items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-6 text-center"
             >
               <Loader2 aria-hidden="true" className="size-7 animate-spin text-blue-600 motion-reduce:animate-none" />
-              <p className="text-sm font-semibold text-slate-800">Đang đọc và kiểm tra file Excel…</p>
+              <p className="text-sm font-semibold text-slate-800">Đang đọc và kiểm tra tệp…</p>
               <p className="max-w-full break-all text-xs text-slate-500">{file?.name}</p>
             </div>
           ) : file && fileStats ? (
@@ -751,11 +748,6 @@ export default function ExcelImportModal({
                   <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-xs text-emerald-700 font-semibold">
                     <span className="w-2 h-2 rounded-full bg-emerald-600 inline-block"></span>
                     Đã tải & phân tích xong 100%
-                  </div>
-                ) : isAnalyzing ? (
-                  <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 border border-blue-200 text-xs text-blue-700 font-semibold">
-                    <span className="w-2 h-2 rounded-full bg-blue-600 animate-ping inline-block"></span>
-                    Đang phân tích {progress}%
                   </div>
                 ) : null}
               </div>
@@ -1249,7 +1241,7 @@ export default function ExcelImportModal({
           {/* Footer Actions */}
           <div className="flex items-center justify-between pt-3 border-t border-slate-100">
             <div className="text-xs text-slate-500 flex items-center gap-2">
-              {isTargetImport && isAnalyzing ? null : parsedTargets.length > 0 ? (
+              {isAnalyzing ? null : parsedTargets.length > 0 ? (
                 <>
                   <span className="flex items-center gap-1.5 text-emerald-700 font-semibold">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600" />
