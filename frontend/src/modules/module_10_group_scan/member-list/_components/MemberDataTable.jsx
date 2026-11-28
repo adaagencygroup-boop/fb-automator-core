@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useCallback } from "react";
 import { ExternalLink, Loader2, Trash2 } from "lucide-react";
 import Pagination from "@/components/ui/pagination";
 import useRowMultiSelect from "../../components/useRowMultiSelect";
@@ -20,6 +20,10 @@ export default function MemberDataTable({
   pageSize = 10,
   onPageChange,
   onSelectRows,
+  // Tiêu đề cột dính ngay dưới phần đầu khung (useStickyListHead) khi bảng vừa khung — giống Danh sách page
+  stickyTop = 0,
+  tableFits = false,
+  tableBoxRef,
 }) {
   // Giữ chuột kéo = chọn nhiều thành viên liên tiếp · Ctrl + click = chọn riêng lẻ · Shift + click = cả khoảng.
   const { setContainer, rowProps } = useRowMultiSelect({
@@ -27,6 +31,13 @@ export default function MemberDataTable({
     selected: selectedMemberIds,
     onChange: onSelectRows || (() => {}),
   });
+  const setBox = useCallback(
+    (el) => {
+      if (onSelectRows) setContainer(el);
+      tableBoxRef?.(el);
+    },
+    [onSelectRows, setContainer, tableBoxRef],
+  );
 
   return (
     <>
@@ -37,9 +48,11 @@ export default function MemberDataTable({
         </p>
       )}
       {/* Member Data Table */}
-      <div ref={onSelectRows ? setContainer : undefined} className="w-full border border-[#E2E8F0] rounded-lg overflow-x-auto">
+      <div ref={setBox} className={`w-full border border-[#E2E8F0] rounded-lg ${tableFits ? "overflow-visible" : "overflow-x-auto"}`}>
         <table className="w-full min-w-[650px] text-left text-xs">
-          <thead className="bg-[#F8FAFC]/80 text-xs font-semibold uppercase tracking-[0.3px] [&_th]:font-semibold text-[#475569] border-b border-[#E2E8F0]">
+          <thead
+            style={tableFits ? { top: stickyTop } : undefined}
+            className={`${tableFits ? "sticky z-20 " : ""}bg-[#F8FAFC] shadow-[0_1px_0_0_#E2E8F0] text-xs font-semibold uppercase tracking-[0.3px] [&_th]:font-semibold text-[#475569] border-b border-[#E2E8F0]`}>
             <tr>
               <th className="py-2.5 px-3 text-center w-10">
                 <input
