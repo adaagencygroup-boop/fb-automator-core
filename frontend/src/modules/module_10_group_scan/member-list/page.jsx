@@ -18,6 +18,7 @@ import CreateCategoryModal from "./_components/CreateCategoryModal";
 import { downloadTable, memberExportTable, safeFileName } from "../utils/exportTable";
 import ModulePageHeader from "../components/ModulePageHeader";
 import ConfirmDialog from "@/components/ui/confirm-dialog";
+import useStickyListHead, { STUCK_COVER } from "@/components/useStickyListHead";
 
 
 export default function GroupScanMemberListPage() {
@@ -43,6 +44,8 @@ export default function GroupScanMemberListPage() {
   const requestSeq = useRef(0); // chỉ áp kết quả của lần gọi mới nhất
   const [selectedMemberIds, setSelectedMemberIds] = useState(new Set());
   const [currentPage, setCurrentPage] = useState(1);
+  // Phần đầu khung phải (tiêu đề, nút, tìm kiếm, thanh chọn) + tiêu đề cột dính khi cuộn — giống Danh sách page (Module 11)
+  const { headRef, setTableBox, headHeight, headStuck, tableFits } = useStickyListHead();
   const pageSize = 15;
 
   const loadCategories = useCallback(async () => {
@@ -289,6 +292,8 @@ export default function GroupScanMemberListPage() {
         />
 
         <section className="min-w-0 flex-1 rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+        {/* Phần đầu dính khi cuộn: thanh tiêu đề + thanh công cụ (không overflow-hidden ở khung để sticky chạy được) */}
+        <div ref={headRef} className={`sticky top-0 z-30 rounded-t-xl bg-white ${headStuck ? STUCK_COVER : ""}`}>
         {/* Card Header Bar */}
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-t-xl border-b border-[#F1F5F9] px-5 py-4 bg-[#F8FAFC]/50">
           <div className="flex items-center gap-2.5">
@@ -323,8 +328,7 @@ export default function GroupScanMemberListPage() {
           </div>
         </div>
 
-          {/* Right Detail And Table Column */}
-          <div className="p-5 flex flex-col gap-3.5 min-w-0">
+          <div className="px-5 pt-4 pb-1">
             <MemberTableToolbar
               currentCategory={currentCategory}
               memberSearch={memberSearch}
@@ -338,8 +342,16 @@ export default function GroupScanMemberListPage() {
               onBulkDelete={handleBulkDelete}
               canExportGroup={totalCount > 0 && !loading}
             />
+          </div>
+        </div>
+
+          {/* Right Detail And Table Column */}
+          <div className="px-5 pb-5 pt-2 flex flex-col gap-3.5 min-w-0">
 
             <MemberDataTable
+              stickyTop={headHeight}
+              tableFits={tableFits}
+              tableBoxRef={setTableBox}
               members={members}
               loading={loading}
               selectedMemberIds={selectedMemberIds}

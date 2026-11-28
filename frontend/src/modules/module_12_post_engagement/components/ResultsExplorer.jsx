@@ -11,6 +11,7 @@ import { deletePosts, listEngagements, listPosts } from "../service";
 import useRowMultiSelect from "./useRowMultiSelect";
 import ExportModal from "./ExportModal";
 import { ReactionIcon, TierBadge, TierLegend, tierReason } from "./TierBadge";
+import useStickyListHead, { STUCK_COVER } from "@/components/useStickyListHead";
 
 const SOURCE_OPTIONS = [
   { value: "all", label: "Lọc: Tất cả nguồn" },
@@ -151,6 +152,21 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
   const [selected, setSelected] = useState(() => new Set());
   const rowCache = useRef(new Map());
   const [exportOpen, setExportOpen] = useState(false);
+  // Phần đầu khung phải (tiêu đề + nút xuất) dính khi cuộn trang — giống Danh sách page (Module 11)
+  const { headRef, headStuck, headHeight } = useStickyListHead();
+  // Chiều cao 2 thẻ chú thích Mức 1 / Mức 2 dưới bảng — trừ vào chiều cao bảng để cuộn hết trang đầu bảng không bị
+  // phần dính che (nội dung dưới bảng đẩy bảng lên)
+  const legendRef = useRef(null);
+  const [legendHeight, setLegendHeight] = useState(0);
+  useEffect(() => {
+    const el = legendRef.current;
+    if (!el) return undefined;
+    const update = () => setLegendHeight(el.offsetHeight);
+    update();
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(update) : null;
+    ro?.observe(el);
+    return () => ro?.disconnect();
+  }, []);
 
   const debSearch = useDebounced(search);
   const debQuery = useDebounced(query);
@@ -267,6 +283,17 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
   useEffect(() => {
     if (tableBoxRef.current) tableBoxRef.current.scrollTop = 0;
   }, [page, pageSize, tab, selectedKey]);
+  // Bảng cuộn về đầu mà đầu bảng đang nằm dưới phần dính (trang đã cuộn quá) → trượt trang lên cho lộ dòng đầu.
+  // (Lăn chuột tiếp ở đầu bảng thì trang tự cuộn theo — khung bảng không chặn cuộn tràn.)
+  const revealTableTop = useCallback((event) => {
+    const box = event.currentTarget;
+    if (box.scrollTop > 0) return;
+    const head = headRef.current;
+    const main = box.closest("main");
+    if (!head || !main) return;
+    const hidden = head.getBoundingClientRect().bottom - box.getBoundingClientRect().top;
+    if (hidden > 1) main.scrollBy({ top: -(hidden + 8), behavior: "smooth" });
+  }, [headRef]);
   const allOnPage = data.rows.length > 0 && data.rows.every((r) => selected.has(r.id));
   const someOnPage = !allOnPage && data.rows.some((r) => selected.has(r.id));
   const toggleAllOnPage = () => {
@@ -301,7 +328,7 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
 
   return (
     // Hai khung riêng (giống Danh sách page Module 11): danh mục bài viết bên trái + chi tiết bài bên phải
-    <section className="grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)] lg:items-start">
+    <section className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)] lg:items-start">
         {/* ---------------- Khung trái: danh mục bài viết ----------------
             Giống Danh sách page (Module 11): khung riêng, màn rộng thì DÍNH khi cuộn trang, cao cố định,
             danh sách bài cuộn bên trong. */}
@@ -357,7 +384,12 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
 
         {/* ---------------- Khung phải: tiêu đề + nút xuất file + chi tiết bài đang chọn ---------------- */}
         <div className="min-w-0 space-y-4 rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] pb-4">
+          {/* Chỉ THANH TIÊU ĐỀ (tiêu đề + nút xuất) dính khi cuộn trang; thông tin bài, thẻ số liệu, tab cuộn đi bình
+              thường để bảng người dùng đủ cao */}
+          <div
+            ref={headRef}
+            className={`sticky top-0 z-30 -mx-6 -mt-6 flex flex-wrap items-center justify-between gap-3 rounded-t-2xl border-b border-[#F1F5F9] bg-white px-6 pb-3 pt-6 ${headStuck ? STUCK_COVER : ""}`}
+          >
             <h2 className={`font-bold uppercase tracking-tight text-[#0F172A] ${headerSize === "lg" ? "text-xl" : "text-sm"}`}>{title}</h2>
             <button
               type="button"
@@ -370,29 +402,27 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
             </button>
           </div>
           {post ? (
-            <div className="rounded-xl border border-[#E2E8F0] bg-white px-5 py-4">
-              <p className="line-clamp-2 break-words text-[15px] font-bold text-[#0F172A]" title={post.content}>
+            <div className="min-w-0 rounded-xl border border-[#E2E8F0] bg-white px-4 py-2.5">
+              <p className="truncate text-[14px] font-bold text-[#0F172A]" title={post.content}>
                 {post.content || "(Bài viết không có nội dung chữ)"}
               </p>
-              <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-[#64748B]">
-                <span>
+              <p className="mt-0.5 flex min-w-0 items-center gap-x-2 text-[12px] text-[#64748B]">
+                <span className="min-w-0 truncate">
                   Nguồn: {SOURCE_TEXT[post.source_type] || "—"} <span className="text-[#334155]">“{post.source_name || "—"}”</span>
+                  {post.posted_at && <> • Đăng: {post.posted_at}</>}
+                  {post.scanned_at && <> • Quét: {post.scanned_at}</>}
                 </span>
-                {post.posted_at && <span>• Đăng: {post.posted_at}</span>}
-                {post.scanned_at && <span>• Quét: {post.scanned_at}</span>}
+                <a href={post.post_url} target="_blank" rel="noreferrer" title={post.post_url}
+                  className="ml-auto inline-flex shrink-0 items-center gap-1 text-[#2563EB] hover:underline">
+                  Mở bài <ExternalLink className="size-3.5" />
+                </a>
               </p>
-              <a href={post.post_url} target="_blank" rel="noreferrer"
-                className="mt-1 inline-flex max-w-full items-center gap-1 truncate text-[13px] text-[#2563EB] hover:underline">
-                <span className="truncate">{post.post_url.replace(/^https?:\/\/(www\.)?facebook\.com/, "fb.com")}</span>
-                <ExternalLink className="size-3.5 shrink-0" />
-              </a>
             </div>
           ) : (
-            <div className="rounded-xl border border-dashed border-slate-200 px-5 py-10 text-center text-[13px] text-slate-400">
+            <div className="rounded-xl border border-dashed border-slate-200 px-5 py-4 text-center text-[13px] text-slate-400">
               Chọn một bài viết ở cột trái để xem tài khoản đã tương tác.
             </div>
           )}
-
           <div className="grid gap-3 sm:grid-cols-3">
             {[
               // Like / Bình luận: số đã quét (khớp số dòng của bảng) kèm tổng Facebook của bài
@@ -402,9 +432,9 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
             ].map((k) =>
               // Thẻ chia sẻ chỉ hiện tổng số: không có tab danh sách để mở
               k.info ? (
-                <div key={k.id} className="rounded-xl border border-[#E2E8F0] bg-white px-5 py-4 text-left">
+                <div key={k.id} className="rounded-xl border border-[#E2E8F0] bg-white px-5 py-3 text-left">
                   <p className="text-[13px] font-semibold uppercase text-[#475569]">{k.label}</p>
-                  <p className="mt-1 text-3xl font-bold tabular-nums text-[#0F172A]">{nf(k.value)}</p>
+                  <p className="mt-0.5 text-2xl font-bold tabular-nums text-[#0F172A]">{nf(k.value)}</p>
                   <p className="mt-0.5 text-[11px] text-slate-400">{k.hint}</p>
                 </div>
               ) : (
@@ -412,12 +442,12 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
                   key={k.id}
                   type="button"
                   onClick={() => setTab(k.id)}
-                  className={`rounded-xl border bg-white px-5 py-4 text-left transition-all ${
+                  className={`rounded-xl border bg-white px-5 py-3 text-left transition-all ${
                     tab === k.id ? "border-[#2563EB] shadow-[0_0_0_1px_#2563EB]" : "border-[#E2E8F0] hover:border-slate-300"
                   }`}
                 >
                   <p className={`text-[13px] font-semibold uppercase ${tab === k.id ? "text-[#2563EB]" : "text-[#475569]"}`}>{k.label}</p>
-                  <p className={`mt-1 text-3xl font-bold tabular-nums ${tab === k.id ? "text-[#2563EB]" : "text-[#0F172A]"}`}>{nf(k.value)}</p>
+                  <p className={`mt-0.5 text-2xl font-bold tabular-nums ${tab === k.id ? "text-[#2563EB]" : "text-[#0F172A]"}`}>{nf(k.value)}</p>
                   {post && <p className="mt-0.5 text-[11px] text-slate-400">{k.hint}</p>}
                 </button>
               ),
@@ -460,8 +490,13 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
           )}
           {/* Khung viền: phần trên = bảng cuộn (tiêu đề cột dính), phần dưới = thanh phân trang CỐ ĐỊNH (không cuộn theo bảng) */}
           {/* Không overflow-hidden ở khung ngoài: menu "20 / trang" mở lên trên không bị cắt khi bảng ít dòng */}
-          <div className="flex max-h-[640px] flex-col rounded-xl border border-[#E2E8F0]">
-          <div ref={setTableBox} className="min-h-0 flex-1 overflow-auto overscroll-contain rounded-t-xl">
+          {/* Cao = VỪA KHÍT phần màn hình còn lại dưới phần dính (thanh đầu app 70px + khe 24px + khoảng cách 16px + lề
+              đáy khung / trang ≈ 160px, cộng 2 thẻ chú thích Mức dưới bảng; ≤ 720px) → cuộn hết trang đầu bảng không bị che */}
+          <div
+            className="flex flex-col rounded-xl border border-[#E2E8F0]"
+            style={{ maxHeight: `clamp(360px, calc(100vh - ${headHeight + 160 + (legendHeight ? legendHeight + 16 : 0)}px), 720px)` }}
+          >
+          <div ref={setTableBox} onScroll={revealTableTop} className="min-h-0 flex-1 overflow-auto rounded-t-xl">
             <table className={`w-full text-left text-[13px] ${tab === "comment" ? "min-w-[860px]" : "min-w-[680px]"}`}>
               <thead className="sticky top-0 z-10 border-b border-[#E2E8F0] bg-[#F8FAFC] text-[11px] font-bold uppercase text-[#475569] shadow-[0_1px_0_0_#E2E8F0]">
                 <tr>
@@ -504,7 +539,7 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
                     return (
                       <tr key={r.id} {...rowProps(r, i)}
                         className={`cursor-pointer select-none transition-colors ${checked ? "bg-[#EFF6FF]" : "hover:bg-slate-50/70"}`}>
-                        <td className="px-3 py-3 text-center" data-no-row-selection>
+                        <td className="px-3 py-2 text-center" data-no-row-selection>
                           <input type="checkbox" checked={checked} onChange={() => {
                             const next = new Set(selected);
                             if (next.has(r.id)) next.delete(r.id);
@@ -512,8 +547,8 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
                             setSelected(next);
                           }} className="size-4 cursor-pointer accent-[#2563EB]" />
                         </td>
-                        <td className="px-2 py-3 font-mono text-xs text-[#94A3B8]">{String(from + i).padStart(2, "0")}</td>
-                        <td className="px-3 py-3">
+                        <td className="px-2 py-2 font-mono text-xs text-[#94A3B8]">{String(from + i).padStart(2, "0")}</td>
+                        <td className="px-3 py-2">
                           <div className="flex items-center gap-2.5">
                             <Avatar url={r.avatar_url} name={r.name} />
                             <span className="min-w-0">
@@ -523,28 +558,26 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
                             {tab === "like" && <ReactionIcon type={r.reaction} />}
                           </div>
                         </td>
-                        <td className="px-3 py-3">
+                        <td className="px-3 py-2">
                           <a href={r.profile_url} target="_blank" rel="noreferrer" data-no-row-selection title={r.profile_url}
                             className="inline-flex items-center gap-1 font-mono text-xs text-[#2563EB] hover:underline">
                             fb.com/{r.uid.length > 12 ? `${r.uid.slice(0, 11)}…` : r.uid}
                             <ExternalLink className="size-3" />
                           </a>
                         </td>
-                        <td className="whitespace-nowrap px-3 py-3 font-mono text-xs leading-5 text-[#64748B]">
+                        <td className="whitespace-nowrap px-3 py-2 font-mono text-xs leading-5 text-[#64748B]">
                           {d ? (
                             <>
-                              {d.slice(0, 5)}
-                              <br />
-                              <span className="text-[#94A3B8]">{t || ""}</span>
+                              {d.slice(0, 5)} <span className="text-[#94A3B8]">{t || ""}</span>
                             </>
                           ) : "—"}
                         </td>
                         {tab === "comment" && (
-                          <td className="max-w-[360px] px-3 py-3 text-[13px] leading-5 text-[#475569]">
+                          <td className="max-w-[360px] px-3 py-2 text-[13px] leading-5 text-[#475569]">
                             <span className="line-clamp-3 break-words" title={r.text}>{r.text || "—"}</span>
                           </td>
                         )}
-                        <td className="px-3 py-3 text-center">
+                        <td className="px-3 py-2 text-center">
                           <TierBadge tier={r.tier} title={tierReason(r)} />
                         </td>
                       </tr>
@@ -567,7 +600,10 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
             </div>
           </div>
 
-          <TierLegend />
+          <div ref={legendRef}>
+            <TierLegend />
+          </div>
+
         </div>
 
       <ExportModal

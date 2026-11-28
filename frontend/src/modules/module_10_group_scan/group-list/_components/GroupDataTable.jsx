@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback } from "react";
 import { Copy, ExternalLink, Loader2, Trash2 } from "lucide-react";
 import Pagination from "@/components/ui/pagination";
 import CustomSelect from "@/components/ui/custom-select";
@@ -32,6 +33,10 @@ export default function GroupDataTable({
   onCopyLink,
   allGroups,
   onSelectRows,
+  // Tiêu đề cột dính ngay dưới phần đầu khung (useStickyListHead) khi bảng vừa khung — giống Danh sách page
+  stickyTop = 0,
+  tableFits = false,
+  tableBoxRef,
 }) {
   // Giữ chuột kéo = chọn nhiều nhóm liên tiếp · Ctrl + click = chọn riêng lẻ · Shift + click = chọn cả khoảng.
   const { setContainer, rowProps } = useRowMultiSelect({
@@ -40,6 +45,13 @@ export default function GroupDataTable({
     selected: selectedIds,
     onChange: onSelectRows || (() => {}),
   });
+  const setBox = useCallback(
+    (el) => {
+      if (onSelectRows) setContainer(el);
+      tableBoxRef?.(el);
+    },
+    [onSelectRows, setContainer, tableBoxRef],
+  );
 
   return (
     <>
@@ -50,10 +62,10 @@ export default function GroupDataTable({
         </p>
       )}
       {/* Data Table */}
-      <div ref={onSelectRows ? setContainer : undefined} className="border border-[#E2E8F0] rounded-lg overflow-x-auto">
+      <div ref={setBox} className={`border border-[#E2E8F0] rounded-lg ${tableFits ? "overflow-visible" : "overflow-x-auto"}`}>
         <table className="w-full text-left border-collapse min-w-[760px]">
-          <thead>
-            <tr className="bg-[#F8FAFC]/80 border-b border-[#E2E8F0] h-[48px]">
+          <thead className={tableFits ? "sticky z-20" : ""} style={tableFits ? { top: stickyTop } : undefined}>
+            <tr className="bg-[#F8FAFC] border-b border-[#E2E8F0] h-[48px] shadow-[0_1px_0_0_#E2E8F0]">
               <th className="w-10 px-3 py-2 text-center">
                 <input
                   type="checkbox"

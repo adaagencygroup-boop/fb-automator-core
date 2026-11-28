@@ -16,6 +16,7 @@ import GroupStatsOverview from "./_components/GroupStatsOverview";
 import GroupTableToolbar from "./_components/GroupTableToolbar";
 import GroupDataTable from "./_components/GroupDataTable";
 import GroupListModals from "./_components/GroupListModals";
+import useStickyListHead, { STUCK_COVER } from "@/components/useStickyListHead";
 import { downloadTable, groupExportTable, safeFileName } from "../utils/exportTable";
 import ModulePageHeader from "../components/ModulePageHeader";
 import { groupInCategory, groupMembersCount, matchesGroupSearch, matchesMembersFilter } from "../utils/groupCategory";
@@ -49,6 +50,8 @@ export default function GroupScanListPage() {
 
   // Phân trang
   const [page, setPage] = useState(1);
+  // Phần đầu khung phải (tiêu đề, nút, tìm / lọc) + tiêu đề cột dính khi cuộn trang — giống Danh sách page (Module 11)
+  const { headRef, setTableBox, headHeight, headStuck, tableFits } = useStickyListHead();
   const [pageSize, setPageSize] = useState(8);
 
   // Modals state
@@ -449,8 +452,12 @@ export default function GroupScanListPage() {
           onToggleMenu={handleToggleMenu}
         />
 
-        {/* RIGHT COLUMN: DETAIL SECTION */}
+        {/* RIGHT COLUMN: DETAIL SECTION (không overflow-hidden: sẽ chặn sticky của phần đầu) */}
         <div className="flex-1 w-full bg-white border border-[#E2E8F0] shadow-sm rounded-xl p-6 flex flex-col gap-4 min-w-0">
+          <div
+            ref={headRef}
+            className={`sticky top-0 z-30 -mx-6 -mt-6 rounded-t-xl bg-white px-6 pb-3 pt-6 ${headStuck ? STUCK_COVER : ""}`}
+          >
           <GroupTableToolbar
             activeCategory={activeCategory}
             loading={loading}
@@ -488,9 +495,16 @@ export default function GroupScanListPage() {
             onExport={handleExport}
           />
 
-          <GroupStatsOverview stats={stats} />
+            {/* Thẻ thống kê cũng dính cùng phần đầu (user yêu cầu luôn thấy số liệu khi cuộn bảng) */}
+            <div className="pt-4">
+              <GroupStatsOverview stats={stats} />
+            </div>
+          </div>
 
           <GroupDataTable
+            stickyTop={headHeight}
+            tableFits={tableFits}
+            tableBoxRef={setTableBox}
             loading={loading}
             paginatedGroups={paginatedGroups}
             allCurrentPageSelected={allFilteredSelected}
