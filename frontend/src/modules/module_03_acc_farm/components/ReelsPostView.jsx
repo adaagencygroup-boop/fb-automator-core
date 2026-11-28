@@ -89,6 +89,8 @@ export function ReelsPostView({ mode, initialState = "config" }) {
   const [previewPostId, setPreviewPostId] = useState(null);
   const [logs, setLogs] = useState([]);
   const [isPaused, setIsPaused] = useState(false);
+  // BE đã đứng yên hẳn (lưu checkpoint xong) sau khi Tạm dừng → mới cho bấm Tiếp tục
+  const [pauseSettled, setPauseSettled] = useState(true);
   const [isStopped, setIsStopped] = useState(false);
   const [showEmergencyModal, setShowEmergencyModal] = useState(false);
   const [showPastScheduleModal, setShowPastScheduleModal] = useState(false);
@@ -393,6 +395,7 @@ export function ReelsPostView({ mode, initialState = "config" }) {
       setViewState("running");
       setSyncing(false); // đã biết phiên còn chạy → mở khoá ngay, phần còn lại nạp sau
       setIsPaused(!!d.is_paused);
+      setPauseSettled(!d.is_paused || d.pause_settled !== false);
       setIsStopped(!!d.is_stopped);
       if (d.metrics) setMetrics(d.metrics);
       if (Array.isArray(d.recent_logs) && d.recent_logs.length > 0) {
@@ -709,6 +712,8 @@ export function ReelsPostView({ mode, initialState = "config" }) {
       try {
         const res = await api.get("/api/post/status");
         const d = res?.data ?? res;
+        // Phiên của loại bài khác (Reels ↔ Story) → không đổ vào màn này
+        if (d && d.post_type && d.post_type !== mode) return;
         if (d) {
           if (d.metrics) setMetrics(d.metrics);
           if (Array.isArray(d.threads) && d.threads.length > 0) {
@@ -716,6 +721,7 @@ export function ReelsPostView({ mode, initialState = "config" }) {
           }
           if (Array.isArray(d.recent_logs) && d.recent_logs.length > 0) setLogs(d.recent_logs);
           if (d.is_paused !== undefined) setIsPaused(d.is_paused);
+          if (d.pause_settled !== undefined) setPauseSettled(!d.is_paused || !!d.pause_settled);
           if (d.session_finished) {
             setIsStopped(false);
             setThreadRows((prev) => {
@@ -978,8 +984,10 @@ export function ReelsPostView({ mode, initialState = "config" }) {
   };
 
   const handleTogglePause = async () => {
+    if (isPaused && !pauseSettled) return; // đang chờ luồng lưu checkpoint
     if (!isPaused) {
       setIsPaused(true);
+      setPauseSettled(false);
       setMetrics((prev) => ({ ...prev, paused: prev.running || 1, running: 0 }));
       setThreadRows((prev) =>
         prev.map((r) => ({ ...r, status: "Tạm dừng", currentActivity: "Đã tạm dừng theo yêu cầu" }))
@@ -1749,7 +1757,7 @@ export function ReelsPostView({ mode, initialState = "config" }) {
           <div className="flex items-center gap-3">
             {!(
               isStopped ||
-              (metrics.running === 0 &&
+              (metrics.running === 0 && !isPaused && (metrics.paused || 0) === 0 &&
                 metrics.waiting === 0 &&
                 metrics.completed + metrics.systemError + metrics.deadAccount + metrics.stopped > 0)
             ) ? (
@@ -1757,13 +1765,20 @@ export function ReelsPostView({ mode, initialState = "config" }) {
                 <button
                   type="button"
                   onClick={handleTogglePause}
-                  className={`flex-1 py-3 px-6 rounded-2xl border text-xs font-bold tracking-wider flex items-center justify-center gap-2 shadow-2xs cursor-pointer transition-all active:scale-[0.99] ${
+                  disabled={isPaused && !pauseSettled}
+                  title={isPaused && !pauseSettled ? "Đang chờ luồng lưu checkpoint — xong sẽ mở nút Tiếp tục" : undefined}
+                  className={`flex-1 py-3 px-6 rounded-2xl border text-xs font-bold tracking-wider flex items-center justify-center gap-2 shadow-2xs cursor-pointer transition-all active:scale-[0.99] disabled:cursor-wait disabled:opacity-70 disabled:active:scale-100 ${
                     isPaused
                       ? "bg-rose-700 border-rose-700 text-white hover:bg-rose-800"
                       : "bg-[#f8f9ff] border-[#be123c] text-[#881337] hover:bg-rose-50/60"
                   }`}
                 >
-                  {isPaused ? (
+                  {isPaused && !pauseSettled ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin text-white" />
+                      <span>ĐANG LƯU CHECKPOINT…</span>
+                    </>
+                  ) : isPaused ? (
                     <>
                       <Play size={14} className="fill-white text-white" />
                       <span>TIẾP TỤC CHẠY</span>
@@ -1938,7 +1953,7 @@ export function ReelsPostView({ mode, initialState = "config" }) {
                         </td>
                       )}
                       <td className="py-2.5 px-4">
-                        <ProgressActivityCell row={row} />
+                        <ProgressActivityCell row={row} postType={isReels ? "reels" : "story"} />
                       </td>
                       <td className="py-2.5 px-4 font-mono text-slate-600 text-xs">
                         {row.elapsedTime}

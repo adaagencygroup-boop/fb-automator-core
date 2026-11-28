@@ -2707,7 +2707,7 @@ export function StatusPostView({ initialState = "config", isActive = true }) {
           <div className="flex items-center gap-3">
             {!(
               isStopped ||
-              (metrics.running === 0 &&
+              (metrics.running === 0 && !isPaused && (metrics.paused || 0) === 0 &&
                 metrics.waiting === 0 &&
                 metrics.completed + metrics.systemError + metrics.deadAccount + metrics.stopped > 0)
             ) ? (

@@ -386,10 +386,14 @@ class TestHashtagDetailSync(unittest.TestCase):
         }
 
         driver = MagicMock()
-        driver.execute_script.side_effect = [
-            {"has": False, "any": True, "headings": ["details", "links"], "clicked": False},
-            {"header_text": main_header, "links": main_links, "panel_items": main_panel},
-        ]
+
+        def fake_exec(script, *_args):
+            # Panel state JS (poll nhiều lần) / header JS (bọc JSON) — trả theo loại script, không theo số lần gọi
+            if "doClick" in script:
+                return {"has": False, "any": True, "headings": ["details", "links"], "clicked": False}
+            return {"header_text": main_header, "links": main_links, "panel_items": main_panel}
+
+        driver.execute_script.side_effect = fake_exec
 
         def fake_read_about(_drv, url, _ev):
             if "directory_contact_info" in url:

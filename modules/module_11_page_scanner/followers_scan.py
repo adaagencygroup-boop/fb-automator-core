@@ -60,6 +60,7 @@ def _format_follow_reason_vi(reason: Optional[str]) -> str:
         REASON_CHECKPOINT: "tài khoản gặp yêu cầu xác minh (checkpoint) hoặc bị đăng xuất",
         "extract_empty": "không đọc được thêm người theo dõi mới",
         "scroll_stuck": "danh sách không thể cuộn thêm",
+        "fb_list_error": "Facebook báo lỗi tải danh sách",
         "all_duplicates": "các người theo dõi hiển thị đều đã có trong kho",
         REASON_LIST_EXHAUSTED: "đã quét hết danh sách hiển thị",
     }.get(raw, "không đọc được danh sách người theo dõi")
@@ -440,6 +441,97 @@ const none = pageState();
 return Object.assign(result || { changed: false, target: order[0], before: none, after: none },
                      { tried, in_dialog: inDialog });
 """
+
+# Khi danh sách đứng yên ở đáy: cuộn ngược lên rồi xuống tận đáy để Facebook bắn lại lượt tải thêm.
+# arguments[0] = "up" | "down". Trả {loading, has_box, top, height}.
+_NUDGE_LIST_JS = _SCROLL_DIALOG_JS.split("const inDialog")[0] + r"""
+const isScroller = (el) => el && /^(auto|scroll|overlay)$/.test(getComputedStyle(el).overflowY)
+  && el.scrollHeight > el.clientHeight + 40;
+const links = Array.from(root.querySelectorAll('a[href]'));
+const last = links[links.length - 1];
+let box = last ? last.parentElement : null;
+while (box && !isScroller(box)) box = box.parentElement;
+const pageEl = document.scrollingElement || document.documentElement;
+const tgt = box && box !== pageEl && box !== document.body ? box : null;
+if (arguments[0] === 'up') {
+  const n = Math.floor((tgt ? tgt.clientHeight : window.innerHeight) * 1.5);
+  if (tgt) tgt.scrollBy({ top: -n, behavior: 'instant' });
+  else window.scrollBy({ top: -n, behavior: 'instant' });
+} else {
+  if (tgt) tgt.scrollTop = tgt.scrollHeight;
+  window.scrollTo({ top: pageEl.scrollHeight, behavior: 'instant' });
+  if (last) last.scrollIntoView({ block: 'end', behavior: 'instant' });
+}
+const loading = !!(root.querySelector('[role="progressbar"], [aria-busy="true"]'));
+const el = tgt || pageEl;
+return { loading, has_box: !!tgt, top: Math.round(el.scrollTop || window.scrollY || 0), height: el.scrollHeight };
+"""
+
+
+def nudge_followers_list(driver) -> Dict[str, Any]:
+    """Cuộn lên rồi xuống đáy danh sách; trả {loading, height_before, height_after}."""
+    out: Dict[str, Any] = {"loading": False}
+    try:
+        up = driver.execute_script(_NUDGE_LIST_JS, "up") or {}
+        time.sleep(0.8)
+        down = driver.execute_script(_NUDGE_LIST_JS, "down") or {}
+        time.sleep(2.5)
+        after = driver.execute_script(_NUDGE_LIST_JS, "down") or {}
+        out = {
+            "loading": bool(down.get("loading") or after.get("loading")),
+            "height_before": up.get("height"),
+            "height_after": after.get("height"),
+        }
+    except Exception as exc:
+        logger.debug(f"[FOLLOW] nudge: {exc}")
+    return out
+
+
+# Facebook "sập" khung danh sách khi tải trang tiếp quá dồn dập:
+# "This page isn't available right now … Reload page" (bản VI: "Trang này hiện không hiển thị / Tải lại trang").
+_FB_LIST_ERROR_JS = r"""
+const main = document.querySelector('[role="main"]') || document.body;
+const t = (main.innerText || '').toLowerCase();
+const hit = /this page isn.?t available right now|trang n(à|a)y hi(ệ|e)n kh(ô|o)ng (kh(ả|a) d(ụ|u)ng|hi(ể|e)n th(ị|i))|kh(ô|o)ng th(ể|e) t(ả|a)i trang n(à|a)y l(ú|u)c n(à|a)y/.test(t);
+if (!hit) return false;
+return Array.from(main.querySelectorAll('[role="button"], button, a'))
+  .some((b) => /^(reload page|tải lại trang)$/i.test((b.innerText || '').trim()));
+"""
+
+
+# FB đang tải thêm hàng (spinner / khung xám) — cuộn tiếp lúc này dễ làm FB sập danh sách
+_LIST_LOADING_JS = r"""
+const main = document.querySelector('[role="dialog"][aria-label]') || document.querySelector('[role="main"]') || document.body;
+const vh = window.innerHeight || 800;
+return Array.from(main.querySelectorAll('[role="progressbar"], [data-visualcompletion="loading-state"], [aria-busy="true"]'))
+  .some((el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && r.top < vh * 2 && r.bottom > -vh;
+  });
+"""
+
+
+def wait_followers_list_idle(driver, timeout_s: float = 8.0, stop_event: Optional[threading.Event] = None) -> float:
+    """Chờ FB tải xong lượt hàng hiện tại (như người cuộn tay chờ spinner). Trả số giây đã chờ."""
+    t0 = time.time()
+    while time.time() - t0 < timeout_s:
+        if stop_event is not None and stop_event.is_set():
+            break
+        try:
+            if not driver.execute_script(_LIST_LOADING_JS):
+                break
+        except Exception:
+            break
+        time.sleep(0.4)
+    return time.time() - t0
+
+
+def followers_list_errored(driver) -> bool:
+    try:
+        return bool(driver.execute_script(_FB_LIST_ERROR_JS))
+    except Exception:
+        return False
+
 
 _SCROLL_WINDOW_JS = r"""
 const el = document.scrollingElement || document.documentElement;
@@ -1239,6 +1331,9 @@ def run_follower_scan_flow(
             empty_streak = 0
             dup_streak = 0
             scroll_stuck_streak = 0
+            nudges = 0  # số lần "lay" danh sách khi đứng yên trước khi chịu dừng
+            MAX_NUDGES = 4
+            pace = 1.0  # hệ số giãn nhịp cuộn
             page_stop = REASON_LIST_EXHAUSTED
             scroll_state: Dict[str, Any] = {}
             scroll_meta: Dict[str, Any] = {}
@@ -1255,6 +1350,17 @@ def run_follower_scan_flow(
                 last_new_at += paused_s
                 if stopped_in_pause:
                     stop_reason = "USER_STOPPED"
+                    break
+
+                if seed_items is None and followers_list_errored(driver):
+                    # FB sập khung danh sách → không mở lại (mất vị trí cuộn), giữ người đã lưu, sang Page sau
+                    page_stop = "fb_list_error"
+                    append_session_log(
+                        session_id,
+                        f"Xong «{page_label}»: thu được {page_got:,} người theo dõi mới"
+                        f" (Facebook báo lỗi tải danh sách — chuyển sang Page tiếp theo).",
+                        "warn",
+                    )
                     break
 
                 if seed_items is not None:
@@ -1315,6 +1421,7 @@ def run_follower_scan_flow(
                     empty_streak = 0
                     dup_streak = 0
                     scroll_stuck_streak = 0
+                    nudges = 0
                     update_session_progress(session_id, total_seen, total_unique, batches)
                     logger.debug(
                         f"[FOLLOW] #{session_id} {page_key}: +{len(new_items)} (ins={ins}/upd={upd})"
@@ -1334,6 +1441,7 @@ def run_follower_scan_flow(
                     empty_streak = 0
                     dup_streak = 0
                     scroll_stuck_streak = 0
+                    nudges = 0
                     if known_passed - known_logged >= 100:
                         known_logged = known_passed
                         append_session_log(
@@ -1383,6 +1491,31 @@ def run_follower_scan_flow(
                         "info",
                     )
                     break
+                if (
+                    stagnant >= 8
+                    and not new_items
+                    and nudges < MAX_NUDGES
+                    and empty_streak < 8
+                    and time.time() - last_new_at < idle_timeout_s
+                ):
+                    # Quét lại Page cũ: FB tải phần dưới danh sách chậm / cần cuộn lại mới bắn lượt tải
+                    # → đừng dừng ngay, cuộn lên–xuống rồi đọc lại.
+                    nudges += 1
+                    nd = nudge_followers_list(driver)
+                    logger.debug(
+                        f"[FOLLOW] #{session_id} {page_key}: đứng yên → lay danh sách {nudges}/{MAX_NUDGES}"
+                        f" · loading={nd.get('loading')} · h {nd.get('height_before')}→{nd.get('height_after')}"
+                    )
+                    if nudges == 1:
+                        append_session_log(
+                            session_id,
+                            f"«{page_label}»: danh sách chưa tải thêm — đang cuộn lại để tải tiếp…",
+                            "info",
+                        )
+                    stagnant = 4
+                    scroll_stuck_streak = 0
+                    dup_streak = min(dup_streak, 4)
+                    continue
                 if stagnant >= 8 and not new_items:
                     if empty_streak >= 8:
                         page_stop = "extract_empty"
@@ -1400,13 +1533,16 @@ def run_follower_scan_flow(
                         f" · top={(scroll_meta.get('after') or {}).get('top', '?')}"
                         f" · h={(scroll_meta.get('after') or {}).get('height', '?')}"
                     )
+                    shown = f" · Facebook đang hiện {raw_count:,} người, đã cuộn lại {nudges} lần không tải thêm" if raw_count else ""
                     append_session_log(
                         session_id,
-                        f"Xong «{page_label}»: thu được {page_got:,} người theo dõi mới ({_format_follow_reason_vi(page_stop)}).",
+                        f"Xong «{page_label}»: thu được {page_got:,} người theo dõi mới ({_format_follow_reason_vi(page_stop)}{shown}).",
                         "warn" if page_got == 0 else "info",
                     )
                     break
 
+                # Chờ lượt tải trước xong rồi mới cuộn tiếp (tránh FB "This page isn't available")
+                wait_followers_list_idle(driver, 8.0 * pace, stop_event)
                 scroll_meta = scroll_followers_list(driver, scroll_state)
                 if not scroll_meta.get("changed"):
                     scroll_stuck_streak += 1
@@ -1423,7 +1559,8 @@ def run_follower_scan_flow(
                     f" · tried={'>'.join(scroll_meta.get('tried') or []) or '—'}"
                     f"{f' · kẹt 2 lần, lần sau thử {switched} trước' if switched else ''}"
                 )
-                time.sleep(max(0.3, float(scroll_delay_s)))
+                time.sleep(max(0.3, float(scroll_delay_s)) * pace)
+                wait_followers_list_idle(driver, 8.0 * pace, stop_event)
                 try:
                     human_sleep(0.2, 0.5)
                 except Exception:
