@@ -22,6 +22,7 @@ import { toast } from "@/lib/toast";
 import { useActionLock } from "../shared/useActionLock";
 import { saveCsvContent } from "../shared/saveFile.mjs";
 import { askConfirm } from "../shared/askConfirm";
+import useDragRowSelect from "../shared/useDragRowSelect";
 import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
 import {
@@ -31,6 +32,8 @@ import {
   deletePageList,
   savePagesToList,
   deleteScannedPages,
+  deleteSearchKeyword,
+  countUnlistedPages,
 } from "../service";
 import {
   ListPageHeader,
@@ -45,13 +48,16 @@ import {
 } from "../_listLayout";
 import { usePageLists } from "../shared/usePageLists";
 import SavePageListModal from "../shared/SavePageListModal";
+import { pageListColor } from "../shared/pageListColor";
 import { runDelete, notifyExportResult } from "../_shared";
 import { matchesInfoFilter, matchesRegion, VN_PROVINCES_34 } from "../utils.mjs";
-import CreateCategoryModal from "@/modules/module_10_group_scan/member-list/_components/CreateCategoryModal";
+import CreateCategoryModal, { CATEGORY_COLORS } from "@/modules/module_10_group_scan/member-list/_components/CreateCategoryModal";
 
 const ALL_ID = "__all__";
 const KW_PREFIX = "kw:";
 const LIST_PREFIX = "list:";
+/** Page chưa thuộc danh mục đã lưu nào */
+const NO_LIST_ID = "__nolist__";
 
 /** Làm sạch category FB (bỏ đoạn " · N followers"). */
 function cleanCategory(raw) {
@@ -98,7 +104,7 @@ export default function PageScannerListPages() {
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [pageSize] = useState(15);
+  const [pageSize, setPageSize] = useState(15);
   const [keyword, setKeyword] = useState("");
   const [loading, setLoading] = useState(true);
   const [selectedKeys, setSelectedKeys] = useState([]);
@@ -108,6 +114,15 @@ export default function PageScannerListPages() {
   const [moveKeys, setMoveKeys] = useState(null); // != null → mở modal "Chuyển vào danh mục"
   const [createOpen, setCreateOpen] = useState(false);
   const [newListName, setNewListName] = useState("");
+  const [newListColor, setNewListColor] = useState(CATEGORY_COLORS[0]);
+  const [unlistedCount, setUnlistedCount] = useState(null);
+  const refreshUnlisted = useCallback(() => {
+    countUnlistedPages().then(setUnlistedCount).catch(() => {});
+  }, []);
+  // Đếm lại "Chưa có danh mục" mỗi khi danh mục đổi (tạo / lưu / xóa bắn PAGE_LISTS_EVENT → lists mới)
+  useEffect(() => {
+    refreshUnlisted();
+  }, [lists, refreshUnlisted]);
   const [creating, setCreating] = useState(false);
   const [sideSearch, setSideSearch] = useState("");
   const [activeId, setActiveId] = useState(ALL_ID);
@@ -118,6 +133,42 @@ export default function PageScannerListPages() {
   const searchTimerRef = useRef(null);
   const mountedRef = useRef(false);
   const skipNextKeywordEffectRef = useRef(false);
+
+  /* Bố cục giống DS followers: cả trang cuộn, phần đầu dính, tiêu đề cột dính ngay dưới phần đầu.
+     - headHeight: vị trí dính của tiêu đề cột (đổi khi hiện thanh "đang tick chọn").
+     - headStuck: chỉ phủ khe p-6 phía trên khi đang dính — lúc chưa cuộn dải phủ sẽ che tiêu đề trang.
+     - tableFits: bảng (min 1280px) vừa khung → bỏ cuộn ngang để tiêu đề cột dính theo trang; không vừa thì giữ
+       cuộn ngang (tiêu đề cột không dính được trong khung cuộn ngang, nhưng không mất cột). */
+  const stickyHeadRef = useRef(null);
+  const tableBoxRef = useRef(null);
+  const [headHeight, setHeadHeight] = useState(0);
+  const [headStuck, setHeadStuck] = useState(false);
+  const [tableFits, setTableFits] = useState(false);
+  useEffect(() => {
+    const head = stickyHeadRef.current;
+    const box = tableBoxRef.current;
+    const scroller = head?.closest("main");
+    if (!head || !scroller) return undefined;
+    const check = () => {
+      const padTop = parseFloat(getComputedStyle(scroller).paddingTop) || 0;
+      const offset = head.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      setHeadStuck(scroller.scrollTop > 0 && offset <= padTop + 1);
+      setHeadHeight(head.offsetHeight);
+      const table = box?.querySelector("table");
+      if (box && table) setTableFits(table.offsetWidth <= box.clientWidth + 1);
+    };
+    check();
+    scroller.addEventListener("scroll", check, { passive: true });
+    window.addEventListener("resize", check);
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(check) : null;
+    ro?.observe(head);
+    if (box) ro?.observe(box);
+    return () => {
+      scroller.removeEventListener("scroll", check);
+      window.removeEventListener("resize", check);
+      ro?.disconnect();
+    };
+  }, []);
 
   const loadKeywords = useCallback(() => {
     return getSearchKeywords()
@@ -182,6 +233,7 @@ export default function PageScannerListPages() {
           keyword: kw || undefined,
           source_keyword: sourceKw,
           list_id: Number.isFinite(listId) ? listId : undefined,
+          no_list: id === NO_LIST_ID ? true : undefined,
           info_filter: info !== "ALL" ? info : undefined,
           region: reg !== "ALL" ? reg : undefined,
           sort_by: "followers",
@@ -252,7 +304,7 @@ export default function PageScannerListPages() {
     [buildQueryParams, pageSize],
   );
 
-  // Tự tải lại ngay khi đổi nguồn sidebar hoặc đổi dropdown Tình trạng / Khu vực
+  // Tự tải lại ngay khi đổi nguồn sidebar, dropdown Tình trạng / Khu vực hoặc số hàng mỗi trang
   useEffect(() => {
     if (searchTimerRef.current) {
       clearTimeout(searchTimerRef.current);
@@ -261,7 +313,7 @@ export default function PageScannerListPages() {
     setLoading(true);
     load(1);
     mountedRef.current = true;
-  }, [activeId, infoFilter, regionFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeId, infoFilter, regionFilter, pageSize]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Tự tìm kiếm tức thì khi gõ vào ô tìm kiếm (debounce 250ms, không cần nhấn Enter)
   useEffect(() => {
@@ -395,6 +447,7 @@ export default function PageScannerListPages() {
 
   const openCreateList = () => {
     setNewListName("");
+    setNewListColor(CATEGORY_COLORS[lists.length % CATEGORY_COLORS.length]);
     setCreateOpen(true);
   };
 
@@ -408,7 +461,7 @@ export default function PageScannerListPages() {
     }
     setCreating(true);
     try {
-      const cat = await createPageList(name);
+      const cat = await createPageList(name, newListColor);
       if (selectedKeys.length) {
         await savePagesToList({ categoryId: cat.id, pageKeys: selectedKeys });
       }
@@ -430,10 +483,11 @@ export default function PageScannerListPages() {
 
   const handleMoved = (res) => {
     setSelectedKeys([]);
-    if (activeList && res?.category?.id === activeList.id) reload(page);
+    if ((activeList && res?.category?.id === activeList.id) || activeId === NO_LIST_ID) reload(page);
   };
 
   const handleRefresh = async () => {
+    refreshUnlisted();
     await loadKeywords();
     reload(1);
   };
@@ -447,12 +501,47 @@ export default function PageScannerListPages() {
     if (n == null) return;
     setSelectedKeys([]);
     await loadKeywords();
+    refreshUnlisted();
     reload(page);
   };
 
+  /* Đang chọn tag (từ khóa / hashtag): xóa tag + toàn bộ page thuộc tag, có modal xác nhận */
+  const handleDeleteKeyword = async (kw) => {
+    const count = Number(activeKeyword?.page_count ?? total) || 0;
+    const ok = await askConfirm({
+      title: "Xóa tag và page liên quan",
+      description: (
+        <>
+          Xóa tag <b>&quot;{kw}&quot;</b> cùng <b>{count.toLocaleString("vi-VN")} page</b> thuộc tag này khỏi kho?
+          <br />
+          Page cũng bị gỡ khỏi các danh mục đã lưu và khỏi các tag khác (nếu có); lịch sử phiên tìm của tag bị
+          xóa. Không thể hoàn tác.
+        </>
+      ),
+      confirmText: "Xóa tag và page",
+    });
+    if (!ok) return;
+    try {
+      const res = await deleteSearchKeyword(kw);
+      setSelectedKeys([]);
+      selectSource(ALL_ID);
+      await loadKeywords();
+      toast.success(`Đã xóa tag "${kw}" và ${Number(res?.deleted_pages || 0).toLocaleString("vi-VN")} page liên quan.`, {
+        key: "m11-delete-keyword",
+      });
+    } catch (err) {
+      toast.error(`Lỗi xóa tag: ${err?.response?.data?.detail || err.message}`);
+    }
+  };
+
   const handleDeleteCategory = async () => {
+    const activeKw = activeId?.startsWith(KW_PREFIX) ? activeId.slice(KW_PREFIX.length) : "";
+    if (activeKw) {
+      await handleDeleteKeyword(activeKw);
+      return;
+    }
     if (!activeList) {
-      toast.info("Chọn một danh mục đã lưu ở cột trái để xóa.");
+      toast.info("Chọn một danh mục hoặc tag ở cột trái để xóa.");
       return;
     }
     const ok = await askConfirm({
@@ -480,7 +569,24 @@ export default function PageScannerListPages() {
     keyword.trim() || infoFilter !== "ALL" || regionFilter !== "ALL",
   );
   const allSelected = filteredItems.length > 0 && selectedKeys.length === filteredItems.length;
-  const detailTitle = activeKeyword?.keyword || activeList?.name || "Tất cả page";
+
+  /* Kéo chuột trên bảng để chọn nhiều page (Ctrl giữ lựa chọn cũ, Shift + click chọn dải) */
+  const visibleKeys = useMemo(() => filteredItems.map((r) => r.page_key).filter(Boolean), [filteredItems]);
+  const drag = useDragRowSelect({
+    ids: visibleKeys,
+    isSelected: (k) => selectedKeys.includes(k),
+    onSet: setSelectedKeys,
+    onToggle: (k) => setSelectedKeys((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k])),
+  });
+  const setTableBox = useCallback(
+    (el) => {
+      tableBoxRef.current = el;
+      drag.setContainer(el);
+    },
+    [drag.setContainer], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const detailTitle =
+    activeKeyword?.keyword || activeList?.name || (activeId === NO_LIST_ID ? "Chưa có danh mục" : "Tất cả page");
 
   return (
     <div className="pb-8">
@@ -499,6 +605,8 @@ export default function PageScannerListPages() {
             search={sideSearch}
             onSearchChange={setSideSearch}
             searchPlaceholder="Tìm từ khóa / danh mục…"
+            // Cuộn trang vẫn giữ cột danh mục trong tầm nhìn (main của AppShell là vùng cuộn)
+            className="lg:sticky lg:top-0"
             headerRight={
               <Button type="button" size="sm" className="h-7 gap-1 text-[10px]" onClick={openCreateList}>
                 <Plus className="size-3" /> Thêm
@@ -548,21 +656,33 @@ export default function PageScannerListPages() {
               />
             ))}
 
-            {filteredLists.length > 0 ? (
-              <p className="px-2.5 pb-1 pt-2 text-[9px] font-bold uppercase tracking-wide text-slate-400">
-                Danh mục đã lưu
-              </p>
-            ) : null}
-            {filteredLists.map((l) => (
+            <p className="px-2.5 pb-1 pt-2 text-[9px] font-bold uppercase tracking-wide text-slate-400">
+              Danh mục đã lưu
+            </p>
+            {filteredLists.map((l) => {
+              const color = pageListColor(l);
+              return (
+                <SideListItem
+                  key={l.id}
+                  active={activeId === `${LIST_PREFIX}${l.id}`}
+                  onClick={() => selectSource(`${LIST_PREFIX}${l.id}`)}
+                  title={l.name}
+                  subtitle={`${(l.page_count || 0).toLocaleString("vi-VN")} page`}
+                  badge={(l.page_count || 0).toLocaleString("vi-VN")}
+                  avatar={<span className="mt-1.5 size-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />}
+                />
+              );
+            })}
+            {!sideSearch || "chưa có danh mục".includes(sideSearch.trim().toLowerCase()) ? (
               <SideListItem
-                key={l.id}
-                active={activeId === `${LIST_PREFIX}${l.id}`}
-                onClick={() => selectSource(`${LIST_PREFIX}${l.id}`)}
-                title={l.name}
-                subtitle={`${(l.page_count || 0).toLocaleString("vi-VN")} page`}
-                badge={(l.page_count || 0).toLocaleString("vi-VN")}
+                active={activeId === NO_LIST_ID}
+                onClick={() => selectSource(NO_LIST_ID)}
+                title="Chưa có danh mục"
+                subtitle="Page chưa lưu vào danh mục nào"
+                badge={unlistedCount != null ? unlistedCount.toLocaleString("vi-VN") : undefined}
+                avatar={<span className="mt-1.5 size-2.5 shrink-0 rounded-full bg-slate-300" />}
               />
-            ))}
+            ) : null}
 
             {!filteredKeywords.length && !filteredLists.length && sideSearch ? (
               <p className="px-2 py-6 text-center text-[11px] text-slate-400">Không khớp từ khóa / danh mục.</p>
@@ -586,7 +706,18 @@ export default function PageScannerListPages() {
           </ListSidePanel>
         }
       >
-        <Card className="overflow-hidden border-slate-200 shadow-sm">
+        {/* Không overflow-hidden: sẽ chặn sticky của phần đầu */}
+        <Card className="border-slate-200 shadow-sm">
+          {/* Phần đầu (tiêu đề, nút, bộ lọc, thanh chọn) dính trên cùng, thẳng hàng cột danh mục. main có p-6 →
+              khe 24px phía trên; khi đang dính thì dải ::before màu nền phủ khe đó */}
+          <div
+            ref={stickyHeadRef}
+            className={`sticky top-0 z-30 rounded-t-xl bg-white ${
+              headStuck
+                ? "before:pointer-events-none before:absolute before:-inset-x-px before:-top-6 before:h-6 before:bg-background before:content-['']"
+                : ""
+            }`}
+          >
           <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
             <div>
               <h2 className="font-heading text-sm font-bold text-slate-800">{detailTitle}</h2>
@@ -610,14 +741,23 @@ export default function PageScannerListPages() {
               >
                 <Download className="size-3.5" /> Xuất Excel
               </Button>
+              {/* Tag → "Xóa tag" · Danh mục → "Xóa danh mục" · Tất cả / Chưa có danh mục → khóa */}
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-8 gap-1.5 border-red-200 bg-red-50 text-[11px] text-red-600 hover:bg-red-100"
+                className="h-8 gap-1.5 border-red-200 bg-red-50 text-[11px] text-red-600 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={handleDeleteCategory}
+                disabled={!activeKeyword && !activeList}
+                title={
+                  activeId === NO_LIST_ID
+                    ? "Không thể xóa mục \"Chưa có danh mục\""
+                    : !activeKeyword && !activeList
+                      ? "Chọn một tag hoặc danh mục ở cột trái để xóa"
+                      : undefined
+                }
               >
-                <Trash2 className="size-3.5" /> Xóa danh mục
+                <Trash2 className="size-3.5" /> {activeKeyword ? "Xóa tag" : "Xóa danh mục"}
               </Button>
             </div>
           </div>
@@ -700,10 +840,15 @@ export default function PageScannerListPages() {
               onDelete={handleDeleteSelected}
             />
           </div>
+          </div>
 
-          <div className="overflow-auto">
+          {/* Vừa khung: bỏ overflow để tiêu đề cột dính theo trang ngay dưới phần đầu; không vừa: cuộn ngang */}
+          <div ref={setTableBox} className={tableFits ? "overflow-visible" : "overflow-x-auto"}>
             <table className="w-full min-w-[1280px] text-left text-[11px]">
-              <thead className="sticky top-0 z-10 bg-slate-50 text-slate-500">
+              <thead
+                className={`z-20 bg-slate-50 text-slate-500 ${tableFits ? "sticky" : ""}`}
+                style={tableFits ? { top: headHeight } : undefined}
+              >
                 <tr className="border-b border-slate-200">
                   <th className="w-10 px-4 py-3" />
                   <th className="w-12 px-3 py-3 font-semibold">STT</th>
@@ -736,8 +881,12 @@ export default function PageScannerListPages() {
                     const cat = cleanCategory(r.category);
                     const tags = pageTags(r);
                     return (
-                      <tr key={r.page_key || r.id} className={selected ? "bg-blue-50/50" : "hover:bg-slate-50"}>
-                        <td className="px-4 py-2.5">
+                      <tr
+                        key={r.page_key || r.id}
+                        {...drag.rowProps(r.page_key)}
+                        className={`cursor-pointer ${selected ? "bg-blue-50/50" : "hover:bg-slate-50"}`}
+                      >
+                        <td className="px-4 py-2.5" data-no-row-selection onClick={(e) => e.stopPropagation()}>
                           <Checkbox
                             checked={selected}
                             onCheckedChange={(c) =>
@@ -856,7 +1005,13 @@ export default function PageScannerListPages() {
             </table>
           </div>
 
-          <ListPagination page={page} pageSize={pageSize} total={total} onPageChange={(p) => reload(p)} />
+          <ListPagination
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPageChange={(p) => reload(p)}
+            onPageSizeChange={setPageSize}
+          />
         </Card>
       </MasterDetail>
 
@@ -868,6 +1023,8 @@ export default function PageScannerListPages() {
         categoryName={newListName}
         onCategoryNameChange={setNewListName}
         onSubmit={handleCreateList}
+        color={newListColor}
+        onColorChange={setNewListColor}
         title="Thêm mới danh mục Page"
         label="Tên danh mục Page"
         placeholder="Ví dụ: Mỹ phẩm Hà Nội..."

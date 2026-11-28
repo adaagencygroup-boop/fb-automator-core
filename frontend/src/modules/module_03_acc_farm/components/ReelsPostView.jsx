@@ -47,6 +47,8 @@ export function ReelsPostView({ mode, initialState = "config" }) {
   const unitLabel = isReels ? "clips" : "files";
 
   const [viewState, setViewState] = useState(initialState);
+  // Vừa mở / quay lại tab: đang hỏi Engine phiên đăng còn chạy không → khoá nút ĐĂNG BÀI
+  const [syncing, setSyncing] = useState(true);
 
   // ── Step 1: Master Folder & Account Mapping ──
   const [masterFolder, setMasterFolder] = useState(
@@ -381,6 +383,7 @@ export function ReelsPostView({ mode, initialState = "config" }) {
   };
 
   const checkActiveSessionOnMount = async () => {
+    setSyncing(true);
     try {
       const res = await api.get("/api/post/status");
       const d = res?.data ?? res;
@@ -388,6 +391,7 @@ export function ReelsPostView({ mode, initialState = "config" }) {
       if (d.post_type !== mode) return;
 
       setViewState("running");
+      setSyncing(false); // đã biết phiên còn chạy → mở khoá ngay, phần còn lại nạp sau
       setIsPaused(!!d.is_paused);
       setIsStopped(!!d.is_stopped);
       if (d.metrics) setMetrics(d.metrics);
@@ -406,6 +410,8 @@ export function ReelsPostView({ mode, initialState = "config" }) {
       }
     } catch {
       // quiet error
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -846,6 +852,8 @@ export function ReelsPostView({ mode, initialState = "config" }) {
   };
 
   const startPostingFlow = (forceImmediate = false) => {
+    // Chưa đồng bộ xong phiên đang chạy → không cho tạo phiên mới (Engine sẽ báo lỗi vì phiên cũ còn chạy)
+    if (syncing) return;
     if (!validationStatus.ready) {
       toast.warning(validationStatus.reason, "CHƯA ĐỦ ĐIỀU KIỆN ĐĂNG");
       return;
@@ -1710,16 +1718,21 @@ export function ReelsPostView({ mode, initialState = "config" }) {
             <button
               type="button"
               onClick={handleStartPost}
-              disabled={!validationStatus.ready}
-              className={`w-full py-3 rounded-xl font-bold text-xs shadow-sm flex items-center justify-center gap-2 transition-all ${validationStatus.ready
+              disabled={!validationStatus.ready || syncing}
+              aria-busy={syncing}
+              className={`w-full py-3 rounded-xl font-bold text-xs shadow-sm flex items-center justify-center gap-2 transition-all ${validationStatus.ready && !syncing
                   ? "bg-blue-600 hover:bg-blue-700 text-white cursor-pointer active:scale-[0.99] shadow-blue-500/20"
                   : "bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed opacity-80"
                 }`}
             >
-              <Play size={14} className={validationStatus.ready ? "fill-white" : "fill-slate-400"} />
-              <span>KÍCH HOẠT ĐĂNG {isReels ? "REELS" : "STORY"}</span>
+              {syncing ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Play size={14} className={validationStatus.ready ? "fill-white" : "fill-slate-400"} />
+              )}
+              <span>{syncing ? "ĐANG ĐỒNG BỘ PHIÊN ĐĂNG..." : `KÍCH HOẠT ĐĂNG ${isReels ? "REELS" : "STORY"}`}</span>
             </button>
-            {!validationStatus.ready && (
+            {!validationStatus.ready && !syncing && (
               <p className="text-[11px] text-amber-600 font-medium text-center flex items-center justify-center gap-1.5 pt-0.5">
                 <Info size={13} />
                 <span>{validationStatus.reason}</span>

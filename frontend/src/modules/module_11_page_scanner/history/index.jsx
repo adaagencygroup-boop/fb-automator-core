@@ -16,6 +16,7 @@ import {
   BadgeCheck,
   ScrollText,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 import { Checkbox } from "@/components/ui/checkbox";
 import { refreshMiniProgress } from "@/components/MiniProgress";
@@ -106,6 +107,8 @@ const canContinue = (s) =>
   ["FOLLOW", "POST_SCAN", "DETAIL"].includes(s.job_type) &&
   ["STOPPED", "FAILED", "PARTIAL"].includes(s.status) &&
   s.stop_reason !== "TARGET_REACHED";
+/** Trang quét theo dõi tiến độ phiên chạy tiếp (DETAIL = quét thông tin Page theo link / tệp) */
+const CONTINUE_ROUTES = { FOLLOW: "/scanner/followers", POST_SCAN: "/scanner/posts", DETAIL: "/scanner/search" };
 const isPageJob = (s) => s.job_type !== "FOLLOW" && s.job_type !== "POST_SCAN";
 const unitOf = (s) => (s.job_type === "FOLLOW" ? "UID" : s.job_type === "POST_SCAN" ? "bài viết" : "Page");
 const typeLabel = (s) =>
@@ -198,6 +201,7 @@ const SELECT_BTN = "!h-[34px] !rounded-lg !border-[#E2E8F0] !bg-[#F8FAFC] !px-3.
    HISTORY MODULE
    ════════════════════════════════════════════════════════════ */
 export default function PageScannerHistoryModule() {
+  const router = useRouter();
   const [sessions, setSessions] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -480,8 +484,10 @@ export default function PageScannerHistoryModule() {
       const res = await continueScanSession(session.id);
       toast.success(`Đã tạo phiên #${res?.session_id} chạy tiếp ${fmtNum(res?.remaining_pages)} Page còn lại`, { key: "m11-history-continue" });
       setDetailOpen(false);
-      loadSessions({ silent: true });
       refreshMiniProgress(); // thẻ tiến độ góc màn hình hiện ngay
+      // Ticket #39: ở lại Lịch sử thì không xem được tiến độ (log trực tiếp, Tạm dừng / Dừng, kết quả) → chuyển sang
+      // trang quét đúng loại phiên; trang đó tự khôi phục phiên đang chạy (giống "Chạy tiếp" của Module 10)
+      router.push(CONTINUE_ROUTES[res?.job_type || session.job_type] || "/scanner/search");
     } catch (err) {
       toast.error(`Không chạy tiếp được: ${err?.message || err}`, { key: "m11-history-continue" });
     }

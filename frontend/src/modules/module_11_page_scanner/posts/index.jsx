@@ -208,6 +208,8 @@ export default function PageScannerPosts() {
   const keepBrowser = false;
 
   const [runPhase, setRunPhase] = useState("idle");
+  // Vừa mở / quay lại trang: đang đọc phiên đang chạy từ máy chủ → khoá nút Bắt đầu
+  const [syncing, setSyncing] = useState(true);
   const [sessionId, setSessionId] = useState(null);
   const [resultCount, setResultCount] = useState(0);
   const [logs, setLogs] = useState([]);
@@ -231,6 +233,7 @@ export default function PageScannerPosts() {
 
   const logId = useRef(0);
   const pollRef = useRef(null);
+  const doneNotifiedRef = useRef(null); // session_id đã báo "hoàn tất" — chặn báo trùng
   // Khoá nút trong lúc xử lý: bấm liên tục chỉ chạy 1 lần, không bắn ra nhiều thông báo / yêu cầu
   const [isToggling, guardToggle] = useActionLock();
   const [isPausing, guardPause] = useActionLock();
@@ -306,25 +309,35 @@ export default function PageScannerPosts() {
   const startPoll = useCallback(
     (sid) => {
       stopPolling();
+      // Nhịp poll async dồn lại khi mạng chậm / mất kết nối → nhiều nhịp cùng thấy phiên xong và báo trùng.
+      // inFlight: không chồng nhịp; doneNotifiedRef: mỗi phiên chỉ báo hoàn tất 1 lần.
+      let inFlight = false;
       pollRef.current = setInterval(async () => {
+        if (inFlight || doneNotifiedRef.current === sid) return;
+        inFlight = true;
         try {
           const session = await getScanSessionDetail(sid);
+          if (doneNotifiedRef.current === sid) return;
           if (session.status === "PAUSED") setRunPhase("paused");
           else if (session.status === "RUNNING") setRunPhase("running");
           syncSessionLogs(session);
           const count = session.total_unique || 0;
           setResultCount(count);
           if (count > 0) refreshPosts(sid);
-          if (DONE_STATUSES.includes(session.status)) {
+          if (DONE_STATUSES.includes(session.status) && doneNotifiedRef.current !== sid) {
+            doneNotifiedRef.current = sid;
             stopPolling();
             setRunPhase("done");
             await refreshPosts(sid);
             toast.success(
               `Phiên POST_SCAN #${sid} · ${session.status}/${session.stop_reason || "—"} · ${count} bài`,
+              { key: `m11-posts-done-${sid}` },
             );
           }
         } catch (e) {
           console.error(e);
+        } finally {
+          inFlight = false;
         }
       }, 1500);
     },
@@ -413,6 +426,7 @@ export default function PageScannerPosts() {
         setSessionId(top.id);
         setResultCount(top.total_unique || 0);
         setRunPhase(isDone ? "done" : top.status === "PAUSED" ? "paused" : "running");
+        setSyncing(false); // đã biết phiên còn chạy hay không → mở khoá nút
         syncSessionLogs(top);
         saveScanState("posts", { sessionIds: [top.id] });
         const statusVi =
@@ -429,6 +443,8 @@ export default function PageScannerPosts() {
         if (!isDone) startPoll(top.id);
       } catch {
         /* không có phiên đang chạy */
+      } finally {
+        if (!stale()) setSyncing(false);
       }
     })();
     return () => {
@@ -455,6 +471,8 @@ export default function PageScannerPosts() {
   };
 
   const handleStart = () => {
+    // Chưa đồng bộ xong phiên đang chạy → không cho tạo phiên mới (máy chủ sẽ báo lỗi vì phiên cũ còn chạy)
+    if (syncing) return;
     if (!selectedUids || !selectedUids.length) {
       toast.warning("Chưa chọn tài khoản", { key: "m11-posts-start" });
       return;
@@ -562,6 +580,7 @@ export default function PageScannerPosts() {
   /** "Quét mới": bỏ phiên đang xem (dữ liệu trong kho không bị xóa). */
   const handleNewScan = () => {
     restoreSeqRef.current += 1;
+    setSyncing(false); // huỷ lần khôi phục đang dở → nó không tự mở khoá được nữa
     stopPolling();
     clearScanState("posts");
     setRunPhase("idle");
@@ -1071,8 +1090,9 @@ export default function PageScannerPosts() {
         live={isBusy}
         paused={isPaused}
         showNewScan={showResults}
-        startDisabled={isToggling || accountsLoading}
+        startDisabled={isToggling || accountsLoading || syncing}
         controlDisabled={isToggling || isPausing}
+        syncing={syncing}
         onStart={() => guardToggle(handleToggleExecution)}
         onPauseResume={() => guardPause(handlePauseResume)}
         onStop={() => guardToggle(handleToggleExecution)}

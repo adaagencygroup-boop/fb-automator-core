@@ -10,7 +10,6 @@ import { PostModeTabs } from "./components/PostModeTabs";
 import { StatusPostView } from "./components/StatusPostView";
 import { ReelsPostView } from "./components/ReelsPostView";
 import { api } from "@/services/api";
-import { useUnsavedChanges } from "@/components/UnsavedChangesContext";
 import { shouldRestoreProgressView } from "@/modules/module_03_acc_farm/postSessionUi";
 
 /**
@@ -23,7 +22,6 @@ import { shouldRestoreProgressView } from "@/modules/module_03_acc_farm/postSess
 export default function AccFarmModule({ subPage = "interact.post" }) {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { requestNavigation, setUnsavedChanges } = useUnsavedChanges();
 
   const [postMode, setPostMode] = useState(() => {
     if (typeof window !== "undefined") {
@@ -34,32 +32,17 @@ export default function AccFarmModule({ subPage = "interact.post" }) {
     }
     return "status";
   });
-  /** Status có Prompt AI hoặc bài viết → cần confirm trước khi đổi tab */
-  const [statusNeedsLeaveConfirm, setStatusNeedsLeaveConfirm] = useState(false);
-
-  // Ticket #56: Reels / Story — tắt guard "Ở lại / Rời đi" (chuyển màn không hỏi)
-  useEffect(() => {
-    if (postMode !== "reels" && postMode !== "story") return;
-    setUnsavedChanges(false);
-    setStatusNeedsLeaveConfirm(false);
-  }, [postMode, setUnsavedChanges]);
 
   // Đồng bộ tab từ URL ?tab=status|reels|story
   useEffect(() => {
     const urlTab = searchParams?.get("tab");
     if (urlTab && ["status", "reels", "story"].includes(urlTab) && urlTab !== postMode) {
-      // Chỉ chặn khi vẫn ở Status dirty và URL đòi về status; Reels/Story luôn cho qua
-      if (statusNeedsLeaveConfirm && urlTab === "status") return;
-      if (urlTab === "reels" || urlTab === "story") {
-        setUnsavedChanges(false);
-        setStatusNeedsLeaveConfirm(false);
-      }
       setPostMode(urlTab);
       if (typeof window !== "undefined") {
         localStorage.setItem("module_03_post_mode", urlTab);
       }
     }
-  }, [searchParams, postMode, statusNeedsLeaveConfirm, setUnsavedChanges]);
+  }, [searchParams, postMode]);
 
   // Khi vào lại trang Đăng bài: ưu tiên tab của phiên progress còn trên BE (kể cả vừa xong chưa reset)
   useEffect(() => {
@@ -100,21 +83,10 @@ export default function AccFarmModule({ subPage = "interact.post" }) {
     router.replace(`/interact/post?tab=${mode}`);
   };
 
+  // Không còn hỏi "Ở lại / Rời đi": bài Status tự lưu nháp ngầm
   const handleModeChange = (mode) => {
     if (mode === postMode) return;
-    // Reels/Story: không hiện popup (kể cả đang chuyển sang tab này từ Status)
-    if (
-      postMode === "reels" ||
-      postMode === "story" ||
-      mode === "reels" ||
-      mode === "story"
-    ) {
-      setUnsavedChanges(false);
-      applyModeChange(mode);
-      return;
-    }
-    // Status ↔ Status only path: dirty Prompt/bài → popup Context
-    requestNavigation(() => applyModeChange(mode));
+    applyModeChange(mode);
   };
 
   // 1. Phân hệ Tương tác tài khoản / Nuôi nick (/interact/engage) - Chuẩn từ main
@@ -148,13 +120,10 @@ export default function AccFarmModule({ subPage = "interact.post" }) {
           />
         </div>
 
-        {/* Dynamic Post Mode View — giữ Status mounted (ẩn) để không mất bài; chỉ chặn rời trang khi tab Status đang mở */}
+        {/* Dynamic Post Mode View — giữ Status mounted (ẩn) để không mất bài */}
         <div>
           <div className={postMode === "status" ? "block" : "hidden"}>
-            <StatusPostView
-              isActive={postMode === "status"}
-              onHasPostsChange={setStatusNeedsLeaveConfirm}
-            />
+            <StatusPostView isActive={postMode === "status"} />
           </div>
           {postMode !== "status" && <ReelsPostView mode={postMode} />}
         </div>
