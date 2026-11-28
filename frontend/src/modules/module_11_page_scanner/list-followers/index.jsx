@@ -8,7 +8,6 @@ import {
   RefreshCw,
   Copy,
   Trash2,
-  Plus,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -19,7 +18,6 @@ import { toast } from "@/lib/toast";
 import { useActionLock } from "../shared/useActionLock";
 import { saveCsvContent } from "../shared/saveFile.mjs";
 import { runDelete, notifyExportResult } from "../_shared";
-import CreateCategoryModal from "@/modules/module_10_group_scan/member-list/_components/CreateCategoryModal";
 import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
 import {
@@ -28,7 +26,6 @@ import {
   getPagesWithFollowers,
   importFollowers,
   deletePageFollowers,
-  createPageList,
 } from "../service";
 import {
   ListPageHeader,
@@ -50,9 +47,6 @@ export default function PageScannerListFollowers() {
   const [isCopyingUid, guardCopyUid] = useActionLock();
   const [isMovingCategory, guardMoveCategory] = useActionLock();
   const [pages, setPages] = useState([]);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [newListName, setNewListName] = useState("");
-  const [creating, setCreating] = useState(false);
   const [sideSearch, setSideSearch] = useState("");
   const [activePageKey, setActivePageKey] = useState(ALL_ID);
 
@@ -285,31 +279,6 @@ export default function PageScannerListFollowers() {
   const allSelected = items.length > 0 && selectedIds.length === items.length;
   const detailTitle = activePage?.page_name || "Tất cả followers";
 
-  const openCreateList = () => {
-    setNewListName("");
-    setCreateOpen(true);
-  };
-
-  const handleCreateList = async (e) => {
-    e.preventDefault();
-    const name = newListName.trim();
-    if (creating) return;
-    if (!name) {
-      toast.error("Vui lòng nhập tên danh mục.");
-      return;
-    }
-    setCreating(true);
-    try {
-      const cat = await createPageList(name);
-      setCreateOpen(false);
-      toast.success(cat.created ? `Đã tạo danh mục “${cat.name}”` : `Danh mục “${cat.name}” đã có.`);
-    } catch (err) {
-      toast.error(`Lỗi tạo danh mục: ${err.message}`);
-    } finally {
-      setCreating(false);
-    }
-  };
-
   return (
     <div className="pb-8">
       <ListPageHeader
@@ -374,17 +343,6 @@ export default function PageScannerListFollowers() {
                 Không khớp page.
               </p>
             ) : null}
-
-            <div className="pt-2">
-              <button
-                type="button"
-                onClick={openCreateList}
-                className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-300 bg-slate-50/70 py-2 text-[11px] font-semibold text-slate-600 transition hover:border-blue-400 hover:bg-blue-50/40 hover:text-blue-600"
-              >
-                <Plus className="size-3.5" />
-                Thêm danh mục mới
-              </button>
-            </div>
           </ListSidePanel>
         }
       >
@@ -660,21 +618,6 @@ export default function PageScannerListFollowers() {
           </div>
         </Card>
       </MasterDetail>
-
-      <CreateCategoryModal
-        open={createOpen}
-        onClose={() => {
-          if (!creating) setCreateOpen(false);
-        }}
-        categoryName={newListName}
-        onCategoryNameChange={setNewListName}
-        onSubmit={handleCreateList}
-        title="Thêm mới danh mục Page"
-        label="Tên danh mục Page"
-        placeholder="Ví dụ: Mỹ phẩm Hà Nội..."
-        maxLength={255}
-        busy={creating}
-      />
     </div>
   );
 }
