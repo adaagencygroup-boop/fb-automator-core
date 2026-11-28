@@ -120,14 +120,11 @@ class ValidateTests(unittest.TestCase):
         self.assertFalse(self._check(i=IMAGE_SINGLE, images=0).ok)
 
     def test_multi_images(self):
-        # 3 nick × tối đa 2 ảnh = 6 ảnh / lượt
-        self.assertFalse(self._check(i=IMAGE_MULTI, images=5, hi=2).ok)
-        self.assertTrue(self._check(i=IMAGE_MULTI, images=6, hi=2, posts=3).ok)
-        # 4 khung × 2 ảnh = 8 ảnh cho mỗi nick
-        self.assertFalse(self._check(posts=12, n=3, s=4, i=IMAGE_MULTI, images=7, hi=2).ok)
-        warn = self._check(posts=12, n=3, s=4, i=IMAGE_MULTI, images=8, hi=2)
-        self.assertTrue(warn.ok)
-        self.assertEqual(len(warn.warnings), 1)
+        # Mỗi bài 1 ảnh: kho trống / thiếu ảnh đều không chặn, không cảnh báo (giao diện tự báo cạnh kho ảnh)
+        for images in (0, 5, 12):
+            check = self._check(posts=12, n=3, s=4, i=IMAGE_MULTI, images=images)
+            self.assertTrue(check.ok)
+            self.assertEqual(check.warnings, [])
 
     def test_no_accounts_and_slot_limit(self):
         self.assertFalse(self._check(n=0).ok)
@@ -198,11 +195,33 @@ class AllocateTests(unittest.TestCase):
                     self.assertFalse(seen[a.account_uid] & set(a.images), "nick đăng lại ảnh cũ")
                     seen[a.account_uid].update(a.images)
 
-    def test_images_below_minimum_skips_account(self):
+    def test_each_post_gets_exactly_one_image(self):
         alloc = allocate_round(["u1", "u2"], ["a", "b"], ["1.jpg", "2.jpg", "3.jpg"], content_mode=CONTENT_MULTI,
-                               image_mode=IMAGE_MULTI, min_images=2, max_images=2, rng=random.Random(0))
-        self.assertEqual(len(alloc.assignments), 1)
-        self.assertEqual(len(alloc.skipped), 1)
+                               image_mode=IMAGE_MULTI, min_images=2, max_images=3, rng=random.Random(0))
+        self.assertEqual(alloc.skipped, {})
+        imgs = [a.images for a in alloc.assignments]
+        self.assertTrue(all(len(x) == 1 for x in imgs))
+        self.assertNotEqual(imgs[0], imgs[1])
+
+    def test_short_pool_reuses_old_images(self):
+        # 3 nick, 2 ảnh → không nick nào bị bỏ qua, chỉ 1 ảnh phải dùng lại trong lượt
+        for seed in range(20):
+            alloc = allocate_round(["u1", "u2", "u3"], ["a", "b", "c"], ["1.jpg", "2.jpg"], content_mode=CONTENT_MULTI,
+                                   image_mode=IMAGE_MULTI, rng=random.Random(seed))
+            self.assertEqual(alloc.skipped, {})
+            imgs = sorted(a.images[0] for a in alloc.assignments)
+            self.assertEqual(len(set(imgs)), 2)
+
+    def test_short_pool_prefers_image_account_has_not_posted(self):
+        alloc = allocate_round(["u1"], ["a"], ["1.jpg", "2.jpg"], content_mode=CONTENT_MULTI, image_mode=IMAGE_MULTI,
+                               used_images={"u1": {"1.jpg"}, "u2": {"2.jpg"}}, image_usage={"1.jpg": 1, "2.jpg": 5},
+                               remaining_rounds=3, rng=random.Random(0))
+        self.assertEqual(alloc.assignments[0].images, ["2.jpg"])
+        # Nick đã đăng hết ảnh trong kho → vẫn đăng, dùng lại ảnh ít dùng nhất
+        alloc = allocate_round(["u1"], ["a"], ["1.jpg", "2.jpg"], content_mode=CONTENT_MULTI, image_mode=IMAGE_MULTI,
+                               used_images={"u1": {"1.jpg", "2.jpg"}}, image_usage={"1.jpg": 3, "2.jpg": 1},
+                               rng=random.Random(0))
+        self.assertEqual(alloc.assignments[0].images, ["2.jpg"])
 
     def test_many_accounts_no_recursion_limit(self):
         n = 1500

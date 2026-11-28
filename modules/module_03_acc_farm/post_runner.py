@@ -642,6 +642,10 @@ class PostRunner:
                 and self._finished_thread_count < self._total_thread_count
             )
 
+    def is_paused(self) -> bool:
+        """Phiên đang bị tạm dừng (nút Tạm dừng hoặc chiến dịch tạm dừng giữa chừng)."""
+        return not self._pause_event.is_set()
+
     def active_session_id(self) -> Optional[str]:
         with self._lock:
             return self._active_session_id

@@ -69,6 +69,27 @@ class ValidateTests(unittest.TestCase):
         self.assertFalse(svc.can_rerun({"status": "DONE", "failed_count": 0}))
         self.assertFalse(svc.can_rerun({"status": "RUNNING"}))
 
+    def test_slot_post_counts(self):
+        self.assertIsNone(svc.slot_post_counts({"session_id": None}))
+        got = svc.slot_post_counts(
+            {"session_id": "s", "success_count": 1},
+            {"PUBLISHED": 1, "FAILED": 1, "DIE": 1, "STOPPED": 2, "PENDING": 1, "RUNNING": 1},
+        )
+        self.assertEqual(got, {"published": 1, "failed": 2, "stopped": 2, "pending": 2})
+
+    def test_paused_vs_stopped_mid_run(self):
+        from datetime import datetime, timedelta
+        now = datetime(2026, 11, 28, 10, 0).astimezone()
+        future = {"status": "STOPPED", "session_id": None, "run_at": now + timedelta(minutes=5)}
+        past = {"status": "STOPPED", "session_id": None, "run_at": now - timedelta(minutes=5)}
+        mid_run = {"status": "STOPPED", "session_id": "s1", "run_at": now + timedelta(minutes=5)}
+        self.assertTrue(svc.is_paused(future, now))
+        self.assertFalse(svc.can_rerun(future, now))  # tạm dừng → Chạy tiếp chứ không Chạy lại
+        self.assertFalse(svc.is_paused(past, now))
+        self.assertTrue(svc.can_rerun(past, now))
+        self.assertFalse(svc.is_paused(mid_run, now))
+        self.assertTrue(svc.can_rerun(mid_run, now))
+
 
 if __name__ == "__main__":
     unittest.main()

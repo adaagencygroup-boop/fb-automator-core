@@ -7,6 +7,7 @@ Mỗi ~15 giây:
   2. Khung đến giờ: runner rảnh thì chạy khung sớm nhất; runner bận (đang "Đăng ngay" hoặc khung khác)
      thì để khung xếp hàng và ghi "trễ do đang có phiên đăng khác".
   3. Chiến dịch không còn khung chờ / đang chạy → COMPLETED.
+  0. Chiến dịch tạm dừng: khung chưa chạy mà đã qua giờ hẹn → MISSED (bị lỡ, có nút Chạy lại).
 Lúc khởi động: khung đang chạy dở → FAILED, khung chờ quá giờ hơn 5 phút → MISSED (có nút Chạy lại).
 Chỉ chạy chiến dịch của máy này (profile Chrome của nick nằm trên máy tạo chiến dịch).
 """
@@ -104,6 +105,7 @@ class CampaignScheduler:
 
     # ------------------------------------------------------------------ mỗi lượt
     def tick(self) -> None:
+        repo.mark_paused_slots_missed(self.clock(), machine_id=self.machine_id)
         self._finalize_running()
         self._start_due()
         repo.complete_finished_campaigns(self.machine_id)
@@ -115,11 +117,23 @@ class CampaignScheduler:
         for slot in repo.running_slots(self.machine_id):
             sid = slot.get("session_id")
             if self._runner_on(sid):
-                if slot.get("campaign_status") == repo.STOPPED:
-                    # Chiến dịch bị dừng từ máy khác / API: dừng phiên trên máy này
-                    self.runner.stop_session()
+                self._sync_pause(slot)
                 continue
             self._finish_slot(slot)
+
+    def _sync_pause(self, slot: Dict[str, Any]) -> None:
+        """Khung đang chạy dở theo trạng thái chiến dịch (tạm dừng / chạy tiếp từ máy khác hoặc API):
+        chiến dịch tạm dừng → pause phiên (giữ chỗ đang làm); chạy tiếp → resume phiên đã pause do chiến dịch."""
+        paused_by_campaign = slot.get("message") == repo.PAUSED_MID_RUN_MESSAGE
+        if slot.get("campaign_status") == repo.STOPPED:
+            if not self.runner.is_paused():
+                self.runner.pause_session()
+            if not paused_by_campaign:
+                repo.set_slot_message(slot["id"], repo.PAUSED_MID_RUN_MESSAGE)
+        elif paused_by_campaign:
+            if self.runner.is_paused():
+                self.runner.resume_session()
+            repo.set_slot_message(slot["id"], repo.RESUMED_MID_RUN_MESSAGE)
 
     def _finish_slot(self, slot: Dict[str, Any]) -> None:
         sid = slot.get("session_id")

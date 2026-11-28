@@ -326,19 +326,44 @@ def _stop_local_runner(campaign: Dict[str, Any], machine_id: str, runner) -> Non
             runner.stop_session()
 
 
+def _local_running_slots(campaign: Dict[str, Any], machine_id: Optional[str], runner):
+    """Khung RUNNING của chiến dịch mà phiên của nó đang nằm trên runner máy này."""
+    if runner is None or campaign.get("machine_id") != machine_id:
+        return []
+    return [
+        s for s in repo.list_slots(campaign["id"])
+        if s["status"] == repo.RUNNING and s.get("session_id")
+        and runner.active_session_id() == s["session_id"] and runner.is_busy()
+    ]
+
+
 def stop_campaign(owner_key: str, campaign_id: str, *, runner, machine_id: str) -> Dict[str, Any]:
+    """Tạm dừng chiến dịch: khung chưa chạy → Tạm dừng; khung đang chạy dở → PAUSE phiên đăng (không huỷ bài),
+    Chạy tiếp sẽ chạy tiếp từ chỗ dừng. Máy khác tự pause ở lượt quét kế tiếp của bộ lập lịch."""
     campaign = _owned(owner_key, campaign_id)
     repo.stop_campaign(campaign_id)
-    # Khung đang chạy trên máy này dừng ngay; máy khác sẽ tự dừng ở lượt quét kế tiếp của bộ lập lịch
-    _stop_local_runner(campaign, machine_id, runner)
+    for slot in _local_running_slots(campaign, machine_id, runner):
+        if not runner.is_paused():
+            runner.pause_session()
+        repo.set_slot_message(slot["id"], repo.PAUSED_MID_RUN_MESSAGE)
     return repo.get_campaign(campaign_id, owner_key)
 
 
-def resume_campaign(owner_key: str, campaign_id: str, now: Optional[datetime] = None) -> Dict[str, Any]:
-    _owned(owner_key, campaign_id)
-    pending = repo.resume_campaign(campaign_id, (now or local_now()))
+def resume_campaign(
+    owner_key: str, campaign_id: str, now: Optional[datetime] = None, *, runner=None, machine_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    campaign = _owned(owner_key, campaign_id)
+    now = now or local_now()
+    repo.mark_paused_slots_missed(now, campaign_id=campaign_id)  # khung đã qua giờ lúc tạm dừng = bị lỡ
+    pending = repo.resume_campaign(campaign_id, now)
     if not pending:
         raise CampaignError("Không còn khung nào ở phía sau để chạy tiếp. Thêm khung mới bằng Sửa, hoặc Chạy lại khung bị lỡ.")
+    # Khung đang dở do tạm dừng chiến dịch → chạy tiếp ngay từ chỗ dừng
+    for slot in _local_running_slots(campaign, machine_id, runner):
+        if slot.get("message") == repo.PAUSED_MID_RUN_MESSAGE:
+            if runner.is_paused():
+                runner.resume_session()
+            repo.set_slot_message(slot["id"], repo.RESUMED_MID_RUN_MESSAGE)
     return repo.get_campaign(campaign_id, owner_key)
 
 
@@ -351,9 +376,19 @@ def delete_campaign(owner_key: str, campaign_id: str, *, runner, machine_id: str
     repo.delete_campaign(campaign_id)
 
 
-def can_rerun(slot: Dict[str, Any]) -> bool:
+def is_paused(slot: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+    """Khung tạm dừng theo chiến dịch, chưa tới giờ: chờ Chạy tiếp (không phải bị lỡ / dừng giữa chừng)."""
+    if slot.get("status") != repo.STOPPED or slot.get("session_id"):
+        return False
+    run_at = slot.get("run_at")
+    return run_at is None or run_at >= (now or local_now())
+
+
+def can_rerun(slot: Dict[str, Any], now: Optional[datetime] = None) -> bool:
     status = slot.get("status")
-    return status in (repo.MISSED, repo.FAILED, repo.STOPPED) or (
+    if status == repo.STOPPED:
+        return not is_paused(slot, now)  # tạm dừng chưa tới giờ → dùng Chạy tiếp, không Chạy lại
+    return status in (repo.MISSED, repo.FAILED) or (
         status == repo.DONE and int(slot.get("failed_count") or 0) > 0
     )
 
@@ -384,10 +419,27 @@ def rerun_slot(
     return repo.get_slot(slot_id, campaign_id)
 
 
+def slot_post_counts(slot: Dict[str, Any], counts: Optional[Dict[str, int]] = None) -> Optional[Dict[str, int]]:
+    """Bài của khung chia theo kết quả để vẽ thanh tiến độ: đã đăng / lỗi / bị dừng / đang chờ.
+    Khung chưa có phiên → None. `published` tính cả các lần chạy lại (số nick đã đăng thành công ở khung)."""
+    sid = slot.get("session_id")
+    if not sid:
+        return None
+    if counts is None:
+        counts = repo.session_post_counts(sid)
+    stopped = int(counts.get("STOPPED", 0))
+    pending = int(counts.get("PENDING", 0)) + int(counts.get("RUNNING", 0))
+    failed = sum(int(n) for s, n in counts.items() if s not in ("PUBLISHED", "STOPPED", "PENDING", "RUNNING"))
+    return {"published": int(slot.get("success_count") or counts.get("PUBLISHED", 0)), "failed": failed,
+            "stopped": stopped, "pending": pending}
+
+
 def _slot_view(slot: Dict[str, Any], runner, local: bool) -> Dict[str, Any]:
     view = dict(slot)
     view["can_rerun"] = can_rerun(slot)
+    view["paused"] = is_paused(slot)
     view["estimated_finish_at"] = None
+    view["post_counts"] = slot_post_counts(slot)
     if (
         local and slot["status"] == repo.RUNNING and slot.get("session_id")
         and runner.active_session_id() == slot["session_id"]

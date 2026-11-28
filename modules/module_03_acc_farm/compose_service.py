@@ -192,7 +192,7 @@ def validate_plan(
     slot_count: int,
     content_mode: str,
     image_mode: str,
-    min_images: int = 1,
+    min_images: int = 1,  # không còn dùng: "Nhiều ảnh" = mỗi bài 1 ảnh (giữ tham số cho tương thích)
     max_images: int = 1,
 ) -> PlanCheck:
     """Kiểm tra trước khi đăng ngay (slot_count = 1) hoặc tạo chiến dịch (slot_count = số khung giờ).
@@ -205,7 +205,6 @@ def validate_plan(
     pool = normalize_pool_images(images)
     n = max(0, int(account_count or 0))
     s = max(1, int(slot_count or 1))
-    lo, hi = clamp_image_range(min_images, max_images)
 
     if n == 0:
         check.errors.append("Chưa chọn tài khoản nào.")
@@ -249,26 +248,8 @@ def validate_plan(
                 "Chế độ \"1 ảnh\" không dùng được với nhiều khung giờ (mỗi nick sẽ đăng lại đúng ảnh đó). "
                 "Chọn \"Nhiều ảnh\" hoặc chỉ để 1 khung giờ."
             )
-    elif i_mode == IMAGE_MULTI and n > 0:
-        need_round = n * hi
-        need_account = s * hi
-        if m == 0:
-            check.errors.append("Chế độ \"Nhiều ảnh\" cần tải ảnh vào kho.")
-        elif m < need_round:
-            check.errors.append(
-                f"Cần ít nhất {need_round} ảnh ({n} tài khoản × tối đa {hi} ảnh/bài, không dùng chung ảnh trong cùng lượt), "
-                f"hiện có {m} ảnh."
-            )
-        elif m < need_account:
-            check.errors.append(
-                f"Cần ít nhất {need_account} ảnh ({s} khung giờ × tối đa {hi} ảnh/bài, mỗi nick không đăng lại ảnh cũ), "
-                f"hiện có {m} ảnh."
-            )
-        elif m < n * s * hi:
-            check.warnings.append(
-                f"Có {m} ảnh cho {n * s} lượt đăng × tối đa {hi} ảnh/bài: "
-                "một số ảnh sẽ được nick khác dùng lại ở khung sau."
-            )
+    # "Mỗi bài 1 ảnh" (IMAGE_MULTI): không chặn, không cảnh báo — kho thiếu thì dùng lại ảnh cũ, kho trống thì
+    # đăng không ảnh; ô soạn bài (ComposeEditor) đã hiện thông báo này ngay cạnh kho ảnh.
     return check
 
 
@@ -598,7 +579,7 @@ def allocate_round(
     *,
     content_mode: str,
     image_mode: str,
-    min_images: int = 1,
+    min_images: int = 1,  # không còn dùng: "Nhiều ảnh" = mỗi bài 1 ảnh (giữ tham số cho tương thích)
     max_images: int = 1,
     used_texts: Optional[Dict[str, Set[str]]] = None,
     used_images: Optional[Dict[str, Set[str]]] = None,
@@ -619,7 +600,6 @@ def allocate_round(
     rng = rng or random.Random()
     c_mode = normalize_content_mode(content_mode)
     i_mode = normalize_image_mode(image_mode)
-    lo, hi = clamp_image_range(min_images, max_images)
     used_texts = used_texts or {}
     used_images = used_images or {}
     text_usage = text_usage or {}
@@ -670,25 +650,35 @@ def allocate_round(
                 continue
             images_by_uid[uid] = [pool[0]]
     elif i_mode == IMAGE_MULTI and pool:
+        # Mỗi bài đúng 1 ảnh. Đủ ảnh thì không trùng (trong lượt và với ảnh nick đã đăng);
+        # kho thiếu thì dùng lại ảnh cũ: ưu tiên ảnh nick chưa đăng, chưa dùng trong lượt, ít dùng nhất.
         ranked_imgs = _ranked(pool, image_usage, rng)
         order = list(content_by_uid)
         rng.shuffle(order)
         allowed_imgs = {uid: [img for img in ranked_imgs if img not in used_images.get(uid, set())] for uid in order}
-        # Lên kế hoạch theo số ảnh tối đa (trường hợp xấu nhất); lượt này mỗi bài lấy ngẫu nhiên lo..hi ảnh
         used_any_img = set().union(*used_images.values()) if used_images else set()
         fresh_imgs = [img for img in ranked_imgs if not image_usage.get(img) and img not in used_any_img]
-        img_needs = {uid: hi for uid in order}
+        img_needs = {uid: 1 for uid in order}
         img_plan = _plan_round(img_needs, allowed_imgs, ranked_imgs, remaining_rounds, fresh=fresh_imgs)
         if img_plan is None:
             img_plan = _plan_round(img_needs, allowed_imgs, ranked_imgs, 1, fresh=fresh_imgs, partial=True) or {}
+        in_round: Dict[str, int] = {}
         for uid in order:
-            got = img_plan.get(uid, [])
-            want = min(len(got), rng.randint(lo, hi))
-            images_by_uid[uid] = rng.sample(got, want) if want < len(got) else list(got)
-        for uid in list(content_by_uid):
-            if len(images_by_uid[uid]) < lo:
-                result.skipped[uid] = f"Không còn đủ {lo} ảnh chưa đăng cho nick này (kho ảnh không đủ)."
-                del content_by_uid[uid]
+            got = img_plan.get(uid) or []
+            if got:
+                images_by_uid[uid] = [got[0]]
+                in_round[got[0]] = in_round.get(got[0], 0) + 1
+        rank_pos = {img: i for i, img in enumerate(ranked_imgs)}
+        for uid in order:
+            if images_by_uid[uid]:
+                continue
+            own = used_images.get(uid, set())
+            pick = min(
+                ranked_imgs,
+                key=lambda img: (img in own, in_round.get(img, 0), image_usage.get(img, 0), rank_pos[img]),
+            )
+            images_by_uid[uid] = [pick]
+            in_round[pick] = in_round.get(pick, 0) + 1
 
     for uid in uids:
         if uid in content_by_uid:

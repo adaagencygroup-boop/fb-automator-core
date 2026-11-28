@@ -37,7 +37,7 @@ class ComposeJobTests(unittest.TestCase):
 
     def _start(self, owner="u1", count=5, gen=None, img=None, with_images=False, keys=("k1", "k2")):
         gen = gen or (lambda prompt, key, fb, model: (f"bài {prompt[-40:]} {key}", "mèo"))
-        img = img or (lambda kw, pk, keys: f"{kw}.jpg")
+        img = img or (lambda kw, pk, used: f"{kw}.jpg")
         return compose_jobs.start_generate_job(
             owner, "status", prompt="viết bài", count=count, keys=list(keys), model="m",
             with_images=with_images, pixabay_key=None, generate_text=gen, fetch_image=img,
@@ -65,7 +65,8 @@ class ComposeJobTests(unittest.TestCase):
 
         job = _wait(self._start(count=4, gen=gen, img=lambda *a: None, with_images=True))
         self.assertEqual(job.status, compose_jobs.DONE)
-        self.assertEqual((job.done, job.failed, job.images_missing), (2, 2, 2))
+        # Mỗi bài đều được tìm ảnh ở luồng riêng (kể cả bài AI lỗi) → 4 bài không có ảnh
+        self.assertEqual((job.done, job.failed, job.images_missing), (2, 2, 4))
         self.assertIn("429 quá tải", job.errors)
 
     def test_all_failed(self):

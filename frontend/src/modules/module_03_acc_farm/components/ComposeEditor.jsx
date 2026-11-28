@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ImagePlus,
   Loader2,
@@ -15,28 +15,30 @@ import {
   Image as ImageIcon,
   Users,
   Search,
-  ArrowRightLeft,
+  Maximize2,
 } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api } from "@/services/api";
 import { toast } from "@/lib/toast";
 import { AuthedPostImage } from "./PostImageModal";
 import { FacebookEmojiMenu } from "./FacebookEmojiModal";
 import {
-  CONTENT_MULTI,
   IMAGE_MULTI,
-  IMAGE_NONE,
-  IMAGE_SINGLE,
   LAYOUT_ACCOUNTS,
   LAYOUT_TEXT,
   MAX_ACCOUNT_POST_IMAGES,
   MAX_POST_CHARS,
   accountEntry,
-  accountPostsToText,
-  parseComposeText,
-  textToAccountPosts,
+  applyTextToCells,
+  cellsToText,
+  fillCellImages,
+  flowOverflowIntoCells,
+  orderedCells,
+  splitPostChunks,
 } from "../composeText";
 
 const CARDS_PER_PAGE = 9;
+const MAX_CRAWL_IMAGES = 50; // khớp post_routes.MAX_CRAWL_IMAGES
 
 async function uploadImage(file) {
   const formData = new FormData();
@@ -91,24 +93,6 @@ function Segmented({ value, options, onChange, disabled }) {
   );
 }
 
-function NumberSelect({ value, onChange, disabled, label }) {
-  return (
-    <select
-      aria-label={label}
-      value={value}
-      disabled={disabled}
-      onChange={(e) => onChange(Number(e.target.value))}
-      className="h-8 rounded-lg border border-[#E2E8F0] bg-white px-2 text-xs font-semibold text-slate-700 focus:border-[#2563EB] focus:outline-none disabled:opacity-60"
-    >
-      {[1, 2, 3].map((n) => (
-        <option key={n} value={n}>
-          {n}
-        </option>
-      ))}
-    </select>
-  );
-}
-
 function Thumb({ path, alt, onRemove }) {
   return (
     <div className="group relative h-14 w-14 overflow-hidden rounded-lg border border-[#E2E8F0] bg-slate-50">
@@ -141,6 +125,7 @@ function AccountCard({
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [uploadingRow, setUploadingRow] = useState(-1);
   const [crawlingRow, setCrawlingRow] = useState(-1);
+  const [expandedRow, setExpandedRow] = useState(-1); // ô đang mở phóng to (-1 = đóng)
   const textareas = useRef([]);
   const lastFocused = useRef(0);
   const fileRef = useRef(null);
@@ -172,8 +157,8 @@ function AccountCard({
     }
     setCrawlingRow(row);
     try {
-      const path = await onCrawlImage(text);
-      const merged = [...new Set([...entries[row].images, path])].slice(0, MAX_ACCOUNT_POST_IMAGES);
+      const paths = await onCrawlImage(text, 1);
+      const merged = [...new Set([...entries[row].images, ...paths])].slice(0, MAX_ACCOUNT_POST_IMAGES);
       onChangeEntry(row, { images: merged });
     } catch (err) {
       toast.error(err?.message || "Không cào được ảnh.", "CÀO ẢNH");
@@ -269,8 +254,19 @@ function AccountCard({
                 }`}
               />
               <div className="flex items-center justify-between text-xs text-[#64748B]">
-                <span>{entry.content.length.toLocaleString("vi-VN")} ký tự</span>
-                {entry.content.length > MAX_POST_CHARS && <span className="font-medium text-red-500">Quá dài</span>}
+                <span>
+                  {entry.content.length.toLocaleString("vi-VN")} ký tự
+                  {entry.content.length > MAX_POST_CHARS && <span className="ml-1.5 font-medium text-red-500">Quá dài</span>}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setExpandedRow(i)}
+                  className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-slate-500 hover:bg-blue-50 hover:text-[#2563EB]"
+                  title="Mở to để đọc / sửa cho rõ"
+                >
+                  <Maximize2 size={12} />
+                  Phóng to
+                </button>
               </div>
               {imagesOpen && (
                 <div className="flex flex-wrap gap-2">
@@ -317,6 +313,103 @@ function AccountCard({
         </div>
         <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFiles} />
       </div>
+
+      <Dialog open={expandedRow >= 0} onOpenChange={(open) => !open && setExpandedRow(-1)}>
+        {expandedRow >= 0 && (
+          <DialogContent className="max-h-[92vh] w-[94vw] max-w-4xl overflow-y-auto p-6 sm:max-w-4xl">
+            <DialogHeader className="pr-8">
+              <DialogTitle className="text-base font-bold text-slate-900">
+                {name}
+                {rowLabels[expandedRow] ? <span className="text-[#2563EB]"> · Khung {rowLabels[expandedRow]}</span> : null}
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-500">Sửa trực tiếp, nội dung tự lưu nháp.</DialogDescription>
+            </DialogHeader>
+            {rowLabels.length > 1 && (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {rowLabels.map((label, r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => setExpandedRow(r)}
+                    className={`rounded-lg border px-2.5 py-1 text-xs font-semibold ${
+                      r === expandedRow
+                        ? "border-[#2563EB] bg-[#EFF6FF] text-[#2563EB]"
+                        : "border-[#E2E8F0] text-slate-500 hover:border-[#2563EB] hover:text-[#2563EB]"
+                    }`}
+                  >
+                    Khung {label}
+                    {!entries[r].content.trim() && <span className="ml-1 text-amber-500">•</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+            <textarea
+              autoFocus
+              value={entries[expandedRow].content}
+              readOnly={locked}
+              onChange={(e) => onChangeEntry(expandedRow, { content: e.target.value })}
+              placeholder={`Nhập nội dung bài đăng cho ${name}...`}
+              className={`mt-3 min-h-[50vh] w-full resize-y rounded-xl border p-4 text-sm leading-relaxed text-[#0F172A] focus:outline-none ${
+                locked
+                  ? "cursor-not-allowed border-[#E2E8F0] bg-slate-50 text-slate-600"
+                  : "border-[#E2E8F0] bg-white focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB]"
+              }`}
+            />
+            <div className="mt-1 text-xs text-[#64748B]">
+              {entries[expandedRow].content.length.toLocaleString("vi-VN")} ký tự
+              {entries[expandedRow].content.length > MAX_POST_CHARS && (
+                <span className="ml-1.5 font-medium text-red-500">Quá dài (tối đa {MAX_POST_CHARS.toLocaleString("vi-VN")})</span>
+              )}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {entries[expandedRow].images.map((path, k) => (
+                <Thumb
+                  key={path}
+                  path={path}
+                  alt={`Ảnh ${k + 1}`}
+                  onRemove={
+                    locked
+                      ? null
+                      : () => onChangeEntry(expandedRow, { images: entries[expandedRow].images.filter((p) => p !== path) })
+                  }
+                />
+              ))}
+              {!locked && entries[expandedRow].images.length < MAX_ACCOUNT_POST_IMAGES && (
+                <>
+                  <button
+                    type="button"
+                    disabled={uploadingRow >= 0}
+                    onClick={() => pickImages(expandedRow)}
+                    className="flex h-14 w-14 flex-col items-center justify-center gap-0.5 rounded-lg border-2 border-dashed border-[#CBD5E1] text-[10px] font-semibold text-slate-500 hover:border-[#2563EB] hover:text-[#2563EB] disabled:opacity-50"
+                  >
+                    {uploadingRow === expandedRow ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
+                    Thêm
+                  </button>
+                  {onCrawlImage && (
+                    <button
+                      type="button"
+                      disabled={crawlingRow >= 0 || Boolean(crawlDisabledReason)}
+                      onClick={() => crawlFor(expandedRow)}
+                      title={crawlDisabledReason || "Cào 1 ảnh Pixabay hợp với nội dung bài"}
+                      className="flex h-14 w-14 flex-col items-center justify-center gap-0.5 rounded-lg border-2 border-dashed border-[#BFDBFE] text-[10px] font-semibold text-[#2563EB] hover:bg-blue-50 disabled:opacity-50"
+                    >
+                      {crawlingRow === expandedRow ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+                      Cào ảnh
+                    </button>
+                  )}
+                </>
+              )}
+              <button
+                type="button"
+                onClick={() => setExpandedRow(-1)}
+                className="ml-auto h-9 rounded-lg bg-[#2563EB] px-5 text-xs font-bold text-white hover:bg-blue-700"
+              >
+                Xong
+              </button>
+            </div>
+          </DialogContent>
+        )}
+      </Dialog>
 
       <div className="mt-4 grid w-full min-w-0 grid-cols-3 gap-1.5 border-t border-[#E2E8F0] pt-3">
         <button
@@ -399,7 +492,12 @@ function AccountCards({
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3 [&>*]:min-w-0">
+      {/* Số cột theo số thẻ để không chừa khoảng trắng: 1 thẻ = 1 cột, 2 thẻ = 2 cột, từ 3 thẻ = tối đa 3 cột */}
+      <div
+        className={`grid grid-cols-1 gap-5 [&>*]:min-w-0 ${
+          visible.length >= 3 ? "md:grid-cols-2 xl:grid-cols-3" : visible.length === 2 ? "md:grid-cols-2" : ""
+        }`}
+      >
         {visible.map((acc) => {
           const uid = String(acc.uid);
           const entries = rowLabels.map((_, i) => accountEntry(compose.account_posts, uid, i));
@@ -454,27 +552,74 @@ function AccountCards({
   );
 }
 
-/** Dạng văn bản: ô soạn chung (các bài cách nhau bằng dòng "---") + kho ảnh chung, chia ngẫu nhiên cho nick. */
-function TextComposer({ compose, parsed, onChange, locked, onCrawlImage, crawlDisabledReason }) {
+/**
+ * "Dạng văn bản": CÙNG bộ bài với thẻ nick, soạn trong 1 ô (các bài cách nhau bằng dòng "---").
+ * Bài thứ k = ô thứ k (khung 1 của mọi nick, rồi khung 2...), thứ tự hiện ngay dưới ô soạn.
+ */
+function TextView({ compose, onChange, accounts, rowLabels, locked, onCrawlImage, crawlDisabledReason }) {
   const fileRef = useRef(null);
   const [uploading, setUploading] = useState(false);
   const [crawlQuery, setCrawlQuery] = useState("");
   const [crawling, setCrawling] = useState(false);
-  const images = compose.image_paths || [];
+  const uidKey = accounts.map((a) => String(a.uid)).join(",");
+  const cells = useMemo(() => orderedCells(uidKey ? uidKey.split(",") : [], rowLabels.length), [uidKey, rowLabels.length]);
+  const names = useMemo(() => new Map(accounts.map((a) => [String(a.uid), a.name || String(a.uid)])), [accounts]);
 
-  const addToPool = (added) =>
-    onChange((prev) => ({
-      image_paths: [...new Set([...(prev.image_paths || []), ...added])],
-      image_mode: prev.image_mode === IMAGE_NONE ? IMAGE_MULTI : prev.image_mode,
-    }));
+  // Ô soạn giữ chữ đang gõ (kể cả khoảng trắng/dòng trống) khi đang focus; rời ô thì hiện lại bản chuẩn từ thẻ nick
+  const serialized = useMemo(
+    () => cellsToText(compose.account_posts, cells, compose.content_text),
+    [compose.account_posts, cells, compose.content_text],
+  );
+  const [text, setText] = useState(serialized);
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!editing) setText(serialized);
+  }, [serialized, editing]);
 
-  // Cào 1 ảnh Pixabay theo từ khoá (tiếng Việt cũng được, tự dịch) vào kho ảnh chung
+  const entries = cells.map((c, k) => ({ ...c, k, ...accountEntry(compose.account_posts, c.uid, c.row) }));
+  const withContent = entries.filter((e) => e.content.trim());
+  const noImage = withContent.filter((e) => e.images.length === 0);
+  const hasAnyImage = entries.some((e) => e.images.length > 0);
+  const spare = splitPostChunks(compose.content_text).filter(Boolean).length;
+  const tooLong = withContent.filter((e) => e.content.length > MAX_POST_CHARS).map((e) => e.k + 1);
+  const crawlCount = Math.min(MAX_CRAWL_IMAGES, Math.max(1, noImage.length));
+
+  const handleText = (value) => {
+    setText(value);
+    onChange((prev) => applyTextToCells(prev.account_posts, cells, value));
+  };
+
+  /** Gắn ảnh mới cho các bài chưa có ảnh (mỗi bài 1 ảnh); thiếu thì dùng lại ảnh cũ. */
+  const attachImages = (paths) => {
+    const res = fillCellImages(compose.account_posts, cells, paths);
+    onChange({ account_posts: res.account_posts });
+    return res;
+  };
+
+  const removeImages = (cell) =>
+    onChange((prev) => {
+      const posts = { ...(prev.account_posts || {}) };
+      const list = Array.isArray(posts[cell.uid]) ? posts[cell.uid].map((e) => ({ ...e })) : [];
+      if (list[cell.row]) list[cell.row] = { ...list[cell.row], images: [] };
+      posts[cell.uid] = list;
+      return { account_posts: posts };
+    });
+
+  const report = (res, source) => {
+    const parts = [];
+    if (res.assigned) parts.push(`gắn ${res.assigned} ảnh mới`);
+    if (res.reused) parts.push(`${res.reused} bài dùng lại ảnh cũ`);
+    if (parts.length) toast.success(`${source}: ${parts.join(", ")}.`, "ẢNH");
+    else toast.info("Mọi bài đã có ảnh.", "ẢNH");
+  };
+
   const handleCrawl = async () => {
     const q = crawlQuery.trim();
     if (!q) return;
     setCrawling(true);
     try {
-      addToPool([await onCrawlImage(q)]);
+      const paths = await onCrawlImage(q, crawlCount);
+      report(attachImages(paths), `Cào ${paths.length} ảnh`);
     } catch (err) {
       toast.error(err?.message || "Không cào được ảnh.", "CÀO ẢNH");
     } finally {
@@ -489,112 +634,141 @@ function TextComposer({ compose, parsed, onChange, locked, onCrawlImage, crawlDi
     setUploading(true);
     const added = await uploadFiles(files);
     setUploading(false);
-    if (added.length) {
-      onChange((prev) => ({
-        image_paths: [...new Set([...(prev.image_paths || []), ...added])],
-        image_mode: prev.image_mode === IMAGE_NONE ? (added.length > 1 ? IMAGE_MULTI : IMAGE_SINGLE) : prev.image_mode,
-      }));
-    }
+    if (added.length) report(attachImages(added), `Tải ${added.length} ảnh`);
   };
+
+  if (accounts.length === 0) {
+    return (
+      <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/40 px-4 py-10 text-center text-xs text-slate-400">
+        Chọn nick ở <strong className="text-slate-600">Bước 2</strong> trước: bài thứ 1, 2, 3… trong ô soạn sẽ lần lượt thuộc về từng nick / khung giờ.
+        {spare > 0 && <p className="mt-1 text-slate-500">Đang giữ {spare} bài dự phòng, sẽ tự điền khi chọn nick.</p>}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
-      <div className="space-y-1.5">
+      <div className="space-y-2">
         <textarea
-          value={compose.content_text}
+          value={text}
           readOnly={locked}
-          onChange={(e) => onChange({ content_text: e.target.value })}
+          onFocus={() => setEditing(true)}
+          onBlur={() => setEditing(false)}
+          onChange={(e) => handleText(e.target.value)}
           rows={14}
           placeholder={
-            "Nhập từng bài, mỗi bài cách nhau bằng 1 dòng chỉ có ---\nMỗi nick nhận ngẫu nhiên 1 bài khác nhau.\n\nVí dụ:\nChào buổi sáng cả nhà ☀️\n---\nCuối tuần này đi đâu chơi nhỉ?\n---\nCà phê sáng nay ngon quá ☕"
+            "Nhập từng bài, mỗi bài cách nhau bằng 1 dòng chỉ có ---\nBài 1 cho ô 1, bài 2 cho ô 2... (thứ tự ở bên dưới)\n\nVí dụ:\nChào buổi sáng cả nhà ☀️\n---\nCuối tuần này đi đâu chơi nhỉ?"
           }
-          className={`w-full min-h-[280px] resize-y rounded-xl border p-4 font-mono text-xs leading-relaxed text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:ring-1 sm:text-sm ${
+          className={`w-full min-h-[280px] resize-y rounded-xl border p-4 text-xs leading-relaxed text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:ring-1 sm:text-sm ${
             locked
               ? "cursor-not-allowed border-[#E2E8F0] bg-slate-50 text-slate-600"
               : "border-[#E2E8F0] bg-white focus:border-[#2563EB] focus:ring-[#2563EB]"
           }`}
         />
-        {parsed.tooLong.length > 0 && (
+        {tooLong.length > 0 && (
           <p className="text-[11px] font-medium text-red-500">
-            Bài số {parsed.tooLong.join(", ")} dài quá {MAX_POST_CHARS.toLocaleString("vi-VN")} ký tự (giới hạn của Facebook).
+            Bài số {tooLong.join(", ")} dài quá {MAX_POST_CHARS.toLocaleString("vi-VN")} ký tự (giới hạn của Facebook).
+          </p>
+        )}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] font-semibold text-slate-500">Thứ tự bài:</span>
+          {entries.map((e) => (
+            <span
+              key={`${e.uid}-${e.row}`}
+              title={e.content.trim() ? e.content.slice(0, 120) : "Chưa có bài"}
+              className={`rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${
+                e.content.trim() ? "border-[#BFDBFE] bg-[#EFF6FF] text-[#1D4ED8]" : "border-dashed border-slate-300 text-slate-400"
+              }`}
+            >
+              <strong>{e.k + 1}</strong> · {names.get(e.uid)}
+              {rowLabels[e.row] ? ` ${rowLabels[e.row]}` : ""}
+            </span>
+          ))}
+        </div>
+        {spare > 0 && (
+          <p className="text-[11px] text-slate-500">
+            Thừa {spare} bài (nhiều hơn số nick × khung giờ): giữ làm dự phòng, không đăng; sẽ tự điền khi có thêm ô trống.
           </p>
         )}
       </div>
 
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-3">
-          <span className="text-xs font-bold text-[#0F172A] sm:text-sm">Kho ảnh chung</span>
-          <Segmented
-            value={compose.image_mode}
-            disabled={locked}
-            onChange={(v) => onChange({ image_mode: v })}
-            options={[
-              { value: IMAGE_NONE, label: "Không ảnh" },
-              { value: IMAGE_SINGLE, label: "1 ảnh" },
-              { value: IMAGE_MULTI, label: "Nhiều ảnh" },
-            ]}
-          />
-          {compose.image_mode === IMAGE_MULTI && (
-            <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-              Mỗi bài từ
-              <NumberSelect
-                label="Số ảnh tối thiểu mỗi bài"
-                value={compose.min_images}
-                disabled={locked}
-                onChange={(n) => onChange({ min_images: n, max_images: Math.max(n, compose.max_images) })}
-              />
-              đến
-              <NumberSelect
-                label="Số ảnh tối đa mỗi bài"
-                value={compose.max_images}
-                disabled={locked}
-                onChange={(n) => onChange({ max_images: n, min_images: Math.min(n, compose.min_images) })}
-              />
-              ảnh
-            </span>
-          )}
+          <span className="text-xs font-bold text-[#0F172A] sm:text-sm">Ảnh của các bài</span>
+          <span className="text-[11px] font-medium text-slate-500">Mỗi bài 1 ảnh, theo đúng thứ tự bài</span>
         </div>
-        {compose.image_mode !== IMAGE_NONE && (
-          <p className="text-[11px] text-slate-500">
-            {compose.image_mode === IMAGE_SINGLE
-              ? "Mọi nick dùng chung ảnh đầu tiên trong kho."
-              : "Mỗi nick nhận ảnh khác nhau trong kho (trong cùng lượt không nick nào trùng ảnh)."}
-          </p>
-        )}
-        <div className="flex flex-wrap gap-3">
-          {images.map((path, idx) => (
-            <div
-              key={path}
-              className={`group relative h-20 w-20 overflow-hidden rounded-lg border bg-slate-50 ${
-                compose.image_mode === IMAGE_SINGLE && idx === 0 ? "border-[#2563EB] ring-1 ring-[#2563EB]" : "border-[#E2E8F0]"
-              } ${compose.image_mode === IMAGE_NONE ? "opacity-40" : ""}`}
-            >
-              <AuthedPostImage path={path} alt={`Ảnh ${idx + 1}`} className="h-full w-full object-cover" />
+        {withContent.length > 0 &&
+          (!hasAnyImage ? (
+            <p className="flex items-start gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-700">
+              <AlertTriangle size={13} className="mt-px shrink-0" />
+              Chưa có ảnh: các bài sẽ đăng KHÔNG có ảnh. Thêm ảnh hoặc cào ảnh Pixabay bên dưới để mỗi bài có 1 ảnh.
+            </p>
+          ) : noImage.length > 0 ? (
+            <p className="flex flex-wrap items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-700">
+              <AlertTriangle size={13} className="shrink-0" />
+              {noImage.length} bài chưa có ảnh (bài {noImage.map((e) => e.k + 1).join(", ")}). Cào / thêm ảnh, hoặc
               {!locked && (
                 <button
                   type="button"
-                  onClick={() => onChange((prev) => ({ image_paths: (prev.image_paths || []).filter((p) => p !== path) }))}
-                  className="absolute right-1 top-1 hidden h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white group-hover:flex"
-                  aria-label="Bỏ ảnh khỏi kho"
+                  onClick={() => report(attachImages([]), "Dùng lại ảnh")}
+                  className="rounded-md border border-amber-300 bg-white px-2 py-0.5 font-semibold text-amber-700 hover:bg-amber-100"
                 >
-                  <X size={12} />
+                  dùng lại ảnh cũ cho {noImage.length} bài
                 </button>
               )}
+            </p>
+          ) : (
+            <p className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-600">
+              <CheckCircle2 size={13} className="shrink-0" />
+              Mọi bài đều có ảnh.
+            </p>
+          ))}
+        <div className="flex flex-wrap gap-3">
+          {withContent.map((e) => (
+            <div key={`${e.uid}-${e.row}`} className="w-20 space-y-1">
+              <div className="group relative h-20 w-20 overflow-hidden rounded-lg border border-[#E2E8F0] bg-slate-50">
+                {e.images.length ? (
+                  <>
+                    <AuthedPostImage path={e.images[0]} alt={`Ảnh bài ${e.k + 1}`} className="h-full w-full object-cover" />
+                    {e.images.length > 1 && (
+                      <span className="absolute bottom-1 right-1 rounded bg-black/60 px-1 text-[10px] font-bold text-white">
+                        +{e.images.length - 1}
+                      </span>
+                    )}
+                    {!locked && (
+                      <button
+                        type="button"
+                        onClick={() => removeImages(e)}
+                        className="absolute right-1 top-1 hidden h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white group-hover:flex"
+                        aria-label={`Bỏ ảnh của bài ${e.k + 1}`}
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <span className="flex h-full w-full items-center justify-center border-2 border-dashed border-slate-200 text-[10px] text-slate-400">
+                    Chưa có ảnh
+                  </span>
+                )}
+              </div>
+              <p className="truncate text-center text-[10px] text-slate-500">Bài {e.k + 1}</p>
             </div>
           ))}
-          <button
-            type="button"
-            disabled={locked || uploading}
-            onClick={() => fileRef.current?.click()}
-            className="flex h-20 w-20 flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-[#CBD5E1] text-[11px] font-semibold text-slate-500 hover:border-[#2563EB] hover:text-[#2563EB] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {uploading ? <Loader2 size={18} className="animate-spin" /> : <ImagePlus size={18} />}
-            {uploading ? "Đang tải" : "Thêm ảnh"}
-          </button>
+          {!locked && (
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={() => fileRef.current?.click()}
+              className="flex h-20 w-20 flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-[#CBD5E1] text-[11px] font-semibold text-slate-500 hover:border-[#2563EB] hover:text-[#2563EB] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {uploading ? <Loader2 size={18} className="animate-spin" /> : <ImagePlus size={18} />}
+              {uploading ? "Đang tải" : "Thêm ảnh"}
+            </button>
+          )}
           <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFiles} />
         </div>
-        {images.length > 0 && <p className="text-[11px] text-slate-400">{images.length} ảnh trong kho</p>}
-        {onCrawlImage && !locked && (
+        {onCrawlImage && !locked && withContent.length > 0 && (
           <div className="flex max-w-md items-center gap-2">
             <input
               type="text"
@@ -612,13 +786,13 @@ function TextComposer({ compose, parsed, onChange, locked, onCrawlImage, crawlDi
             />
             <button
               type="button"
-              disabled={crawling || !crawlQuery.trim() || Boolean(crawlDisabledReason)}
+              disabled={crawling || !crawlQuery.trim() || Boolean(crawlDisabledReason) || noImage.length === 0}
               onClick={handleCrawl}
-              title={crawlDisabledReason || "Cào 1 ảnh Pixabay vào kho"}
+              title={crawlDisabledReason || (noImage.length ? `Cào ${crawlCount} ảnh Pixabay cho các bài chưa có ảnh` : "Mọi bài đã có ảnh")}
               className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-[#2563EB] px-3 text-xs font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {crawling ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />}
-              Cào ảnh Pixabay
+              {crawling ? `Đang cào ${crawlCount} ảnh...` : `Cào ${crawlCount} ảnh cho bài thiếu`}
             </button>
           </div>
         )}
@@ -628,14 +802,16 @@ function TextComposer({ compose, parsed, onChange, locked, onCrawlImage, crawlDi
   );
 }
 
+const VIEW_STORAGE_KEY = "m03.status.composeView";
+
 /**
- * Soạn bài Status, 2 dạng (cả hai cùng được giữ trong nháp, dạng đang chọn là dạng dùng khi đăng):
- *   - Từng bài     : mỗi nick 1 thẻ bài riêng (có hẹn giờ thì mỗi khung 1 ô), nick đăng đúng bài của nó
- *   - Dạng văn bản : ô soạn chung tách bằng "---" + kho ảnh chung, chia ngẫu nhiên cho nick
+ * Soạn bài Status: MỘT bộ bài (mỗi nick 1 bài cho mỗi khung giờ), 2 cách xem / sửa:
+ *   - Từng bài     : thẻ từng nick
+ *   - Dạng văn bản : 1 ô soạn, bài thứ k thuộc ô thứ k
+ * Sửa bên nào bên kia đổi theo; khi đăng, nick đăng đúng bài của nó.
  */
 export function ComposeEditor({
   compose,
-  parsed,
   onChange,
   onClearAll,
   saveState,
@@ -651,76 +827,62 @@ export function ComposeEditor({
   crawlDisabledReason = "",
 }) {
   const [confirmClear, setConfirmClear] = useState(false);
-  const isAccounts = compose.layout !== LAYOUT_TEXT;
-
-  const accountStats = useMemo(() => {
-    let filled = 0;
-    for (const acc of accounts) {
-      rowLabels.forEach((_, i) => {
-        if (accountEntry(compose.account_posts, acc.uid, i).content.trim()) filled += 1;
-      });
+  const [view, setView] = useState("cards");
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(VIEW_STORAGE_KEY) === "text") setView("text");
+    } catch {
+      // bỏ qua
     }
-    return { filled, total: accounts.length * rowLabels.length };
-  }, [accounts, rowLabels, compose.account_posts]);
+  }, []);
+  const changeView = (v) => {
+    setView(v);
+    try {
+      window.localStorage.setItem(VIEW_STORAGE_KEY, v);
+    } catch {
+      // bỏ qua
+    }
+  };
 
-  // Chuyển bài qua lại giữa 2 dạng (chủ động, không tự đồng bộ)
-  const textPostCount = useMemo(
-    () => parseComposeText(compose.content_text, compose.content_mode).count,
-    [compose.content_text, compose.content_mode],
+  const uidKey = accounts.map((a) => String(a.uid)).join(",");
+  const cells = useMemo(() => orderedCells(uidKey ? uidKey.split(",") : [], rowLabels.length), [uidKey, rowLabels.length]);
+
+  // Nháp cũ: dạng văn bản riêng (ô soạn + kho ảnh) → gộp vào bộ bài chung. Bài thừa / ảnh chưa dùng giữ làm dự phòng
+  // và tự điền vào ô trống khi chọn thêm nick / khung giờ.
+  useEffect(() => {
+    if (locked) return;
+    const patch = {};
+    if (compose.layout === LAYOUT_TEXT) patch.layout = LAYOUT_ACCOUNTS;
+    if (compose.image_mode !== IMAGE_MULTI || compose.min_images !== 1 || compose.max_images !== 1) {
+      Object.assign(patch, { image_mode: IMAGE_MULTI, min_images: 1, max_images: 1 });
+    }
+    let posts = compose.account_posts;
+    if (cells.length) {
+      const flowed = flowOverflowIntoCells(posts, cells, compose.content_text);
+      if (flowed) {
+        posts = flowed.account_posts;
+        patch.account_posts = posts;
+        patch.content_text = flowed.content_text;
+      }
+      const pool = compose.image_paths || [];
+      if (pool.length) {
+        const res = fillCellImages(posts, cells, pool, { reuse: false });
+        if (res.assigned) {
+          patch.account_posts = res.account_posts;
+          patch.image_paths = pool.slice(res.assigned);
+        }
+      }
+    }
+    if (Object.keys(patch).length) onChange(patch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locked, cells, compose.layout, compose.content_text, compose.image_paths, compose.account_posts, compose.image_mode]);
+
+  const filled = useMemo(
+    () => cells.filter((c) => accountEntry(compose.account_posts, c.uid, c.row).content.trim()).length,
+    [cells, compose.account_posts],
   );
-  const emptyCellCount = accountStats.total - accountStats.filled;
-  const uids = accounts.map((a) => String(a.uid));
-
-  const pullFromText = () => {
-    const res = textToAccountPosts(compose, uids, rowLabels.length);
-    if (!res.filled) {
-      toast.warning("Không còn ô trống nào để điền.", "CHUYỂN BÀI");
-      return;
-    }
-    onChange({ account_posts: res.accountPosts });
-    toast.success(
-      `Đã điền ${res.filled} bài từ Dạng văn bản vào thẻ nick${res.leftover ? ` (thừa ${res.leftover} bài vì hết ô trống)` : ""}.`,
-      "CHUYỂN BÀI",
-    );
-  };
-
-  const pullFromAccounts = () => {
-    const res = accountPostsToText(compose, uids, rowLabels.length);
-    if (!res.added && !res.newImages) {
-      toast.warning("Các bài ở dạng Từng bài đã có sẵn trong ô soạn.", "CHUYỂN BÀI");
-      return;
-    }
-    onChange(res.patch);
-    toast.success(
-      `Đã gộp ${res.added} bài${res.newImages ? ` và ${res.newImages} ảnh` : ""} từ dạng Từng bài vào ô soạn.`,
-      "CHUYỂN BÀI",
-    );
-  };
-
-  let convert = null;
-  if (isAccounts && textPostCount > 0) {
-    convert = {
-      label: `Lấy ${textPostCount} bài từ Dạng văn bản`,
-      onClick: pullFromText,
-      disabledReason: accounts.length === 0 ? "Chọn nick trước." : emptyCellCount === 0 ? "Mọi ô đã có bài." : "",
-      hint: "Điền bài từ ô soạn văn bản vào các ô còn trống, kèm ảnh từ kho chung. Ô đã có bài giữ nguyên.",
-    };
-  } else if (!isAccounts && accountStats.filled > 0) {
-    convert = {
-      label: `Gộp ${accountStats.filled} bài từ dạng Từng bài`,
-      onClick: pullFromAccounts,
-      disabledReason: "",
-      hint: "Nối bài của các nick đang chọn vào cuối ô soạn (ngăn bằng ---), ảnh dồn vào kho chung.",
-    };
-  }
-
-  const hasContent = isAccounts
-    ? Object.keys(compose.account_posts || {}).length > 0
-    : Boolean(compose.content_text) || (compose.image_paths || []).length > 0;
-  const summary = isAccounts
-    ? `Đã có ${accountStats.filled}/${accountStats.total} bài`
-    : parsed.summary;
-  const summaryActive = isAccounts ? accountStats.filled > 0 : parsed.count > 0;
+  const spare = splitPostChunks(compose.content_text).filter(Boolean).length;
+  const hasContent = Object.keys(compose.account_posts || {}).length > 0 || spare > 0;
 
   const saveLabel =
     saveState === "saving" ? "Đang lưu nháp..." : saveState === "saved" ? "Đã tự lưu nháp" : saveState === "error" ? "Chưa lưu được nháp, sẽ thử lại" : "";
@@ -730,27 +892,16 @@ export function ComposeEditor({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           <Segmented
-            value={isAccounts ? LAYOUT_ACCOUNTS : LAYOUT_TEXT}
-            disabled={locked}
-            onChange={(v) => onChange(v === LAYOUT_TEXT ? { layout: LAYOUT_TEXT, content_mode: CONTENT_MULTI } : { layout: LAYOUT_ACCOUNTS })}
+            value={view}
+            onChange={changeView}
             options={[
-              { value: LAYOUT_ACCOUNTS, label: "Từng bài" },
-              { value: LAYOUT_TEXT, label: "Dạng văn bản" },
+              { value: "cards", label: "Từng bài" },
+              { value: "text", label: "Dạng văn bản" },
             ]}
           />
-          <span className={`text-xs font-semibold ${summaryActive ? "text-[#2563EB]" : "text-slate-400"}`}>{summary}</span>
-          {convert && !locked && (
-            <button
-              type="button"
-              disabled={Boolean(convert.disabledReason)}
-              onClick={convert.onClick}
-              title={convert.disabledReason || convert.hint}
-              className="flex items-center gap-1.5 rounded-lg border border-[#BFDBFE] bg-blue-50 px-2.5 py-1 text-xs font-semibold text-[#2563EB] hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <ArrowRightLeft size={13} />
-              {convert.label}
-            </button>
-          )}
+          <span className={`text-xs font-semibold ${filled > 0 ? "text-[#2563EB]" : "text-slate-400"}`}>
+            Đã có {filled}/{cells.length} bài{spare ? ` · ${spare} bài dự phòng` : ""}
+          </span>
         </div>
         <div className="flex items-center gap-3">
           {saveLabel && (
@@ -758,12 +909,12 @@ export function ComposeEditor({
           )}
           {confirmClear ? (
             <span className="flex items-center gap-1.5 text-[11px] font-semibold">
-              <span className="text-slate-600">{isAccounts ? "Xoá bài của mọi nick?" : "Xoá hết ô soạn và kho ảnh?"}</span>
+              <span className="text-slate-600">Xoá bài của mọi nick?</span>
               <button
                 type="button"
                 onClick={() => {
                   setConfirmClear(false);
-                  onClearAll?.(isAccounts ? LAYOUT_ACCOUNTS : LAYOUT_TEXT);
+                  onClearAll?.("ALL");
                 }}
                 className="rounded-md bg-red-600 px-2 py-1 text-white hover:bg-red-700"
               >
@@ -788,12 +939,12 @@ export function ComposeEditor({
       </div>
 
       <p className="text-[11px] text-slate-500">
-        {isAccounts
+        {view === "cards"
           ? "Mỗi nick đăng đúng bài trong thẻ của nó" + (rowLabels.length > 1 ? ", mỗi khung giờ 1 bài." : ".")
-          : "Mỗi nick nhận ngẫu nhiên 1 bài khác nhau trong ô; ảnh lấy từ kho ảnh chung."}
+          : "Cùng các bài với dạng Từng bài, soạn trong 1 ô: bài thứ 1, 2, 3… lần lượt thuộc về các nick / khung giờ theo thứ tự bên dưới."}
       </p>
 
-      {isAccounts ? (
+      {view === "cards" ? (
         <AccountCards
           compose={compose}
           onChange={onChange}
@@ -808,10 +959,11 @@ export function ComposeEditor({
           crawlDisabledReason={crawlDisabledReason}
         />
       ) : (
-        <TextComposer
+        <TextView
           compose={compose}
-          parsed={parsed}
           onChange={onChange}
+          accounts={accounts}
+          rowLabels={rowLabels}
           locked={locked}
           onCrawlImage={onCrawlImage}
           crawlDisabledReason={crawlDisabledReason}

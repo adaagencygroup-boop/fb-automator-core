@@ -13,6 +13,13 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from core.database.connection import db
 
 WAITING, RUNNING, DONE, MISSED, STOPPED, FAILED = "WAITING", "RUNNING", "DONE", "MISSED", "STOPPED", "FAILED"
+# STOPPED có 2 nghĩa: chưa có phiên (session_id NULL) = TẠM DỪNG theo chiến dịch, Chạy tiếp sẽ chạy đúng giờ;
+# đã có phiên = bị DỪNG GIỮA CHỪNG. Khung tạm dừng mà qua giờ hẹn → MISSED (bị lỡ).
+PAUSED_MESSAGE = "Tạm dừng theo chiến dịch. Bấm Chạy tiếp trước giờ hẹn để khung này chạy đúng giờ."
+# Khung đang chạy dở khi tạm dừng chiến dịch: phiên đăng chỉ PAUSE (giữ nguyên chỗ đang làm), Chạy tiếp thì chạy tiếp
+PAUSED_MID_RUN_MESSAGE = "Tạm dừng giữa chừng theo chiến dịch: bài chưa đăng sẽ chạy tiếp khi bấm Chạy tiếp."
+RESUMED_MID_RUN_MESSAGE = "Đã chạy tiếp sau khi tạm dừng giữa chừng."
+MISSED_WHILE_PAUSED_MESSAGE = "Bị lỡ: chiến dịch đang tạm dừng khi đến giờ hẹn. Bấm Chạy lại để đăng."
 ACTIVE, COMPLETED = "ACTIVE", "COMPLETED"
 
 _CAMPAIGN_COLUMNS = (
@@ -111,10 +118,22 @@ def list_campaigns(owner_key: str, limit: int = 200) -> List[Dict[str, Any]]:
                (SELECT COUNT(*) FROM post_campaign_slots s WHERE s.campaign_id = c.id AND s.status = 'RUNNING') AS slot_running,
                (SELECT COUNT(*) FROM post_campaign_slots s
                  WHERE s.campaign_id = c.id AND s.status IN ('MISSED', 'FAILED')) AS slot_problem,
+               (SELECT COUNT(*) FROM post_campaign_slots s WHERE s.campaign_id = c.id AND s.status = 'MISSED') AS slot_missed,
+               (SELECT COUNT(*) FROM post_campaign_slots s WHERE s.campaign_id = c.id AND s.status = 'FAILED') AS slot_failed,
+               (SELECT COUNT(*) FROM post_campaign_slots s
+                 WHERE s.campaign_id = c.id AND s.status = 'STOPPED' AND s.session_id IS NULL) AS slot_paused,
+               (SELECT COUNT(*) FROM post_campaign_slots s
+                 WHERE s.campaign_id = c.id AND s.status = 'STOPPED' AND s.session_id IS NOT NULL) AS slot_stopped,
                (SELECT MIN(run_at) FROM post_campaign_slots s
                  WHERE s.campaign_id = c.id AND s.status = 'WAITING') AS next_run_at,
+               (SELECT MIN(run_at) FROM post_campaign_slots s
+                 WHERE s.campaign_id = c.id AND s.status = 'STOPPED' AND s.session_id IS NULL) AS next_paused_at,
                (SELECT COALESCE(SUM(success_count), 0) FROM post_campaign_slots s WHERE s.campaign_id = c.id) AS posts_success,
-               (SELECT COALESCE(SUM(failed_count), 0) FROM post_campaign_slots s WHERE s.campaign_id = c.id) AS posts_failed
+               (SELECT COALESCE(SUM(failed_count), 0) FROM post_campaign_slots s WHERE s.campaign_id = c.id) AS posts_failed,
+               (SELECT COALESCE(json_agg(json_build_object(
+                           'run_at', s.run_at, 'status', s.status, 'session_id', s.session_id::text, 'message', s.message
+                       ) ORDER BY s.run_at), '[]'::json)
+                  FROM post_campaign_slots s WHERE s.campaign_id = c.id) AS slot_timeline
         FROM post_campaigns c
         WHERE owner_key = %s
         ORDER BY created_at DESC
@@ -122,7 +141,12 @@ def list_campaigns(owner_key: str, limit: int = 200) -> List[Dict[str, Any]]:
         """,
         (owner_key, limit),
     )
-    return [_campaign(r) for r in rows]
+    out = []
+    for r in rows:
+        c = _campaign(r)
+        c["slot_timeline"] = _json(r.get("slot_timeline"), [])  # danh sách khung (giờ + trạng thái) để vẽ ở trang danh sách
+        out.append(c)
+    return out
 
 
 def update_campaign(campaign_id: str, fields: Dict[str, Any], waiting_times: Sequence[datetime]) -> None:
@@ -151,10 +175,29 @@ def stop_campaign(campaign_id: str) -> None:
     with db.session() as cur:
         cur.execute("UPDATE post_campaigns SET status = 'STOPPED' WHERE id = %s", (campaign_id,))
         cur.execute(
-            "UPDATE post_campaign_slots SET status = 'STOPPED', message = 'Chiến dịch đã dừng' "
+            "UPDATE post_campaign_slots SET status = 'STOPPED', message = %s "
             "WHERE campaign_id = %s AND status = 'WAITING'",
-            (campaign_id,),
+            (PAUSED_MESSAGE, campaign_id),
         )
+
+
+def mark_paused_slots_missed(now: datetime, *, machine_id: Optional[str] = None, campaign_id: Optional[str] = None) -> int:
+    """Khung đang tạm dừng (chưa chạy) mà đã qua giờ hẹn → MISSED: không còn chạy đúng giờ được nữa.
+    Khung bị dừng giữa chừng (đã có phiên) vẫn giữ STOPPED."""
+    cond, params = "", [MISSED_WHILE_PAUSED_MESSAGE, now]
+    if machine_id is not None:
+        cond, params = " AND c.machine_id = %s", params + [machine_id]
+    if campaign_id is not None:
+        cond, params = cond + " AND c.id = %s", params + [campaign_id]
+    cur = db.execute(
+        f"""
+        UPDATE post_campaign_slots s SET status = 'MISSED', message = %s
+        FROM post_campaigns c
+        WHERE c.id = s.campaign_id AND s.status = 'STOPPED' AND s.session_id IS NULL AND s.run_at < %s{cond}
+        """,
+        tuple(params),
+    )
+    return cur.rowcount or 0
 
 
 def resume_campaign(campaign_id: str, not_before: datetime) -> int:

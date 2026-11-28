@@ -13,10 +13,15 @@ import random
 import urllib.request
 import urllib.parse
 import json
+import time
 from config.constants import UPLOADS_DIR
 from typing import List, Dict, Any, Optional, Tuple, Set
 
 logger = logging.getLogger(__name__)
+
+GEMINI_TEXT_TIMEOUT = 25  # giây / lượt gọi viết bài; model treo thì sớm chuyển key/model khác
+GEMINI_RETRY_WAIT = 5  # giây nghỉ trước khi thử lại khi mọi key/model đều 429/503
+MAX_IMAGE_KEYWORDS = 30
 
 # ==============================================================================
 # 1. GEMINI AI GENERATOR
@@ -332,7 +337,10 @@ def generate_status_content(
         fallbacks = ["gemini-flash-lite-latest", "gemini-2.5-flash-lite", "gemini-3.8-flash", "gemini-flash-latest"]
     else:
         # Ưu tiên model còn mở cho user mới; tránh 2.5-flash (thường 404)
-        fallbacks = ["gemini-flash-latest", "gemini-3.8-flash", "gemini-3-flash-preview", "gemini-2.5-flash"]
+        fallbacks = [
+            "gemini-flash-latest", "gemini-3.8-flash", "gemini-3-flash-preview", "gemini-2.5-flash",
+            "gemini-flash-lite-latest",
+        ]
 
     for fb in fallbacks:
         if fb not in candidate_models:
@@ -341,73 +349,88 @@ def generate_status_content(
     import re
     last_error = None
 
-    for key in all_keys:
-        for endpoint_model in candidate_models:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{endpoint_model}:generateContent?key={key}"
-
-            # Thử gọi với thinkingBudget: 0 trước để tránh Gemini 2.5 nuốt trọn token vào thinking
-            configs_to_try = [
-                {"temperature": 0.85, "maxOutputTokens": 2500, "thinkingConfig": {"thinkingBudget": 0}},
-                {"temperature": 0.85, "maxOutputTokens": 3000}
-            ]
-
-            for gen_config in configs_to_try:
-                payload = {
-                    "contents": [
-                        {
-                            "parts": [
-                                {"text": f"{system_instruction}\n\nYêu cầu cụ thể:\n{prompt}"}
-                            ]
-                        }
-                    ],
-                    "generationConfig": gen_config
-                }
-
-                try:
-                    req = urllib.request.Request(
-                        url,
-                        data=json.dumps(payload).encode('utf-8'),
-                        headers={'Content-Type': 'application/json'}
-                    )
-                    with urllib.request.urlopen(req, timeout=45) as resp:
-                        data = json.loads(resp.read().decode('utf-8'))
-                        candidates = data.get('candidates', [])
-                        if candidates:
-                            cand = candidates[0]
-                            finish_reason = cand.get('finishReason', '')
-                            parts = cand.get('content', {}).get('parts', [])
-                            if parts and 'text' in parts[0]:
-                                raw_text = parts[0]['text'].strip()
-
-                                # Tách IMAGE_KEYWORD nếu có
-                                image_kw = None
-                                match = re.search(r'\[IMAGE_KEYWORD:\s*([^\]]+)\]', raw_text, re.IGNORECASE)
-                                if match:
-                                    val = match.group(1).strip()
-                                    if val.upper() != "NONE" and len(val) >= 2:
-                                        image_kw = val
-                                    raw_text = re.sub(r'\[IMAGE_KEYWORD:\s*[^\]]+\]', '', raw_text, flags=re.IGNORECASE).strip()
-                                else:
-                                    # Dọn dẹp trường hợp keyword bị cắt dở ở cuối
-                                    raw_text = re.sub(r'\[IMAGE_KEYWORD:.*$', '', raw_text, flags=re.IGNORECASE).strip()
-
-                                # Nếu chẳng may dính MAX_TOKENS và câu bị ngắt lửng mà còn key/model khác, thử lại
-                                if finish_reason == 'MAX_TOKENS' and len(raw_text) < 150:
-                                    logger.warning(f"Model {endpoint_model} bị MAX_TOKENS và độ dài chỉ {len(raw_text)} ký tự, thử cấu hình tiếp theo...")
-                                    continue
-
-                                return (raw_text, image_kw)
-                except urllib.error.HTTPError as e:
-                    last_error = f"HTTP {e.code}: {e.reason}"
-                    # Nếu lỗi do model không hỗ trợ thinkingConfig (HTTP 400), thử cấu hình tiếp theo
-                    if e.code == 400 and "thinkingConfig" in gen_config:
-                        continue
-                    logger.warning(f"Model {endpoint_model} với key ...{key[-4:]} lỗi {last_error}")
+    # 2 vòng: vòng 2 chỉ chạy khi vòng 1 hỏng vì quá tải tạm thời (429/503) — nghỉ vài giây rồi thử lại
+    for attempt in range(2):
+        if attempt and not str(last_error or "").startswith(("HTTP 429", "HTTP 503", "HTTP 500")):
+            break
+        if attempt:
+            logger.info("Gemini đang quá tải (%s), nghỉ %ss rồi thử lại...", last_error, GEMINI_RETRY_WAIT)
+            time.sleep(GEMINI_RETRY_WAIT)
+        for key_index, key in enumerate(all_keys):
+            # Key hỏng (401/403) → bỏ luôn. 429: hạn mức tính theo từng model, nên còn key khác thì đổi key cho nhanh,
+            # còn đây là key cuối thì vẫn thử các model khác của key này.
+            has_next_key = key_index < len(all_keys) - 1
+            key_exhausted = False
+            for endpoint_model in candidate_models:
+                if key_exhausted:
                     break
-                except Exception as e:
-                    last_error = str(e)
-                    logger.warning(f"Lỗi gọi Gemini API ({endpoint_model}): {e}")
-                    break
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{endpoint_model}:generateContent?key={key}"
+
+                # Thử gọi với thinkingBudget: 0 trước để tránh Gemini 2.5 nuốt trọn token vào thinking
+                configs_to_try = [
+                    {"temperature": 0.85, "maxOutputTokens": 2500, "thinkingConfig": {"thinkingBudget": 0}},
+                    {"temperature": 0.85, "maxOutputTokens": 3000}
+                ]
+
+                for gen_config in configs_to_try:
+                    payload = {
+                        "contents": [
+                            {
+                                "parts": [
+                                    {"text": f"{system_instruction}\n\nYêu cầu cụ thể:\n{prompt}"}
+                                ]
+                            }
+                        ],
+                        "generationConfig": gen_config
+                    }
+
+                    try:
+                        req = urllib.request.Request(
+                            url,
+                            data=json.dumps(payload).encode('utf-8'),
+                            headers={'Content-Type': 'application/json'}
+                        )
+                        with urllib.request.urlopen(req, timeout=GEMINI_TEXT_TIMEOUT) as resp:
+                            data = json.loads(resp.read().decode('utf-8'))
+                            candidates = data.get('candidates', [])
+                            if candidates:
+                                cand = candidates[0]
+                                finish_reason = cand.get('finishReason', '')
+                                parts = cand.get('content', {}).get('parts', [])
+                                if parts and 'text' in parts[0]:
+                                    raw_text = parts[0]['text'].strip()
+
+                                    # Tách IMAGE_KEYWORD nếu có
+                                    image_kw = None
+                                    match = re.search(r'\[IMAGE_KEYWORD:\s*([^\]]+)\]', raw_text, re.IGNORECASE)
+                                    if match:
+                                        val = match.group(1).strip()
+                                        if val.upper() != "NONE" and len(val) >= 2:
+                                            image_kw = val
+                                        raw_text = re.sub(r'\[IMAGE_KEYWORD:\s*[^\]]+\]', '', raw_text, flags=re.IGNORECASE).strip()
+                                    else:
+                                        # Dọn dẹp trường hợp keyword bị cắt dở ở cuối
+                                        raw_text = re.sub(r'\[IMAGE_KEYWORD:.*$', '', raw_text, flags=re.IGNORECASE).strip()
+
+                                    # Nếu chẳng may dính MAX_TOKENS và câu bị ngắt lửng mà còn key/model khác, thử lại
+                                    if finish_reason == 'MAX_TOKENS' and len(raw_text) < 150:
+                                        logger.warning(f"Model {endpoint_model} bị MAX_TOKENS và độ dài chỉ {len(raw_text)} ký tự, thử cấu hình tiếp theo...")
+                                        continue
+
+                                    return (raw_text, image_kw)
+                    except urllib.error.HTTPError as e:
+                        last_error = f"HTTP {e.code}: {e.reason}"
+                        # Nếu lỗi do model không hỗ trợ thinkingConfig (HTTP 400), thử cấu hình tiếp theo
+                        if e.code == 400 and "thinkingConfig" in gen_config:
+                            continue
+                        logger.warning(f"Model {endpoint_model} với key ...{key[-4:]} lỗi {last_error}")
+                        if e.code in (401, 403) or (e.code == 429 and has_next_key):
+                            key_exhausted = True
+                        break
+                    except Exception as e:
+                        last_error = str(e)
+                        logger.warning(f"Lỗi gọi Gemini API ({endpoint_model}): {e}")
+                        break
 
     raise RuntimeError(f"Không thể sinh nội dung từ Gemini: {last_error}")
 
@@ -753,6 +776,173 @@ def optimize_pixabay_keyword(
         f"Không tối ưu được từ khóa tiếng Anh từ '{cleaned[:60]}', dùng fallback 'nature landscape'"
     )
     return "nature landscape"
+
+
+def generate_image_keywords(
+    prompt: str,
+    count: int,
+    api_keys: Optional[List[str]] = None,
+    model: str = "gemini-3.8-flash",
+) -> List[str]:
+    """1 lượt gọi Gemini: từ prompt tạo tối đa `count` (≤ MAX_IMAGE_KEYWORDS) cụm từ khoá Pixabay tiếng Anh
+    KHÁC NHAU (mỗi cụm 2–4 từ, cùng chủ đề nhưng khác cảnh/góc). Lỗi hết → từ điển Việt–Anh offline."""
+    import re
+
+    cleaned = re.sub(r"\s+", " ", (prompt or "").replace("\n", " ")).strip()
+    if not cleaned:
+        return []
+    n = max(1, min(MAX_IMAGE_KEYWORDS, int(count or 1)))
+    keys = [k.strip() for k in (api_keys or []) if k and str(k).strip()] or load_gemini_keys()
+
+    instruction = (
+        f"A user will publish {n} different Facebook posts about this topic:\n{cleaned[:1500]}\n\n"
+        f"Write {n} DIFFERENT Pixabay stock-photo search queries to illustrate those posts.\n"
+        "Rules: English only (ASCII), 2 to 4 concrete visual words each (objects, scenes, people, places), "
+        "same topic but varied subjects/angles, no hashtags, no punctuation.\n"
+        'Return ONLY a JSON array of strings, e.g. ["coffee cup morning", "cafe interior", "barista latte art"].'
+    )
+    clean_model = (model or "gemini-3.8-flash").strip().lower().replace(" ", "-").replace("models/", "")
+    # Ưu tiên bản lite (nhanh, hạn mức riêng) để không tranh hạn mức với luồng viết bài
+    models = list(dict.fromkeys(["gemini-flash-lite-latest", "gemini-2.5-flash-lite", clean_model, "gemini-flash-latest"]))
+
+    for key_index, key in enumerate(keys):
+        has_next_key = key_index < len(keys) - 1
+        for endpoint_model in models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{endpoint_model}:generateContent?key={key}"
+            payload = {
+                "contents": [{"parts": [{"text": instruction}]}],
+                "generationConfig": {
+                    "temperature": 0.7,
+                    "maxOutputTokens": 64 + 24 * n,
+                    "thinkingConfig": {"thinkingBudget": 0},
+                },
+            }
+            try:
+                req = urllib.request.Request(
+                    url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"}
+                )
+                with urllib.request.urlopen(req, timeout=GEMINI_TEXT_TIMEOUT) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                parts = ((data.get("candidates") or [{}])[0].get("content", {}).get("parts") or [])
+                text = parts[0].get("text", "") if parts else ""
+                match = re.search(r"\[.*\]", text, re.S)
+                items = json.loads(match.group(0)) if match else []
+                result: List[str] = []
+                for item in items if isinstance(items, list) else []:
+                    kw = _normalize_ascii_keywords(str(item), max_words=4).lower()
+                    if kw and _is_ascii_english_query(kw) and kw not in result:
+                        result.append(kw)
+                if result:
+                    logger.info(f"AI tạo {len(result)} từ khoá ảnh: {result[:6]}")
+                    return result[:n]
+            except urllib.error.HTTPError as e:
+                logger.warning(f"Tạo từ khoá ảnh ({endpoint_model}, key ...{key[-4:]}) HTTP {e.code}")
+                if e.code in (401, 403) or (e.code == 429 and has_next_key):
+                    break  # key hỏng / hết hạn mức mà còn key khác → đổi key; key cuối thì thử model khác
+            except Exception as e:
+                logger.warning(f"Tạo từ khoá ảnh ({endpoint_model}) lỗi: {e}")
+
+    fallback = _english_fallback_keyword(cleaned)
+    logger.warning(f"AI không tạo được từ khoá ảnh, dùng tạm '{fallback}'")
+    return [fallback]
+
+
+def _english_fallback_keyword(text: str) -> str:
+    """Từ khoá Pixabay tiếng Anh khi không có AI: từ điển Việt–Anh; câu vốn tiếng Anh thì giữ nguyên.
+    Không bao giờ trả tiếng Việt bỏ dấu (vd 'doi buon') vì Pixabay tìm ra ảnh lạc đề."""
+    text = (text or "").strip()
+    if _is_ascii_english_query(text):
+        kw = _normalize_ascii_keywords(text, max_words=4)
+        if kw:
+            return kw
+    return _offline_vn_to_pixabay_keywords(text) or "lifestyle daily life"
+
+
+def fetch_pixabay_image(
+    keyword: str,
+    pixabay_key: Optional[str],
+    save_dir: Optional[str] = None,
+    exclude_ids: Optional[set] = None,
+) -> Optional[str]:
+    """Chỉ dùng Pixabay (không gọi Gemini): tải 1 ảnh theo từ khoá, không ra thì nới rộng dần từ khoá.
+    exclude_ids dùng chung cả lượt để các bài không trùng ảnh."""
+    if not pixabay_key or not str(pixabay_key).strip():
+        return None
+    query = (keyword or "").strip()
+    if not _is_ascii_english_query(query):
+        query = _english_fallback_keyword(query)
+    words = _normalize_ascii_keywords(query, max_words=4).split()
+    if not words:
+        return None
+    save_dir = save_dir or str(UPLOADS_DIR / "posts")
+    candidates = list(dict.fromkeys([" ".join(words), " ".join(words[:2]), words[0]]))
+    for q in candidates:
+        paths = search_and_download_pixabay_images(q, str(pixabay_key).strip(), save_dir, 1, exclude_ids)
+        if paths:
+            return paths[0]
+    return None
+
+
+def search_and_download_pixabay_images(
+    query: str,
+    pixabay_key: str,
+    save_dir: str,
+    count: int,
+    exclude_ids: Optional[set] = None,
+) -> List[str]:
+    """Tìm Pixabay theo từ khóa, tải tối đa `count` ảnh KHÁC NHAU (bỏ ảnh có id trong exclude_ids).
+
+    exclude_ids được cập nhật thêm id các ảnh vừa tải (để gọi tiếp với từ khóa khác không bị trùng).
+    """
+    if not pixabay_key or pixabay_key == "ĐIỀN_KEY_PIXABAY_VÀO_ĐÂY" or count <= 0:
+        return []
+    exclude_ids = exclude_ids if exclude_ids is not None else set()
+    try:
+        os.makedirs(save_dir, exist_ok=True)
+        import requests
+        import urllib.parse
+        from concurrent.futures import ThreadPoolExecutor
+
+        per_page = max(20, min(200, count * 3))
+        url = (
+            f"https://pixabay.com/api/?key={pixabay_key}"
+            f"&q={urllib.parse.quote_plus(query)}&image_type=photo&per_page={per_page}&safesearch=true&lang=en"
+        )
+        resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=12)
+        if resp.status_code != 200:
+            logger.info(f"Pixabay trả mã {resp.status_code} cho '{query}'")
+            return []
+        hits = [h for h in (resp.json().get('hits', []) or []) if h.get('id') not in exclude_ids]
+        random.shuffle(hits)
+
+        def _download(hit) -> Optional[str]:
+            image_url = hit.get('largeImageURL') or hit.get('webformatURL')
+            if not image_url:
+                return None
+            try:
+                img_resp = requests.get(image_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+                if img_resp.status_code == 200:
+                    return save_optimized_image(img_resp.content, save_dir)
+            except Exception as e:
+                logger.warning(f"Pixabay: lỗi tải ảnh {hit.get('id')}: {e}")
+            return None
+
+        saved: List[str] = []
+        # Tải song song theo từng đợt; ảnh lỗi thì lấy hit tiếp theo bù vào
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            pos = 0
+            while len(saved) < count and pos < len(hits):
+                batch = hits[pos:pos + (count - len(saved))]
+                pos += len(batch)
+                for hit, path in zip(batch, pool.map(_download, batch)):
+                    if path:
+                        saved.append(path)
+                        exclude_ids.add(hit.get('id'))
+        logger.info(f"Pixabay: tải {len(saved)}/{count} ảnh cho '{query}'")
+        return saved
+    except Exception as e:
+        logger.error(f"Lỗi tải ảnh Pixabay: {e}")
+        return []
 
 
 def search_and_download_pixabay_image(query: str, pixabay_key: str, save_dir: str) -> Optional[str]:

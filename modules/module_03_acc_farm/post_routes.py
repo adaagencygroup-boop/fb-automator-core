@@ -32,8 +32,9 @@ from modules.module_03_acc_farm.content_service import (
     parse_user_gemini_keys,
     check_gemini_key,
     check_pixabay_key,
-    search_and_download_pixabay_image,
-    crawl_or_fetch_image,
+    search_and_download_pixabay_images,
+    fetch_pixabay_image,
+    generate_image_keywords,
     optimize_pixabay_keyword,
     auto_map_accounts_to_subfolders,
     scan_folder_media,
@@ -120,8 +121,13 @@ class SaveDraftPayload(BaseModel):
     clear_image: Optional[bool] = False
     status: Optional[str] = "READY"
 
+MAX_CRAWL_IMAGES = 50
+
+
 class CrawlImagePayload(BaseModel):
     query: str
+    # Số ảnh khác nhau cần cào (kho ảnh chung: số nick × số khung giờ)
+    count: int = Field(1, ge=1, le=MAX_CRAWL_IMAGES)
     pixabay_key: Optional[str] = None
     api_key_source: Optional[str] = None
     draft_id: Optional[str] = None
@@ -472,14 +478,18 @@ def start_compose_generate(payload: ComposeGeneratePayload):
         try:
             result = generate_status_content(
                 prompt=prompt, api_key=api_key, model=model_name, fallback_keys=fallback,
-                want_image=payload.with_images,
+                want_image=False,  # từ khoá ảnh do luồng ảnh tạo riêng, bài viết không cần kèm
             )
         except Exception as exc:
             raise RuntimeError(_friendly_gemini_error(str(exc))) from exc
         return result if isinstance(result, tuple) else (result, None)
 
-    def fetch_image(keyword: str, pixabay: Optional[str], gemini_keys: List[str]):
-        return crawl_or_fetch_image(keyword, pixabay, save_dir, gemini_keys)
+    # Luồng ảnh tách riêng: AI tạo trước từ khoá (1 lượt) → chỉ Pixabay tải ảnh, không gọi Gemini nữa
+    def make_keywords(prompt: str, count: int, gemini_keys: List[str], model_name: str):
+        return generate_image_keywords(prompt, count, gemini_keys, model_name)
+
+    def fetch_image(keyword: str, pixabay: Optional[str], used_ids: set):
+        return fetch_pixabay_image(keyword, pixabay, save_dir, used_ids)
 
     try:
         job = compose_jobs.start_generate_job(
@@ -493,6 +503,7 @@ def start_compose_generate(payload: ComposeGeneratePayload):
             pixabay_key=pixabay_key,
             generate_text=generate_text,
             fetch_image=fetch_image,
+            make_keywords=make_keywords,
             targets=[(t.uid, t.index) for t in payload.targets] if payload.targets is not None else None,
             overwrite=payload.overwrite,
         )
@@ -629,13 +640,19 @@ def crawl_image_for_draft(payload: CrawlImagePayload):
     logger.info(f"Cào ảnh: raw='{raw_query[:80]}' → candidates={candidates}")
 
     save_dir = str(UPLOADS_DIR / "posts")
-    img_path = None
+    want = payload.count
+    paths: List[str] = []
+    seen_ids: set = set()
     used_query = candidates[0]
+    # Từ khoá chính chưa đủ ảnh thì lấy thêm từ các biến thể (không trùng ảnh đã tải)
     for q in candidates:
-        img_path = search_and_download_pixabay_image(q, pixabay_key, save_dir)
-        if img_path:
+        got = search_and_download_pixabay_images(q, pixabay_key, save_dir, want - len(paths), exclude_ids=seen_ids)
+        if got and not paths:
             used_query = q
+        paths.extend(got)
+        if len(paths) >= want:
             break
+    img_path = paths[0] if paths else None
 
     if not img_path:
         raise HTTPException(
@@ -656,11 +673,16 @@ def crawl_image_for_draft(payload: CrawlImagePayload):
             image_paths=[img_path],
         )
 
+    message = f"Đã cào {len(paths)} ảnh Pixabay (từ khóa: '{used_query}')"
+    if len(paths) < want:
+        message += f", Pixabay chỉ có {len(paths)}/{want} ảnh phù hợp"
     return {
         "success": True,
         "image_path": img_path,
+        "image_paths": paths,
+        "requested": want,
         "optimized_keyword": used_query,
-        "message": f"Đã cào 1 ảnh Pixabay (từ khóa: '{used_query}')",
+        "message": message,
     }
 
 

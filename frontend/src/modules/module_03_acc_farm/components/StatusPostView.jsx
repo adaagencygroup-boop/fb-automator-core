@@ -45,7 +45,6 @@ import { CONTENT_MULTI, LAYOUT_TEXT, emptyAccountCells, parseComposeText, sortSl
 
 const MAX_AI_POSTS = 200; // khớp giới hạn 1 lần tạo của /api/post/compose/generate
 import CustomSelect from "@/components/ui/custom-select";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import Image from "next/image";
@@ -885,7 +884,9 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
 
   // ── Giữ cấu hình Bước 2-3 khi tải lại trang (không áp khi đang sửa chiến dịch) ──
   const savedConfigRef = useRef(null);
-  const configRestoredRef = useRef(false);
+  // State (không phải ref): chỉ lưu sau khi giá trị đã khôi phục được render. Dùng ref thì ở dev (React StrictMode
+  // chạy effect 2 lần) lượt đầu ghi đè giá trị mặc định vào localStorage trước khi khôi phục → mất cấu hình.
+  const [configReady, setConfigReady] = useState(false);
   const selectionRestoredRef = useRef(false);
   useEffect(() => {
     const saved = readSavedStatusConfig();
@@ -898,7 +899,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
       if (saved.minDelay != null) setMinDelay(saved.minDelay);
       if (saved.maxDelay != null) setMaxDelay(saved.maxDelay);
     }
-    configRestoredRef.current = true;
+    setConfigReady(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -915,7 +916,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
   }, [accountsLoaded]);
 
   useEffect(() => {
-    if (!configRestoredRef.current || editCampaignId) return;
+    if (!configReady || editCampaignId) return;
     writeSavedStatusConfig({
       scheduleEnabled: Boolean(scheduleEnabled),
       slots,
@@ -928,23 +929,29 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
         ? selectedAccs.map((a) => String(a.uid || a.id))
         : savedConfigRef.current?.selectedUids || [],
     });
-  }, [scheduleEnabled, slots, campaignName, threadCount, minDelay, maxDelay, selectedAccs, editCampaignId]);
-  // Cào ảnh Pixabay cùng lúc với AI viết bài: tự bật khi đã có Pixabay key (trừ khi người dùng tự tắt)
-  const [aiWithImages, setAiWithImages] = useState(false);
-  const aiImagesTouchedRef = useRef(false);
-  useEffect(() => {
-    if (!aiImagesTouchedRef.current) setAiWithImages(Boolean(String(pixabayKey || "").trim()));
-  }, [pixabayKey]);
+  }, [configReady, scheduleEnabled, slots, campaignName, threadCount, minDelay, maxDelay, selectedAccs, editCampaignId]);
+  // Có Pixabay key → AI viết bài và tự cào 1 ảnh Pixabay cho mỗi bài; không có key → chỉ viết chữ
+  const aiWithImages = Boolean(String(pixabayKey || "").trim());
 
-  /** Cào 1 ảnh Pixabay theo nội dung / từ khoá (nút "Cào ảnh" ở thẻ nick và kho ảnh chung). */
-  const crawlImage = async (query) => {
-    const res = await api.post("/api/post/media/crawl", {
-      query: String(query || "").trim().slice(0, 300),
-      pixabay_key: String(pixabayKey || "").trim() || null,
-    });
-    const path = res?.image_path || res?.data?.image_path;
-    if (!path) throw new Error(res?.message || "Không cào được ảnh.");
-    return path;
+  /** Cào `count` ảnh Pixabay khác nhau theo nội dung / từ khoá → danh sách đường dẫn (thẻ nick: 1, kho chung: số còn thiếu). */
+  const crawlImage = async (query, count = 1) => {
+    const res = await api.post(
+      "/api/post/media/crawl",
+      {
+        query: String(query || "").trim().slice(0, 300),
+        count: Math.max(1, Math.min(50, Number(count) || 1)),
+        pixabay_key: String(pixabayKey || "").trim() || null,
+      },
+      { timeout: 180000 },
+    );
+    const body = res?.image_paths || res?.image_path ? res : res?.data || {};
+    const paths = Array.isArray(body.image_paths) && body.image_paths.length
+      ? body.image_paths
+      : body.image_path
+        ? [body.image_path]
+        : [];
+    if (!paths.length) throw new Error(res?.message || "Không cào được ảnh.");
+    return paths;
   };
   const useSchedule = Boolean(editCampaignId) || Boolean(scheduleEnabled);
   const keptSlots = useMemo(() => editingCampaign?.waitingSlots || [], [editingCampaign]);
@@ -1132,7 +1139,29 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
     startStatusPolling();
   };
 
-  const showWarnings = (warnings) => (warnings || []).forEach((w) => toast.warning(w, "LƯU Ý"));
+  // 1 thông báo duy nhất: kết quả + các lưu ý (nếu có) gộp chung, thay vì mỗi lưu ý 1 toast riêng
+  const notifyDone = (message, title, warnings) => {
+    const notes = (warnings || []).filter(Boolean);
+    if (!notes.length) {
+      toast.success(message, title);
+      return;
+    }
+    toast.success({
+      title,
+      duration: 6000 + 3000 * notes.length,
+      message: (
+        <span className="block">
+          <span className="block">{message}</span>
+          <span className="mt-1.5 block text-[12px] font-bold uppercase tracking-wide text-amber-700">Lưu ý</span>
+          {notes.map((w, i) => (
+            <span key={i} className="block">
+              • {w}
+            </span>
+          ))}
+        </span>
+      ),
+    });
+  };
 
   // Không hẹn giờ = Đăng ngay: không lưu chiến dịch, không xoá nháp, xem kết quả ở Lịch sử
   const handlePostNow = async () => {
@@ -1154,11 +1183,11 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
       });
       if (res?.success === false) throw new Error(res?.message || "Không thể khởi động phiên đăng bài.");
       const skipped = res?.skipped || [];
-      toast.success(
+      notifyDone(
         `Đã bắt đầu đăng ${res?.inserted_count || 0} bài.${skipped.length ? ` ${skipped.length} nick bị bỏ qua: ${skipped[0].reason}` : ""}`,
         "ĐĂNG NGAY",
+        res?.warnings,
       );
-      showWarnings(res?.warnings);
       enterProgressView(`Khởi chạy đăng Status ${res?.inserted_count || 0} bài (${res?.parsed || ""}).`);
     } catch (err) {
       toast.error(err?.message || String(err), "KHÔNG THỂ ĐĂNG NGAY");
@@ -1187,8 +1216,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
       handleSaveSettingsToDb();
       const res = await api.post("/api/post/campaigns", campaignPayload());
       const created = res?.data;
-      toast.success(`Đã tạo chiến dịch "${created?.name}" với ${slots.length} khung giờ.`, "TẠO CHIẾN DỊCH");
-      showWarnings(res?.warnings);
+      notifyDone(`Đã tạo chiến dịch "${created?.name}" với ${slots.length} khung giờ.`, "TẠO CHIẾN DỊCH", res?.warnings);
       setLastCreatedCampaign(created || null);
       setSlots([]);
       setCampaignName("");
@@ -1208,8 +1236,11 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
     setSubmitting(true);
     try {
       const res = await api.put(`/api/post/campaigns/${editCampaignId}`, campaignPayload());
-      toast.success(`Đã lưu chiến dịch "${res?.data?.name}". Thay đổi áp dụng cho các khung chưa chạy.`, "SỬA CHIẾN DỊCH");
-      showWarnings(res?.warnings);
+      notifyDone(
+        `Đã lưu chiến dịch "${res?.data?.name}". Thay đổi áp dụng cho các khung chưa chạy.`,
+        "SỬA CHIẾN DỊCH",
+        res?.warnings,
+      );
       router.push(`/interact/campaigns?id=${editCampaignId}`);
     } catch (err) {
       toast.error(err?.message || String(err), "KHÔNG LƯU ĐƯỢC CHIẾN DỊCH");
@@ -1616,6 +1647,11 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
                   className="hidden"
                   accept=".txt"
                 />
+                <RecheckKeyButton
+                  loading={geminiKeyCheck.loading}
+                  disabled={!String(apiKeyContent || keyFileName || "").trim()}
+                  onClick={() => handleCheckKeys("gemini")}
+                />
                 <button
                   type="button"
                   onClick={handleSelectKeyFile}
@@ -1650,7 +1686,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
                   ?
                 </span>
               </label>
-              <div className="relative">
+              <div className="flex gap-3">
                 <input
                   type="text"
                   name="pixabay_secret_token_no_fill"
@@ -1668,7 +1704,12 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
                     if (!pixabayKeyCheck.data && !pixabayKeyCheck.loading) handleCheckKeys("pixabay");
                   }}
                   placeholder="Nhập Pixabay API Key..."
-                  className="w-full h-11 px-4 bg-white border border-[#E2E8F0] rounded-xl text-xs sm:text-sm text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] transition-all font-mono"
+                  className="min-w-0 flex-1 h-11 px-4 bg-white border border-[#E2E8F0] rounded-xl text-xs sm:text-sm text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] transition-all font-mono"
+                />
+                <RecheckKeyButton
+                  loading={pixabayKeyCheck.loading}
+                  disabled={!String(pixabayKey || "").trim()}
+                  onClick={() => handleCheckKeys("pixabay")}
                 />
               </div>
               <KeyCheckPanel check={pixabayKeyCheck} />
@@ -2241,26 +2282,11 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
             <div className="space-y-3 border-t border-slate-100 pt-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <p className="text-[11px] font-medium text-slate-500">{executePlan.hint}</p>
-                <div className="space-y-0.5 text-right">
-                  <label className="flex cursor-pointer items-center justify-end gap-2 text-xs font-semibold text-slate-700">
-                    <Checkbox
-                      checked={aiWithImages}
-                      disabled={composeDraft.generating}
-                      onCheckedChange={(v) => {
-                        aiImagesTouchedRef.current = true;
-                        setAiWithImages(!!v);
-                      }}
-                    />
-                    Cào ảnh Pixabay cùng lúc
-                  </label>
-                  {aiWithImages && (
-                    <p className={`text-[10px] font-medium ${pixabayKey.trim() ? "text-slate-400" : "text-amber-600"}`}>
-                      {pixabayKey.trim()
-                        ? "AI viết bài, đồng thời cào 1 ảnh hợp nội dung cho mỗi bài."
-                        : "Chưa có Pixabay API Key ở Bước 1: sẽ nhờ Gemini vẽ ảnh (chậm, có thể không ra ảnh)."}
-                    </p>
-                  )}
-                </div>
+                <p className={`text-[11px] font-medium ${aiWithImages ? "text-slate-500" : "text-amber-600"}`}>
+                  {aiWithImages
+                    ? "Ảnh lấy riêng từ Pixabay (mỗi bài 1 ảnh), chạy song song với lúc AI viết chữ."
+                    : "Chưa có Pixabay API Key ở Bước 1: AI chỉ viết chữ, không kèm ảnh."}
+                </p>
               </div>
               {composeDraft.generating ? (
                 <button
@@ -2283,26 +2309,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
                 </button>
               )}
               {composeDraft.job && (composeDraft.job.status === "RUNNING" || composeDraft.job.processed > 0) && (
-                <div className="space-y-1.5">
-                  <div className="h-1.5 overflow-hidden rounded-full bg-blue-100">
-                    <div
-                      className="h-full rounded-full bg-[#2563EB] transition-all"
-                      style={{
-                        width: `${Math.round((100 * (composeDraft.job.processed || 0)) / Math.max(1, composeDraft.job.total))}%`,
-                      }}
-                    />
-                  </div>
-                  <p className="flex items-center gap-1.5 text-[11px] font-medium text-slate-600">
-                    {composeDraft.job.status === "RUNNING" && <Loader2 size={12} className="animate-spin text-[#2563EB]" />}
-                    {composeDraft.job.status === "RUNNING"
-                      ? `AI đang viết ${composeDraft.job.processed}/${composeDraft.job.total} bài (đã xong ${composeDraft.job.done}${composeDraft.job.failed ? `, lỗi ${composeDraft.job.failed}` : ""})${
-                          composeDraft.job.with_images
-                            ? ` · cào ảnh: được ${composeDraft.job.images_added || 0}${composeDraft.job.images_pending ? `, đang cào ${composeDraft.job.images_pending}` : ""}${composeDraft.job.images_missing ? `, không ra ${composeDraft.job.images_missing}` : ""}`
-                            : ""
-                        }. Bài và ảnh hiện dần ở Bước 4.`
-                      : composeDraft.job.message}
-                  </p>
-                </div>
+                <GenerateJobProgress job={composeDraft.job} />
               )}
               {!composeDraft.generating && executePlan.blockReason && (
                 <p className="flex items-center justify-center gap-1.5 text-center text-[11px] font-medium text-amber-600">
@@ -2340,7 +2347,6 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
           <div className="rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-xs space-y-5">
             <ComposeEditor
               compose={compose}
-              parsed={parsedCompose}
               onChange={composeDraft.update}
               onClearAll={handleClearCompose}
               saveState={editCampaignId ? "idle" : composeDraft.saveState}
@@ -2708,5 +2714,99 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
       />
 
     </div>
+  );
+}
+
+
+/** 1 dòng tiến độ (Nội dung / Ảnh) của job AI tạo bài. */
+function JobProgressTrack({ icon: Icon, label, done, total, running, detail, barClass }) {
+  const pct = Math.round((100 * Math.min(done, total)) / Math.max(1, total));
+  return (
+    <div className="rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2.5">
+      <div className="mb-1.5 flex items-center justify-between gap-2 text-[11px]">
+        <span className="flex items-center gap-1.5 font-bold text-slate-700">
+          <Icon size={13} className="text-slate-400" />
+          {label}
+        </span>
+        <span className="flex items-center gap-1 font-semibold tabular-nums text-slate-600">
+          {running ? (
+            <Loader2 size={11} className="animate-spin text-[#2563EB]" />
+          ) : (
+            <Check size={12} className="text-emerald-500" />
+          )}
+          {done}/{total}
+        </span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-slate-200/70">
+        <div className={`h-full rounded-full transition-all ${barClass}`} style={{ width: `${pct}%` }} />
+      </div>
+      <p className="mt-1.5 text-[11px] font-medium text-slate-500">{detail}</p>
+    </div>
+  );
+}
+
+/** Tiến độ job AI tạo bài: nội dung và ảnh hiển thị riêng (2 luồng chạy song song). */
+function GenerateJobProgress({ job }) {
+  const running = job.status === "RUNNING";
+  const total = Math.max(0, job.total || 0);
+  const textProcessed = job.processed || 0;
+  const imgAdded = job.images_added || 0;
+  const imgMissing = job.images_missing || 0;
+  const imgPending = job.images_pending || 0;
+  const textRunning = running && textProcessed < total;
+  const imgRunning = running && imgPending > 0;
+
+  const textDetail = textRunning
+    ? `AI đang viết… đã xong ${job.done || 0}${job.failed ? `, lỗi ${job.failed}` : ""}`
+    : `Đã viết ${job.done || 0} bài${job.failed ? `, lỗi ${job.failed}` : ""}`;
+  const imgDetail = imgRunning
+    ? `Pixabay đang tải… đã có ${imgAdded}${imgMissing ? `, không có ảnh ${imgMissing}` : ""}`
+    : `Có ảnh ${imgAdded} bài${imgMissing ? `, ${imgMissing} bài không có ảnh` : ""}`;
+
+  return (
+    <div className="space-y-2">
+      <div className={`grid gap-2 ${job.with_images ? "sm:grid-cols-2" : ""}`}>
+        <JobProgressTrack
+          icon={FileText}
+          label="Nội dung"
+          done={textProcessed}
+          total={total}
+          running={textRunning}
+          detail={textDetail}
+          barClass={job.failed ? "bg-amber-500" : "bg-[#2563EB]"}
+        />
+        {job.with_images && (
+          <JobProgressTrack
+            icon={ImageIcon}
+            label="Ảnh"
+            done={imgAdded + imgMissing}
+            total={total}
+            running={imgRunning}
+            detail={imgDetail}
+            barClass={imgMissing ? "bg-amber-500" : "bg-emerald-500"}
+          />
+        )}
+      </div>
+      <p className="text-[11px] font-medium text-slate-500">
+        {running ? "Bài và ảnh hiện dần ở Bước 4." : job.message}
+      </p>
+    </div>
+  );
+}
+
+
+/** Nút "Kiểm tra lại" key (cạnh ô nhập): gọi lại /api/post/keys/check ngay, không cần rời ô / chọn lại file. */
+function RecheckKeyButton({ loading, disabled, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled || loading}
+      title="Kiểm tra lại key còn sống hay không"
+      className="h-11 px-4 bg-white border border-[#E2E8F0] hover:border-[#2563EB] hover:text-[#2563EB] text-[#475569] text-xs sm:text-sm font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-[#E2E8F0] disabled:hover:text-[#475569]"
+    >
+      <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+      <span>{loading ? "Đang kiểm tra" : "Kiểm tra lại"}</span>
+    </button>
   );
 }

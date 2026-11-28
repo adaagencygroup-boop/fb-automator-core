@@ -15,6 +15,16 @@ MACHINE = "m1"
 class FakeRunner:
     def __init__(self):
         self.busy, self.sid, self.starts, self.stops = False, None, [], 0
+        self.paused, self.pauses, self.resumes = False, 0, 0
+
+    def is_paused(self):
+        return self.paused
+
+    def pause_session(self):
+        self.paused, self.pauses = True, self.pauses + 1
+
+    def resume_session(self):
+        self.paused, self.resumes = False, self.resumes + 1
 
     def is_busy(self):
         return self.busy
@@ -37,6 +47,8 @@ class FakeStore:
     WAITING, RUNNING, DONE, MISSED, STOPPED, FAILED = (
         real_repo.WAITING, real_repo.RUNNING, real_repo.DONE, real_repo.MISSED, real_repo.STOPPED, real_repo.FAILED,
     )
+    PAUSED_MID_RUN_MESSAGE = real_repo.PAUSED_MID_RUN_MESSAGE
+    RESUMED_MID_RUN_MESSAGE = real_repo.RESUMED_MID_RUN_MESSAGE
 
     def __init__(self, campaign, run_times):
         self.campaign = campaign
@@ -62,6 +74,14 @@ class FakeStore:
             if s["status"] == "WAITING" and s["run_at"] < missed_before and self.campaign["status"] == "ACTIVE":
                 s["status"], missed = "MISSED", missed + 1
         return failed, missed
+
+    def mark_paused_slots_missed(self, now, machine_id=None, campaign_id=None):
+        n = 0
+        for s in self.slots:
+            if s["status"] == "STOPPED" and not s["session_id"] and s["run_at"] < now:
+                s.update(status="MISSED", message=real_repo.MISSED_WHILE_PAUSED_MESSAGE)
+                n += 1
+        return n
 
     def running_slots(self, machine):
         return [{**s, "campaign_status": self.campaign["status"]} for s in self.slots if s["status"] == "RUNNING"]
@@ -173,6 +193,27 @@ class SchedulerTests(unittest.TestCase):
     def _slot(self, i):
         return self.store.slots[i]
 
+    def test_paused_slot_becomes_missed_only_after_its_time(self):
+        # Tạm dừng chiến dịch trước cả 2 khung
+        self.store.campaign["status"] = "STOPPED"
+        for s in self.store.slots:
+            s["status"] = "STOPPED"
+        self.now["t"] = T0 + timedelta(minutes=10)  # qua giờ khung 1, chưa tới khung 2
+        self.sched.tick()
+        self.assertEqual(self._slot(0)["status"], "MISSED")
+        self.assertIn("tạm dừng", self._slot(0)["message"])
+        self.assertEqual(self._slot(1)["status"], "STOPPED")  # vẫn là tạm dừng, Chạy tiếp sẽ chạy đúng giờ
+        self.assertIsNone(self.runner.sid)
+
+    def test_slot_stopped_mid_run_stays_stopped(self):
+        self.now["t"] = T0
+        self.sched.tick()
+        self._slot(0).update(status="STOPPED")  # đã có phiên → dừng giữa chừng, không phải bị lỡ
+        self.now["t"] = T0 + timedelta(minutes=30)
+        self.store.campaign["status"] = "STOPPED"
+        self.sched.tick()
+        self.assertEqual(self._slot(0)["status"], "STOPPED")
+
     def test_runs_due_slot_only_when_time_comes(self):
         self.sched.tick()
         self.assertEqual(self.runner.starts, [])
@@ -239,12 +280,36 @@ class SchedulerTests(unittest.TestCase):
 
         self.now["t"] = T0 + timedelta(hours=1)
         self.sched.tick()
-        self.store.campaign["status"] = "STOPPED"  # dừng từ API / máy khác
-        self.sched.tick()
-        self.assertEqual(self.runner.stops, 1)
+        # Người dùng dừng hẳn phiên (nút Dừng khẩn cấp) → khung "dừng giữa chừng"
+        self.store.campaign["status"] = "STOPPED"
+        self.store.sessions[self.runner.sid] = "STOPPED"
+        self.runner.stop_session()
         self.sched.tick()
         self.assertEqual(self._slot(1)["status"], "STOPPED")
         self.assertTrue(all(p["status"] == "STOPPED" for p in self.store.posts if p["slot_id"] == "s1"))
+
+    def test_pause_campaign_mid_run_pauses_then_resumes_same_session(self):
+        self.now["t"] = T0
+        self.sched.tick()
+        sid = self.runner.sid
+        self.store.campaign["status"] = "STOPPED"  # tạm dừng từ API / máy khác
+        self.sched.tick()
+        self.assertEqual((self.runner.pauses, self.runner.stops), (1, 0))  # chỉ pause, không huỷ bài
+        self.assertEqual(self._slot(0)["status"], "RUNNING")
+        self.assertEqual(self._slot(0)["message"], real_repo.PAUSED_MID_RUN_MESSAGE)
+        self.sched.tick()
+        self.assertEqual(self.runner.pauses, 1)  # không pause lặp
+
+        self.store.campaign["status"] = "ACTIVE"  # chạy tiếp
+        self.sched.tick()
+        self.assertEqual(self.runner.resumes, 1)
+        self.assertFalse(self.runner.paused)
+        self.assertEqual(self.runner.sid, sid)  # cùng phiên, chạy tiếp từ chỗ dừng
+        self.assertEqual(self._slot(0)["message"], real_repo.RESUMED_MID_RUN_MESSAGE)
+        self.store.finish_session(sid, {f"a{i}": "PUBLISHED" for i in range(3)})
+        self.runner.busy = False
+        self.sched.tick()
+        self.assertEqual(self._slot(0)["status"], "DONE")
 
     def test_recover_after_restart(self):
         self.now["t"] = T0

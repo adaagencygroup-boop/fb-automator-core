@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/services/api";
 import { toast } from "@/lib/toast";
-import { CONTENT_MULTI, IMAGE_NONE, LAYOUT_ACCOUNTS, LAYOUT_TEXT } from "../composeText";
+import { CONTENT_MULTI, IMAGE_MULTI, LAYOUT_ACCOUNTS, LAYOUT_TEXT } from "../composeText";
 
 export const EMPTY_COMPOSE = {
   content_text: "",
   content_mode: CONTENT_MULTI,
-  image_mode: IMAGE_NONE,
+  image_mode: IMAGE_MULTI, // mặc định có ảnh (mỗi bài 1 ảnh, kho trống thì đăng không ảnh)
   image_paths: [],
   min_images: 1,
   max_images: 1,
@@ -25,7 +25,7 @@ function pickCompose(data) {
   return {
     content_text: data.content_text || "",
     content_mode: data.content_mode || CONTENT_MULTI,
-    image_mode: data.image_mode || IMAGE_NONE,
+    image_mode: data.image_mode || IMAGE_MULTI,
     image_paths: Array.isArray(data.image_paths) ? data.image_paths : [],
     min_images: Number(data.min_images) || 1,
     max_images: Number(data.max_images) || 1,
@@ -211,17 +211,18 @@ export function useComposeDraft({ postType = "status", autosave = true } = {}) {
   const clearAll = useCallback(async (layout) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = null;
+    // layout "ALL" = xoá cả bài từng nick lẫn bài dự phòng / kho ảnh cũ
     const which = layout || composeRef.current.layout;
     if (!autosaveRef.current) {
-      replace(
-        which === LAYOUT_TEXT
-          ? { ...composeRef.current, content_text: "", image_paths: [] }
-          : { ...composeRef.current, account_posts: {} },
-      );
+      const cleared = { ...composeRef.current };
+      if (which === LAYOUT_TEXT || which === "ALL") Object.assign(cleared, { content_text: "", image_paths: [] });
+      if (which !== LAYOUT_TEXT) cleared.account_posts = {};
+      replace(cleared);
       return;
     }
     await flush();
-    const res = await api.delete(`/api/post/compose/draft?post_type=${postType}&layout=${which}`);
+    const layoutParam = which === "ALL" ? "" : `&layout=${which}`;
+    const res = await api.delete(`/api/post/compose/draft?post_type=${postType}${layoutParam}`);
     applyServerDraft(res?.data);
   }, [applyServerDraft, flush, postType, replace]);
 

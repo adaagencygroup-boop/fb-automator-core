@@ -76,7 +76,7 @@ def _to_draft(row: Optional[Dict[str, Any]], post_type: str) -> Dict[str, Any]:
             "post_type": post_type,
             "content_text": "",
             "content_mode": CONTENT_MULTI,
-            "image_mode": IMAGE_NONE,
+            "image_mode": IMAGE_MULTI,  # mặc định mỗi bài 1 ảnh (kho trống thì đăng không ảnh)
             "image_paths": [],
             "min_images": 1,
             "max_images": 1,

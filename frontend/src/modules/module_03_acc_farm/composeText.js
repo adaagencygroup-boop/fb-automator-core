@@ -104,78 +104,99 @@ export function emptyAccountCells(accountPosts, uids, rowCount) {
   return cells;
 }
 
-function imageCount(compose) {
-  if (compose.image_mode === IMAGE_SINGLE) return 1;
-  if (compose.image_mode !== IMAGE_MULTI) return 0;
-  const min = Math.max(1, Number(compose.min_images) || 1);
-  const max = Math.max(min, Number(compose.max_images) || min);
-  return min + Math.floor(Math.random() * (max - min + 1));
+// ── Một bộ bài chung cho 2 cách xem ("Từng bài" = thẻ nick, "Dạng văn bản" = 1 ô soạn) ──
+// Ô (nick, khung) xếp theo thứ tự: khung 1 của mọi nick, rồi khung 2... Bài thứ k trong ô văn bản = ô thứ k.
+// Bài thừa (nhiều hơn số ô) giữ ở content_text làm dự phòng, tự điền vào khi có thêm ô trống.
+
+export function orderedCells(uids, rowCount) {
+  const cells = [];
+  for (let row = 0; row < rowCount; row += 1) for (const uid of uids) cells.push({ uid: String(uid), row });
+  return cells;
 }
 
-/**
- * "Dạng văn bản" → "Từng bài": điền lần lượt các bài trong ô soạn vào các ô còn trống
- * (khung 1 của mọi nick trước, rồi khung 2...). Ô đã có nội dung giữ nguyên; hết bài thì dừng (không lặp bài).
- * Ảnh lấy từ kho chung theo chế độ ảnh đang chọn, xoay vòng để các nick ít trùng ảnh nhất.
- */
-export function textToAccountPosts(compose, uids, rowCount) {
-  const posts = parseComposeText(compose.content_text, compose.content_mode).posts;
-  const pool = (compose.image_paths || []).filter(Boolean);
-  const next = { ...(compose.account_posts || {}) };
+/** Tách ô văn bản thành các bài theo dòng "---", GIỮ vị trí (bài rỗng vẫn chiếm 1 chỗ). */
+export function splitPostChunks(text) {
+  const raw = String(text || "").replace(/\r\n?/g, "\n");
+  if (!raw.trim()) return [];
+  const chunks = [];
+  let current = [];
+  for (const line of raw.split("\n")) {
+    if (SEPARATOR_LINE.test(line)) {
+      chunks.push(current.join("\n").trim());
+      current = [];
+    } else {
+      current.push(line);
+    }
+  }
+  chunks.push(current.join("\n").trim());
+  return chunks;
+}
+
+const joinChunks = (chunks) => chunks.join(`\n${POST_SEPARATOR}\n`);
+
+function setCell(posts, uid, row, patch) {
+  const list = Array.isArray(posts[uid]) ? posts[uid].map((e) => ({ ...e })) : [];
+  while (list.length <= row) list.push({ content: "", images: [] });
+  list[row] = { ...accountEntry(posts, uid, row), ...patch };
+  posts[uid] = list;
+}
+
+/** Nội dung ô văn bản: bài của các ô theo thứ tự (bỏ ô trống ở cuối) + bài dự phòng. */
+export function cellsToText(accountPosts, cells, overflowText) {
+  const chunks = cells.map((c) => accountEntry(accountPosts, c.uid, c.row).content.trim());
+  while (chunks.length && !chunks[chunks.length - 1]) chunks.pop();
+  const overflow = splitPostChunks(overflowText).filter(Boolean);
+  return joinChunks([...chunks, ...overflow]);
+}
+
+/** Sửa ô văn bản → ghi bài thứ k vào ô thứ k (giữ ảnh của ô); phần thừa thành dự phòng. */
+export function applyTextToCells(accountPosts, cells, text) {
+  const chunks = splitPostChunks(text);
+  const posts = { ...(accountPosts || {}) };
+  cells.forEach((c, k) => setCell(posts, c.uid, c.row, { content: chunks[k] || "" }));
+  return { account_posts: posts, content_text: joinChunks(chunks.slice(cells.length).filter(Boolean)) };
+}
+
+/** Điền bài dự phòng vào các ô còn trống (theo thứ tự). null nếu không có gì thay đổi. */
+export function flowOverflowIntoCells(accountPosts, cells, overflowText) {
+  const spare = splitPostChunks(overflowText).filter(Boolean);
+  if (!spare.length) return null;
+  const posts = { ...(accountPosts || {}) };
   let used = 0;
-  let imgCursor = 0;
-  for (let row = 0; row < rowCount && used < posts.length; row += 1) {
-    for (const rawUid of uids) {
-      if (used >= posts.length) break;
-      const uid = String(rawUid);
-      if (accountEntry(next, uid, row).content.trim()) continue;
-      let images = [];
-      if (pool.length && compose.image_mode === IMAGE_SINGLE) {
-        images = [pool[0]];
-      } else if (pool.length) {
-        const n = Math.min(imageCount(compose), pool.length, MAX_ACCOUNT_POST_IMAGES);
-        for (let k = 0; k < n; k += 1) images.push(pool[(imgCursor + k) % pool.length]);
-        imgCursor = (imgCursor + n) % pool.length;
-      }
-      const list = Array.from({ length: Math.max(rowCount, (next[uid] || []).length) }, (_, i) => accountEntry(next, uid, i));
-      list[row] = { content: posts[used], images };
-      next[uid] = list;
-      used += 1;
-    }
+  for (const c of cells) {
+    if (used >= spare.length) break;
+    if (accountEntry(posts, c.uid, c.row).content.trim()) continue;
+    setCell(posts, c.uid, c.row, { content: spare[used] });
+    used += 1;
   }
-  return { accountPosts: next, filled: used, leftover: posts.length - used };
+  if (!used) return null;
+  return { account_posts: posts, content_text: joinChunks(spare.slice(used)) };
 }
 
 /**
- * "Từng bài" → "Dạng văn bản": nối bài của các nick đang chọn bằng "---" vào cuối ô soạn
- * (bỏ bài đã có trong ô), ảnh dồn vào kho chung.
+ * Gắn ảnh mới cho các bài chưa có ảnh (theo thứ tự ô, mỗi bài 1 ảnh). Ảnh mới hết mà vẫn còn bài thiếu
+ * → dùng lại ảnh cũ (xoay vòng) nếu `reuse`. Trả về {account_posts, assigned, reused}.
  */
-export function accountPostsToText(compose, uids, rowCount) {
-  const existing = new Set(parseComposeText(compose.content_text, CONTENT_MULTI).posts);
-  const added = [];
-  const images = [];
-  for (let row = 0; row < rowCount; row += 1) {
-    for (const uid of uids) {
-      const e = accountEntry(compose.account_posts, uid, row);
-      const text = e.content.trim();
-      if (!text) continue;
-      if (!existing.has(text)) {
-        existing.add(text);
-        added.push(text);
-      }
-      images.push(...e.images);
+export function fillCellImages(accountPosts, cells, newImages, { reuse = true } = {}) {
+  const posts = { ...(accountPosts || {}) };
+  const fresh = [...newImages];
+  const missing = cells.filter((c) => {
+    const e = accountEntry(posts, c.uid, c.row);
+    return e.content.trim() && e.images.length === 0;
+  });
+  let assigned = 0;
+  let reused = 0;
+  const pool = [...new Set([...cells.flatMap((c) => accountEntry(posts, c.uid, c.row).images), ...fresh])];
+  let cursor = 0;
+  for (const c of missing) {
+    if (fresh.length) {
+      setCell(posts, c.uid, c.row, { images: [fresh.shift()] });
+      assigned += 1;
+    } else if (reuse && pool.length) {
+      setCell(posts, c.uid, c.row, { images: [pool[cursor % pool.length]] });
+      cursor += 1;
+      reused += 1;
     }
   }
-  const base = String(compose.content_text || "").trim();
-  const pool = [...new Set([...(compose.image_paths || []), ...images])];
-  const newImages = pool.length - (compose.image_paths || []).length;
-  return {
-    patch: {
-      content_text: [base, ...added].filter(Boolean).join(`\n${POST_SEPARATOR}\n`),
-      content_mode: CONTENT_MULTI,
-      image_paths: pool,
-      image_mode: newImages > 0 && compose.image_mode === IMAGE_NONE ? IMAGE_MULTI : compose.image_mode,
-    },
-    added: added.length,
-    newImages,
-  };
+  return { account_posts: posts, assigned, reused, unused: fresh.length };
 }

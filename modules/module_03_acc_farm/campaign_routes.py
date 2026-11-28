@@ -144,13 +144,15 @@ def update_campaign(campaign_id: UUID, payload: CampaignPayload):
 @router.post("/campaigns/{campaign_id}/stop")
 def stop_campaign(campaign_id: UUID):
     data = _call(campaign_service.stop_campaign, _owner(), str(campaign_id), runner=runner, machine_id=_machine_id())
-    return {"success": True, "data": data, "message": "Đã dừng chiến dịch."}
+    return {"success": True, "data": data, "message": "Đã tạm dừng chiến dịch. Khung đang dở sẽ chạy tiếp khi bấm Chạy tiếp."}
 
 
 @router.post("/campaigns/{campaign_id}/start")
 def resume_campaign(campaign_id: UUID):
-    data = _call(campaign_service.resume_campaign, _owner(), str(campaign_id))
-    return {"success": True, "data": data, "message": "Chiến dịch chạy tiếp từ khung kế tiếp."}
+    data = _call(
+        campaign_service.resume_campaign, _owner(), str(campaign_id), runner=runner, machine_id=_machine_id(),
+    )
+    return {"success": True, "data": data, "message": "Chiến dịch chạy tiếp (khung đang dở chạy tiếp từ chỗ dừng)."}
 
 
 @router.delete("/campaigns/{campaign_id}")

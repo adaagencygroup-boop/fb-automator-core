@@ -1,4 +1,5 @@
 """Dạng soạn "Từng bài": mỗi nick 1 bài riêng cho mỗi lượt (Đăng ngay / từng khung giờ của chiến dịch)."""
+import json
 import random
 import threading
 import time
@@ -194,7 +195,8 @@ class AccountGenerateJobTests(unittest.TestCase):
         job = _wait_job(self._start(
             [("a", 0), ("b", 0), ("a", 1), ("a", 0)],
             gen=lambda prompt, key, fb, model: (f"bài {prompt[-20:]}", "kw"),
-            img=lambda kw, pk, keys: f"{kw}.jpg",
+            img=lambda kw, pk, used: f"{kw}.jpg",
+            make_keywords=lambda prompt, n, keys, model: ["kw"],
             overwrite=True,
         ))
         self.assertEqual(job.total, 3)
@@ -205,20 +207,67 @@ class AccountGenerateJobTests(unittest.TestCase):
         self.assertEqual(sorted(self.draft.attached), [("a", 0, ["kw.jpg"]), ("a", 1, ["kw.jpg"]), ("b", 0, ["kw.jpg"])])
         self.assertEqual((job.images_added, job.images_missing, job.images_pending), (3, 0, 0))
 
-    def test_no_keyword_searches_by_content(self):
+    def test_keywords_made_once_and_images_fetched_before_text(self):
+        kw_calls, seen = [], []
+        lock = threading.Lock()
+        gate = threading.Event()
+
+        def make_keywords(prompt, n, keys, model):
+            kw_calls.append((prompt, n))
+            return ["cafe", "tea"]
+
+        def img(kw, pk, used):
+            with lock:
+                seen.append(kw)
+            return f"{kw}-{len(seen)}.jpg"
+
+        def gen(*a):
+            gate.wait(2)  # AI viết chậm: ảnh đã tải xong trước khi bài được lưu
+            return ("bài", None)
+
+        targets = [("a", 0), ("b", 0), ("c", 0)]
+        job = self._start(targets, gen=gen, img=img, make_keywords=make_keywords)
+        end = time.time() + 2
+        while len(seen) < 3 and time.time() < end:
+            time.sleep(0.01)
+        self.assertEqual(sorted(seen), ["cafe", "cafe", "tea"])  # từ khoá xoay vòng theo bài
+        self.assertEqual(self.draft.attached, [])  # bài chưa lưu → ảnh nằm chờ
+        gate.set()
+        _wait_job(job)
+        self.assertEqual(kw_calls, [("p", 3)])
+        self.assertEqual(job.images_added, 3)
+        self.assertEqual(sorted(u for u, *_ in self.draft.attached), ["a", "b", "c"])
+        for uid, _ in targets:  # ảnh luôn gắn sau khi bài đã lưu
+            ev = [e for e in self.draft.events if e[1] == uid]
+            self.assertEqual([e[0] for e in ev], ["text", "image"])
+
+    def test_keyword_maker_error_falls_back_to_prompt(self):
         seen = []
 
-        def img(kw, pk, keys):
-            seen.append(kw)
-            return "x.jpg"
+        def boom(*a):
+            raise RuntimeError("429")
 
-        _wait_job(self._start([("a", 0)], gen=lambda *a: ("Cà phê sáng   ở Đà Lạt", None), img=img))
-        self.assertEqual(seen, ["Cà phê sáng ở Đà Lạt"])
+        job = _wait_job(self._start(
+            [("a", 0)], gen=lambda *a: ("bài", None), img=lambda kw, pk, used: seen.append(kw) or "x.jpg",
+            make_keywords=boom,
+        ))
+        self.assertEqual(seen, ["p"])
+        self.assertEqual(job.images_added, 1)
+
+    def test_image_for_failed_post_is_dropped(self):
+        def gen(prompt, *a):
+            if "1/2" in prompt:
+                raise RuntimeError("hỏng")
+            return ("bài", None)
+
+        job = _wait_job(self._start([("a", 0), ("b", 0)], gen=gen, img=lambda *a: "x.jpg"))
+        self.assertEqual((job.done, job.failed, job.images_added, job.images_missing), (1, 1, 1, 1))
+        self.assertEqual([u for u, *_ in self.draft.attached], ["b"])
 
     def test_writing_continues_while_images_download(self):
         release = threading.Event()
 
-        def slow_img(kw, pk, keys):
+        def slow_img(kw, pk, used):
             release.wait(2)
             return "slow.jpg"
 
@@ -233,7 +282,7 @@ class AccountGenerateJobTests(unittest.TestCase):
         release.set()
         _wait_job(job)
         self.assertEqual(job.images_added, 6)
-        self.assertIn("Cào được 6 ảnh", job.message)
+        self.assertIn("Lấy được 6 ảnh", job.message)
 
     def test_image_timeout_keeps_post(self):
         with mock.patch.object(compose_jobs, "IMAGE_TIMEOUT_SECONDS", 0.2):
@@ -250,5 +299,157 @@ class AccountGenerateJobTests(unittest.TestCase):
             )
 
 
+class _Resp:
+    def __init__(self, status=200, data=None, content=b""):
+        self.status_code, self._data, self.content = status, data, content
+
+    def json(self):
+        return self._data
+
+
+class PixabayBatchTests(unittest.TestCase):
+    """Cào nhiều ảnh khác nhau trong 1 lần (kho ảnh chung: số nick × số khung giờ)."""
+
+    def _run(self, hits, count, exclude=None, broken=()):
+        from modules.module_03_acc_farm import content_service
+
+        def fake_get(url, **kw):
+            if "pixabay.com/api" in url:
+                return _Resp(data={"hits": hits})
+            return _Resp(content=url.encode())
+
+        def fake_save(content, save_dir):
+            name = content.decode()
+            return None if name in broken else f"{name}.jpg"
+
+        with mock.patch("requests.get", fake_get), mock.patch.object(content_service, "save_optimized_image", fake_save):
+            return content_service.search_and_download_pixabay_images("cafe", "pk", "d", count, exclude_ids=exclude)
+
+    def test_downloads_distinct_images_up_to_count(self):
+        hits = [{"id": i, "largeImageURL": f"img{i}"} for i in range(10)]
+        seen = set()
+        got = self._run(hits, 4, exclude=seen)
+        self.assertEqual(len(got), 4)
+        self.assertEqual(len(set(got)), 4)
+        self.assertEqual(len(seen), 4)
+        # Lần sau bỏ các ảnh đã tải
+        again = self._run(hits, 10, exclude=seen)
+        self.assertEqual(len(again), 6)
+        self.assertFalse(set(again) & set(got))
+
+    def test_broken_download_is_replaced_by_next_hit(self):
+        hits = [{"id": i, "largeImageURL": f"img{i}"} for i in range(5)]
+        got = self._run(hits, 3, broken={"img0", "img1"})
+        self.assertEqual(len(got), 3)
+        self.assertNotIn("img0.jpg", got)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class _UrlResp:
+    def __init__(self, payload):
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _gemini(text):
+    return _UrlResp({"candidates": [{"content": {"parts": [{"text": text}]}, "finishReason": "STOP"}]})
+
+
+def _http_error(code):
+    import urllib.error
+    return urllib.error.HTTPError("u", code, "err", {}, None)
+
+
+class GeminiFlowTests(unittest.TestCase):
+    """Luồng chữ / luồng từ khoá ảnh gọi Gemini."""
+
+    def test_image_keywords_parsed_from_json(self):
+        from modules.module_03_acc_farm import content_service
+        reply = 'Here:\n["Coffee cup morning", "cafe interior!", "coffee cup morning", "Đà Lạt"]'
+        with mock.patch("urllib.request.urlopen", return_value=_gemini(reply)):
+            got = content_service.generate_image_keywords("viết về cà phê", 5, ["k1"], "m")
+        self.assertEqual(got[:2], ["coffee cup morning", "cafe interior"])
+        self.assertEqual(len(got), len(set(got)))
+
+    def test_text_switches_key_on_429_without_trying_other_models(self):
+        from modules.module_03_acc_farm import content_service
+        calls = []
+
+        def fake_urlopen(req, timeout=None):
+            calls.append(req.full_url)
+            if "key=bad" in req.full_url:
+                raise _http_error(429)
+            return _gemini("Bài viết hoàn chỉnh về buổi sáng cà phê thật chill nhé mọi người ☕ #cafe")
+
+        with mock.patch("urllib.request.urlopen", fake_urlopen):
+            text, _ = content_service.generate_status_content("p", api_key="bad", fallback_keys=["good"], model="m")
+        self.assertIn("cà phê", text)
+        self.assertEqual(sum("key=bad" in u for u in calls), 1)  # 429 → bỏ key luôn
+
+    def test_pixabay_only_fetch_broadens_keyword(self):
+        from modules.module_03_acc_farm import content_service
+        queries = []
+
+        def fake_search(q, pk, save_dir, count, exclude_ids=None):
+            queries.append(q)
+            return ["x.jpg"] if q == "coffee" else []
+
+        with mock.patch.object(content_service, "search_and_download_pixabay_images", fake_search), \
+                mock.patch("urllib.request.urlopen", side_effect=AssertionError("không được gọi Gemini")):
+            got = content_service.fetch_pixabay_image("coffee cup sunrise", "pk", "d", set())
+        self.assertEqual(got, "x.jpg")
+        self.assertEqual(queries, ["coffee cup sunrise", "coffee cup", "coffee"])
+        self.assertIsNone(content_service.fetch_pixabay_image("coffee", None))
+
+
+class GeminiSingleKeyTests(unittest.TestCase):
+    """Chỉ có 1 key: 429 ở 1 model vẫn phải thử model khác (hạn mức tính theo từng model)."""
+
+    def test_last_key_429_tries_other_models(self):
+        from modules.module_03_acc_farm import content_service
+        calls = []
+
+        def fake_urlopen(req, timeout=None):
+            calls.append(req.full_url)
+            if "gemini-flash-latest" in req.full_url:
+                return _gemini("Bài viết hoàn chỉnh cho buổi sáng thật vui vẻ cùng mọi người nhé ☀️ #morning")
+            raise _http_error(429)
+
+        with mock.patch("urllib.request.urlopen", fake_urlopen):
+            text, _ = content_service.generate_status_content("p", api_key="only", model="gemini-3.8-flash")
+        self.assertIn("buổi sáng", text)
+        self.assertGreaterEqual(len(calls), 2)
+
+    def test_retries_once_after_overload(self):
+        from modules.module_03_acc_farm import content_service
+        state = {"n": 0, "round2": False}
+
+        def fake_urlopen(req, timeout=None):
+            if state["round2"]:
+                return _gemini("Bài viết hoàn chỉnh sau khi Gemini hết quá tải, chúc mọi người ngày mới vui 🌿 #ok")
+            raise _http_error(503)
+
+        def fake_sleep(s):
+            state["round2"] = True
+
+        with mock.patch("urllib.request.urlopen", fake_urlopen), \
+                mock.patch.object(content_service.time, "sleep", fake_sleep):
+            text, _ = content_service.generate_status_content("p", api_key="only", model="m")
+        self.assertIn("hết quá tải", text)
+
+    def test_keyword_fallback_is_never_unaccented_vietnamese(self):
+        from modules.module_03_acc_farm import content_service
+        with mock.patch("urllib.request.urlopen", side_effect=_http_error(429)):
+            got = content_service.generate_image_keywords("đời buồn quá", 3, ["only"], "m")
+        self.assertEqual(got, ["lifestyle daily life"])
