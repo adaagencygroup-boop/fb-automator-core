@@ -84,7 +84,7 @@ _batch_start_at: dict[int, datetime] = {}
 # Chiến dịch thuộc lô chia xoay vòng (mỗi bài 1 nick, mỗi nick 1 khối N bài): chạy theo khối, mở Chrome 1 lần / khối
 _batch_rotation: dict[int, bool] = {}
 DEFAULT_CHROME_THREADS = 2
-MAX_CHROME_THREADS = 5
+MAX_CHROME_THREADS = 20
 
 
 def _batch_id(campaign_id: int) -> int:
@@ -1419,9 +1419,9 @@ def create_seeding_campaign(
         created_campaigns.append(camp)
 
     threads = (
-        max(1, min(MAX_CHROME_THREADS, int(req.chrome_threads)))
+        max(1, min(MAX_CHROME_THREADS, actual_account_count, int(req.chrome_threads)))
         if req.chrome_threads
-        else DEFAULT_CHROME_THREADS
+        else min(DEFAULT_CHROME_THREADS, max(1, actual_account_count))
     )
     if req.spread_hours and req.spread_hours > 0:
         # Rải đều: tự tính thời gian nghỉ cho cả lô (ghi đè cấu hình nghỉ)

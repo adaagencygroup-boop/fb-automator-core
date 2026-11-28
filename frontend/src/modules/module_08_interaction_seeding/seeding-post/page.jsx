@@ -33,6 +33,7 @@ export default function SeedingPostPage() {
 
   // Account config
   const [accountCount, setAccountCount] = useState(2);
+  const [chromeThreads, setChromeThreads] = useState(2);
   const [selectedUids, setSelectedUids] = useState([]);
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [delayMin, setDelayMin] = useState(30);
@@ -63,6 +64,7 @@ export default function SeedingPostPage() {
           );
           const validCount = validLiveLoggedIn.length;
           setLiveAccountsCount(validCount);
+          setChromeThreads((current) => Math.min(current, Math.max(1, Math.min(20, validCount))));
           setLiveAccountList(validLiveLoggedIn);
           // Giữ đúng tài khoản đã chọn lần trước (bỏ tài khoản không còn khả dụng)
           const { uids: initialUids, restored, dropped } = resolveInitialUids(
@@ -85,6 +87,11 @@ export default function SeedingPostPage() {
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const maxThreads = Math.min(20, liveAccountsCount, accountCount);
+    if (maxThreads > 0) setChromeThreads((current) => Math.min(current, maxThreads));
+  }, [liveAccountsCount, accountCount]);
 
   // Realtime logs: local UI notifications + SSE backend stream
   const { logs: sseLogs } = useLocalSSE(true);
@@ -382,7 +389,7 @@ export default function SeedingPostPage() {
       use_saved_targets: true,
       uids: selectedUids.length > 0 ? selectedUids : undefined,
       account_count: selectedUids.length > 0 ? selectedUids.length : accountCount,
-      threads: 1,
+      chrome_threads: chromeThreads,
       delay_seconds_min: delayMin,
       delay_seconds_max: delayMax,
       distribution_mode: distributionMode,
@@ -578,6 +585,9 @@ export default function SeedingPostPage() {
         accountStep={accountStep}
         timeStep={accountStep + 1}
         accountCount={accountCount}
+        chromeThreads={chromeThreads}
+        onChromeThreadsChange={setChromeThreads}
+        maxChromeThreads={Math.min(20, liveAccountsCount, accountCount)}
         availableAccounts={liveAccountsCount}
         selectedUids={selectedUids}
         selectedReactionsCount={selectedReactions.length}

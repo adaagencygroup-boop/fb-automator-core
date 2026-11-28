@@ -18,6 +18,7 @@ export default function SeedingProfilePage() {
   const [targets, setTargets] = useState([]);
   const [successMessage, setSuccessMessage] = useState(null);
   const [accountCount, setAccountCount] = useState(2);
+  const [chromeThreads, setChromeThreads] = useState(2);
   const [selectedUids, setSelectedUids] = useState([]);
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [delayMin, setDelayMin] = useState(30);
@@ -45,6 +46,7 @@ export default function SeedingProfilePage() {
           );
           const validCount = validLiveLoggedIn.length;
           setLiveAccountsCount(validCount);
+          setChromeThreads((current) => Math.min(current, Math.max(1, Math.min(20, validCount))));
           // Giữ đúng tài khoản đã chọn lần trước (bỏ tài khoản không còn khả dụng)
           const { uids: initialUids, restored, dropped } = resolveInitialUids(
             validLiveLoggedIn.map((a) => a.uid),
@@ -66,6 +68,11 @@ export default function SeedingProfilePage() {
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const maxThreads = Math.min(20, liveAccountsCount, accountCount);
+    if (maxThreads > 0) setChromeThreads((current) => Math.min(current, maxThreads));
+  }, [liveAccountsCount, accountCount]);
 
   // Realtime logs: local UI notifications + SSE backend stream
   const { logs: sseLogs } = useLocalSSE(true);
@@ -305,7 +312,7 @@ export default function SeedingProfilePage() {
         })),
         uids: selectedUids.length > 0 ? selectedUids : undefined,
         account_count: selectedUids.length > 0 ? selectedUids.length : accountCount,
-        threads: 1,
+        chrome_threads: chromeThreads,
         delay_seconds_min: delayMin,
         delay_seconds_max: delayMax,
       });
@@ -397,6 +404,9 @@ export default function SeedingProfilePage() {
       {/* Steps 2 & 3: Account Config & Delay */}
       <ProfileAccountConfig
         accountCount={accountCount}
+        chromeThreads={chromeThreads}
+        onChromeThreadsChange={setChromeThreads}
+        maxChromeThreads={Math.min(20, liveAccountsCount, accountCount)}
         onAccountCountChange={(val) => {
           setAccountCount(val);
         }}
