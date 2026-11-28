@@ -21,6 +21,7 @@ import {
   ExternalLink,
   AlertCircle,
   Database,
+  Loader2,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { toast } from "@/components/ui/toast";
@@ -55,6 +56,8 @@ export default function ExcelImportModal({
   subtitle,
 }) {
   const fileInputRef = useRef(null);
+  const fileReadIdRef = useRef(0);
+  const isTargetImport = targetType === "POST" || targetType === "PROFILE" || targetType === "PAGE";
 
   // Compute default title and subtitle based on targetType
   const computedTitle =
@@ -107,6 +110,7 @@ export default function ExcelImportModal({
 
   // Reset file state completely
   const handleResetFile = useCallback(() => {
+    fileReadIdRef.current += 1;
     setFile(null);
     setFileStats(null);
     setProgress(0);
@@ -253,7 +257,13 @@ export default function ExcelImportModal({
       return;
     }
 
+    const readId = ++fileReadIdRef.current;
     setFile(selectedFile);
+    setFileStats(null);
+    setParsedTargets([]);
+    setDuplicateTargets([]);
+    setInvalidTargets([]);
+    setSearchQuery("");
     setIsAnalyzing(true);
     setIsCompleted(false);
     setShowPreview(false);
@@ -282,6 +292,7 @@ export default function ExcelImportModal({
       } catch (e) {
         console.warn("Không thể tải danh sách từ database:", e);
       }
+      if (readId !== fileReadIdRef.current) return;
 
       const combinedTargets = [
         ...(targetType === "COMMENT" ? existingComments : existingTargets),
@@ -430,6 +441,7 @@ export default function ExcelImportModal({
       if (ext === "TXT") {
         setProgress(45);
         const text = await selectedFile.text();
+        if (readId !== fileReadIdRef.current) return;
         setProgress(80);
         const lines = text
           .split("\n")
@@ -441,6 +453,7 @@ export default function ExcelImportModal({
         });
       } else {
         const buffer = await selectedFile.arrayBuffer();
+        if (readId !== fileReadIdRef.current) return;
         setProgress(45);
 
         const workbook = XLSX.read(buffer, { type: "array" });
@@ -505,10 +518,15 @@ export default function ExcelImportModal({
       setParsedTargets(validList);
       setDuplicateTargets(duplicateList);
       setInvalidTargets(invalidList);
+      if (isTargetImport) {
+        setShowPreview(Boolean(validList.length || duplicateList.length || invalidList.length));
+        setPreviewTab(validList.length ? "VALID" : duplicateList.length ? "DUPLICATE" : "INVALID");
+      }
       setProgress(100);
       setIsAnalyzing(false);
       setIsCompleted(true);
     } catch (err) {
+      if (readId !== fileReadIdRef.current) return;
       console.error("Lỗi đọc file:", err);
       setErrorMsg(
         err?.message || "Không thể phân tích file Excel. Vui lòng kiểm tra lại định dạng tệp!"
@@ -516,7 +534,7 @@ export default function ExcelImportModal({
       setIsAnalyzing(false);
       setProgress(0);
     }
-  }, [targetType, allDbTargets, existingComments, existingTargets]);
+  }, [targetType, allDbTargets, existingComments, existingTargets, isTargetImport]);
 
   const handleFileChange = (e) => {
     const selected = e.target.files?.[0];
@@ -617,6 +635,7 @@ export default function ExcelImportModal({
   };
 
   const handleConfirmImport = () => {
+    if (isAnalyzing) return;
     if (parsedTargets.length > 0) {
       if (onImportComments) {
         onImportComments(parsedTargets.map((t) => t.url));
@@ -704,7 +723,16 @@ export default function ExcelImportModal({
           </div>
 
           {/* Uploaded Dataset Section or Dropzone */}
-          {file && fileStats ? (
+          {isTargetImport && isAnalyzing ? (
+            <div
+              role="status"
+              className="flex min-h-48 flex-col items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-6 text-center"
+            >
+              <Loader2 aria-hidden="true" className="size-7 animate-spin text-blue-600 motion-reduce:animate-none" />
+              <p className="text-sm font-semibold text-slate-800">Đang đọc và kiểm tra file Excel…</p>
+              <p className="max-w-full break-all text-xs text-slate-500">{file?.name}</p>
+            </div>
+          ) : file && fileStats ? (
             <div className="bg-white rounded-2xl border border-slate-200/80 p-5 space-y-4 shadow-sm">
               {/* Header of Section */}
               <div className="flex items-center justify-between pb-1">
@@ -1200,6 +1228,7 @@ export default function ExcelImportModal({
             type="file"
             accept={targetType === "COMMENT" ? ".xlsx,.xls,.csv,.txt" : ".xlsx,.xls,.csv"}
             onChange={handleFileChange}
+            disabled={isAnalyzing}
             className="hidden"
           />
 
@@ -1214,7 +1243,7 @@ export default function ExcelImportModal({
           {/* Footer Actions */}
           <div className="flex items-center justify-between pt-3 border-t border-slate-100">
             <div className="text-xs text-slate-500 flex items-center gap-2">
-              {parsedTargets.length > 0 ? (
+              {isTargetImport && isAnalyzing ? null : parsedTargets.length > 0 ? (
                 <>
                   <span className="flex items-center gap-1.5 text-emerald-700 font-semibold">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600" />
@@ -1249,7 +1278,7 @@ export default function ExcelImportModal({
 
               <button
                 type="button"
-                disabled={parsedTargets.length === 0}
+                disabled={isAnalyzing || parsedTargets.length === 0}
                 onClick={handleConfirmImport}
                 className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold transition-all shadow-sm shadow-emerald-600/20 flex items-center gap-2 cursor-pointer active:scale-95"
               >
