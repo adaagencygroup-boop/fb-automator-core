@@ -35,9 +35,9 @@ export function normalizeDelayRange(
 }
 
 const stepBtn =
-  "w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 font-medium";
+  "w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 font-medium disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent";
 const inputCls =
-  "w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
+  "w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none disabled:cursor-not-allowed disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
 
 /**
  * 2 ô Min – Max giây (có nút - / +). Đang gõ thì không ép giá trị; gõ xong (rời ô / Enter) hoặc bấm - / +
@@ -46,6 +46,7 @@ const inputCls =
  */
 export default function DelayRangeInput({
   min, max, onChange, floor = MIN_DELAY_SEC, minCeil = MAX_DELAY_MIN_SEC, ceil = MAX_DELAY_MAX_SEC,
+  disabled = false, // khoá khi đang Kiểm tra / đang quét / đang xem kết quả (giống các ô cấu hình khác)
 }) {
   const [draftMin, setDraftMin] = useState(String(min));
   const [draftMax, setDraftMax] = useState(String(max));
@@ -89,7 +90,7 @@ export default function DelayRangeInput({
     <div className="flex flex-col items-end gap-1">
       <div className="flex items-center gap-2">
         <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
-          <button type="button" aria-label="Giảm Min" onClick={() => commit(min - 1, max)} className={`${stepBtn} rounded-l-lg`}>
+          <button type="button" aria-label="Giảm Min" disabled={disabled} onClick={() => commit(min - 1, max)} className={`${stepBtn} rounded-l-lg`}>
             -
           </button>
           <input
@@ -99,9 +100,10 @@ export default function DelayRangeInput({
             onChange={(e) => setDraftMin(digitsOnly(e.target.value))}
             onBlur={() => commit(draftMin, max)}
             onKeyDown={onKey}
+            disabled={disabled}
             className={inputCls}
           />
-          <button type="button" aria-label="Tăng Min" onClick={() => commit(min + 1, max)} className={`${stepBtn} rounded-r-lg`}>
+          <button type="button" aria-label="Tăng Min" disabled={disabled} onClick={() => commit(min + 1, max)} className={`${stepBtn} rounded-r-lg`}>
             +
           </button>
         </div>
@@ -109,7 +111,7 @@ export default function DelayRangeInput({
         <span className="text-xs text-[#94A3B8]">-</span>
 
         <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
-          <button type="button" aria-label="Giảm Max" onClick={() => commit(min, max - 1)} className={`${stepBtn} rounded-l-lg`}>
+          <button type="button" aria-label="Giảm Max" disabled={disabled} onClick={() => commit(min, max - 1)} className={`${stepBtn} rounded-l-lg`}>
             -
           </button>
           <input
@@ -119,9 +121,10 @@ export default function DelayRangeInput({
             onChange={(e) => setDraftMax(digitsOnly(e.target.value))}
             onBlur={() => commit(min, draftMax)}
             onKeyDown={onKey}
+            disabled={disabled}
             className={inputCls}
           />
-          <button type="button" aria-label="Tăng Max" onClick={() => commit(min, max + 1)} className={`${stepBtn} rounded-r-lg`}>
+          <button type="button" aria-label="Tăng Max" disabled={disabled} onClick={() => commit(min, max + 1)} className={`${stepBtn} rounded-r-lg`}>
             +
           </button>
         </div>
