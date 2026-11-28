@@ -107,7 +107,7 @@ export default function PostSummaryCards({
       </div>
 
       {/* Card 2: Phân bổ lượt (dự kiến) */}
-      <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm p-5 pb-0 flex h-full flex-col">
+      <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm p-5 pb-2 flex h-full flex-col">
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex items-center justify-between pb-3 border-b border-gray-100 mb-3">
             <div className="flex items-center gap-2 text-emerald-700 font-bold text-xs">
@@ -121,7 +121,8 @@ export default function PostSummaryCards({
             </span>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          {/* Bảng dùng phần chiều cao còn lại của thẻ khi bố cục có ba cột. */}
+          <div className="min-h-0 max-h-[195px] flex-1 overflow-y-auto pr-1 md:max-h-none md:[contain:size]">
             <table className="w-full text-center text-xs border-collapse">
               <thead className="sticky top-0 bg-white z-10">
                 <tr className="text-gray-500 text-[11px] border-b border-gray-100 bg-gray-50/90 font-semibold">
