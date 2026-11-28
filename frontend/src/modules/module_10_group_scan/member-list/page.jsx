@@ -273,10 +273,24 @@ export default function GroupScanMemberListPage() {
   return (
     <div className="-m-6 min-h-full space-y-5 bg-[#F4F7FC] p-6">
       <ModulePageHeader navId="scan.member_list" />
-      {/* Master Workspace Card */}
-      <section className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+      {/* Hai khung riêng giống Danh sách page (Module 11): danh mục bên trái (dính khi cuộn) + bảng thành viên bên phải */}
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
+        {/* Left Category Column */}
+        <MemberCategorySidebar
+          categories={filteredCategories}
+          selectedCatId={selectedCatId}
+          onSelectCat={(id) => {
+            setSelectedCatId(id);
+            setCurrentPage(1);
+          }}
+          categorySearch={categorySearch}
+          onSearchChange={setCategorySearch}
+          onOpenCreateModal={() => setCreateCategoryModalOpen(true)}
+        />
+
+        <section className="min-w-0 flex-1 rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
         {/* Card Header Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] px-5 py-4 bg-[#F8FAFC]/50">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-t-xl border-b border-[#F1F5F9] px-5 py-4 bg-[#F8FAFC]/50">
           <div className="flex items-center gap-2.5">
             <h2 className="font-heading text-base font-semibold text-[#0F172A]">
               DANH SÁCH THÀNH VIÊN ĐÃ QUÉT
@@ -309,23 +323,8 @@ export default function GroupScanMemberListPage() {
           </div>
         </div>
 
-        {/* Two Column Layout: Categories Left + Data Table Right */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 min-h-[620px]">
-          {/* Left Category Column */}
-          <MemberCategorySidebar
-            categories={filteredCategories}
-            selectedCatId={selectedCatId}
-            onSelectCat={(id) => {
-              setSelectedCatId(id);
-              setCurrentPage(1);
-            }}
-            categorySearch={categorySearch}
-            onSearchChange={setCategorySearch}
-            onOpenCreateModal={() => setCreateCategoryModalOpen(true)}
-          />
-
           {/* Right Detail And Table Column */}
-          <div className="lg:col-span-8 p-5 flex flex-col gap-3.5 min-w-0">
+          <div className="p-5 flex flex-col gap-3.5 min-w-0">
             <MemberTableToolbar
               currentCategory={currentCategory}
               memberSearch={memberSearch}
@@ -357,8 +356,8 @@ export default function GroupScanMemberListPage() {
               onPageChange={setCurrentPage}
             />
           </div>
-        </div>
-      </section>
+        </section>
+      </div>
 
       {/* Xác nhận trước khi xóa thành viên */}
       <ConfirmDialog

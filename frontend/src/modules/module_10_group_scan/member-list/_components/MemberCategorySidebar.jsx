@@ -12,7 +12,8 @@ export default function MemberCategorySidebar({
   onOpenCreateModal,
 }) {
   return (
-    <div className="lg:col-span-4 p-5 bg-[#F8FAFC]/40 border-r border-[#E2E8F0] flex flex-col gap-3.5">
+    // Khung riêng bên trái (giống Danh sách page Module 11): màn rộng thì DÍNH khi cuộn trang, danh sách cuộn bên trong
+    <div className="w-full lg:w-[320px] shrink-0 rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] flex flex-col gap-3.5 lg:sticky lg:top-0 lg:z-10 lg:h-[640px] lg:max-h-[calc(100vh-180px)] lg:min-h-[360px]">
       {/* Header & Search */}
       <div className="flex flex-col gap-2 w-full">
         <div className="flex items-center justify-between">
@@ -43,7 +44,7 @@ export default function MemberCategorySidebar({
       </div>
 
       {/* Category Group Cards List */}
-      <div className="flex flex-col gap-2 w-full max-h-[480px] overflow-y-auto pr-0.5">
+      <div className="flex min-h-0 flex-1 flex-col gap-2 w-full max-h-[480px] overflow-y-auto overscroll-contain pr-0.5 lg:max-h-none">
         {categories.length === 0 ? (
           <div className="text-center py-8 text-xs text-[#94A3B8]">
             Chưa có danh mục nào từ cơ sở dữ liệu.

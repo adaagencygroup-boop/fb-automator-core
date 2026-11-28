@@ -300,25 +300,12 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
       : "Chưa có bình luận nào được quét cho bài này.";
 
   return (
-    <section className="rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] pb-4">
-        <h2 className={`font-bold uppercase tracking-tight text-[#0F172A] ${headerSize === "lg" ? "text-xl" : "text-sm"}`}>{title}</h2>
-        <button
-          type="button"
-          onClick={() => setExportOpen(true)}
-          disabled={!posts.length}
-          title={posts.length ? "Xuất Excel / CSV / danh sách UID" : "Chưa có dữ liệu tương tác để xuất file!"}
-          className="inline-flex h-9 items-center gap-2 rounded-lg border border-[#CBD5E1] bg-white px-3.5 text-sm font-medium text-[#334155] shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Download className="size-4 text-[#64748B]" /> Xuất toàn bộ file
-        </button>
-      </div>
-
-      <div className="mt-5 grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
-        {/* ---------------- Cột trái: danh mục bài viết ----------------
-            Màn rộng: cột trái KHÔNG tự quyết chiều cao (contain:size) mà kéo bằng cột phải (lưới tự giãn),
-            danh sách bài cuộn bên trong → đáy 2 cột luôn thẳng hàng; tối thiểu 480px khi cột phải ngắn. */}
-        <div className="flex min-w-0 flex-col lg:min-h-[480px] lg:[contain:size]">
+    // Hai khung riêng (giống Danh sách page Module 11): danh mục bài viết bên trái + chi tiết bài bên phải
+    <section className="grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)] lg:items-start">
+        {/* ---------------- Khung trái: danh mục bài viết ----------------
+            Giống Danh sách page (Module 11): khung riêng, màn rộng thì DÍNH khi cuộn trang, cao cố định,
+            danh sách bài cuộn bên trong. */}
+        <div className="flex min-w-0 flex-col rounded-2xl border border-[#E2E8F0] bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)] lg:sticky lg:top-0 lg:z-10 lg:h-[640px] lg:max-h-[calc(100vh-180px)] lg:min-h-[360px]">
           <p className="mb-3 flex items-center gap-2 text-[13px] font-bold uppercase text-[#0F172A]">
             <List className="size-4 text-[#2563EB]" /> Danh mục bài viết đã quét
             <span className="text-[#2563EB]">({nf(postTotal)})</span>
@@ -368,8 +355,20 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
           </div>
         </div>
 
-        {/* ---------------- Cột phải: chi tiết bài đang chọn ---------------- */}
-        <div className="min-w-0 space-y-4">
+        {/* ---------------- Khung phải: tiêu đề + nút xuất file + chi tiết bài đang chọn ---------------- */}
+        <div className="min-w-0 space-y-4 rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] pb-4">
+            <h2 className={`font-bold uppercase tracking-tight text-[#0F172A] ${headerSize === "lg" ? "text-xl" : "text-sm"}`}>{title}</h2>
+            <button
+              type="button"
+              onClick={() => setExportOpen(true)}
+              disabled={!posts.length}
+              title={posts.length ? "Xuất Excel / CSV / danh sách UID" : "Chưa có dữ liệu tương tác để xuất file!"}
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-[#CBD5E1] bg-white px-3.5 text-sm font-medium text-[#334155] shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Download className="size-4 text-[#64748B]" /> Xuất toàn bộ file
+            </button>
+          </div>
           {post ? (
             <div className="rounded-xl border border-[#E2E8F0] bg-white px-5 py-4">
               <p className="line-clamp-2 break-words text-[15px] font-bold text-[#0F172A]" title={post.content}>
@@ -570,7 +569,6 @@ export default function ResultsExplorer({ title, postKeys = null, live = false, 
 
           <TierLegend />
         </div>
-      </div>
 
       <ExportModal
         open={exportOpen}

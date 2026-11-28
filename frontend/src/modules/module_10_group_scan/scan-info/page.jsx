@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, RotateCcw } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { useUnsavedChanges } from "@/components/UnsavedChangesContext";
 import AccountSelectModal, { isScanReady } from "../components/AccountSelectModal";
@@ -1147,6 +1147,35 @@ export default function GroupScanInfoPage() {
     method === "file" &&
     (fileData?.rows || []).some((r) => r.status === "valid" && r.url && !(r.url in knownLinksRef.current));
 
+  // Quét xong (hoặc đã dừng) còn kết quả → nút "Quay về cấu hình ban đầu": xoá sạch KẾT QUẢ (bảng, tìm / lọc, dòng
+  // chọn, log, phiên đã nhớ) để quét lượt mới; giữ nguyên phần đã nhập (nick, từ khóa / link / tệp, delay).
+  const showBackToConfig = runState === "idle" && !resuming && !aborting && results.length > 0;
+  const backToConfig = () => {
+    if (method !== "keyword" && !hasSavedShared) {
+      const ok = window.confirm(
+        "Bạn có kết quả quét nhóm chưa bấm 'Lưu vào danh sách chung'. Quay về cấu hình sẽ xóa kết quả đang xem. Bạn có chắc chắn không?",
+      );
+      if (!ok) return;
+    }
+    setResults([]);
+    setSelectedRows(new Set());
+    setResultQuery("");
+    setFilterMembers("all");
+    setFilterKeyword("all");
+    setHasSavedShared(false);
+    setLastJobId("");
+    setCheckJobId("");
+    setUnsavedChanges(false);
+    setLogs([
+      {
+        time: "—",
+        thread: "System",
+        text: "Module 10 sẵn sàng. Kiểm tra → điền bảng từ khóa. Bắt đầu thực thi → mở Chrome quét.",
+        tone: "info",
+      },
+    ]);
+  };
+
   const handlePrimaryAction = async () => {
     if (runState === "paused" && checkJobId) {
       await resumeRun();
@@ -1338,6 +1367,16 @@ export default function GroupScanInfoPage() {
 
         {/* Action Controls */}
         <div className="space-y-3">
+          {showBackToConfig ? (
+          <button
+            type="button"
+            onClick={backToConfig}
+            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#2563EB] bg-white text-sm font-bold tracking-wide text-[#2563EB] hover:bg-blue-50"
+          >
+            <RotateCcw className="size-4" />
+            QUAY VỀ CẤU HÌNH BAN ĐẦU
+          </button>
+          ) : (
           <button
             type="button"
             onClick={handlePrimaryAction}
@@ -1368,19 +1407,20 @@ export default function GroupScanInfoPage() {
               ? "TIẾP TỤC QUÉT"
               : "BẮT ĐẦU THỰC THI"}
           </button>
-          {needCheckFirst && !checkingKeywords && (
+          )}
+          {!showBackToConfig && needCheckFirst && !checkingKeywords && (
             <p className="text-center text-xs text-amber-700">
               Bấm <b>Kiểm tra</b> trước để biết mỗi từ khóa quét được bao nhiêu nhóm — còn {uncheckedKeywords.length} từ khóa
               chưa kiểm tra: {uncheckedKeywords.slice(0, 3).map((w) => `«${w}»`).join(", ")}
               {uncheckedKeywords.length > 3 ? "…" : ""}.
             </p>
           )}
-          {needLinkCheck && !checkingLinks && (
+          {!showBackToConfig && needLinkCheck && !checkingLinks && (
             <p className="text-center text-xs text-amber-700">
               Bấm <b>Kiểm tra &amp; Lọc trùng lặp</b> trước để bỏ link trùng và link đã quét, rồi mới bắt đầu thực thi.
             </p>
           )}
-          {needFileCheck && (
+          {!showBackToConfig && needFileCheck && (
             <p className="text-center text-xs text-amber-700">
               Chưa kiểm tra được link đã quét trong tệp (mất kết nối Engine) — hãy <b>tải lại tệp</b> để kiểm tra &amp; lọc trùng rồi mới bắt đầu thực thi.
             </p>
