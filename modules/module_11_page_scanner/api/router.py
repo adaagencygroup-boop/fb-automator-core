@@ -2229,6 +2229,7 @@ class PageListCreateInput(BaseModel):
 class PageListSaveInput(BaseModel):
     category_id: Optional[int] = None
     category_name: Optional[str] = Field(None, max_length=255)
+    source_category_id: Optional[int] = None  # != None → chuyển thật (thêm vào đích & gỡ khỏi nguồn)
     page_keys: List[str] = Field(default_factory=list)
     deduplicate: bool = True
     color: Optional[str] = Field(None, pattern=_LIST_COLOR)  # chỉ dùng khi tạo mới theo tên
@@ -2311,9 +2312,9 @@ def delete_page_list(list_id: int):
 @router.post("/page-lists/save")
 def save_pages_to_list(item: PageListSaveInput):
     """
-    Lưu page (theo page_key trong kho scanned_pages) vào danh mục có sẵn (category_id)
-    hoặc theo tên (chưa có thì tạo). Không bao giờ nhân đôi page trong 1 danh mục:
-    deduplicate=True → bỏ qua page đã có; False → đưa page đã có lên đầu (added_at mới).
+    Lưu hoặc chuyển page (theo page_key trong kho scanned_pages) vào danh mục có sẵn (category_id)
+    hoặc theo tên (chưa có thì tạo). Nếu có source_category_id thì gỡ các page đó khỏi đúng
+    danh mục nguồn trong cùng transaction (chuyển danh mục thật, không đụng các danh mục khác).
     """
     owner = _get_owner()
     keys = list(dict.fromkeys(str(k).strip() for k in (item.page_keys or []) if str(k).strip()))
@@ -2324,6 +2325,9 @@ def save_pages_to_list(item: PageListSaveInput):
         raise HTTPException(status_code=422, detail="Vui lòng chọn hoặc nhập tên danh mục.")
 
     conflict_sql = "DO NOTHING" if item.deduplicate else "DO UPDATE SET added_at = NOW()"
+    source_cat = None
+    source_page_count = None
+    removed_from_source = 0
     with db.session() as cur:
         if item.category_id is not None:
             cur.execute(
@@ -2336,6 +2340,18 @@ def save_pages_to_list(item: PageListSaveInput):
             cat, created = dict(row), False
         else:
             cat, created = _find_or_create_page_list(cur, owner, name, item.color)
+
+        if item.source_category_id is not None:
+            cur.execute(
+                "SELECT id, name FROM page_list_categories WHERE owner_key = %s AND id = %s",
+                (owner, item.source_category_id),
+            )
+            src_row = cur.fetchone()
+            if not src_row:
+                raise HTTPException(status_code=404, detail="Không tìm thấy danh mục nguồn.")
+            source_cat = dict(src_row)
+            if source_cat["id"] == cat["id"]:
+                raise HTTPException(status_code=422, detail="Danh mục đích trùng với danh mục hiện tại.")
 
         cur.execute(
             f"""
@@ -2353,6 +2369,30 @@ def save_pages_to_list(item: PageListSaveInput):
             (owner, keys, cat["id"], owner),
         )
         stats = cur.fetchone() or {}
+
+        if source_cat is not None:
+            cur.execute(
+                """
+                DELETE FROM page_list_category_pages cp
+                USING scanned_pages sp
+                WHERE cp.owner_key = %s
+                  AND cp.category_id = %s
+                  AND cp.page_key = ANY(%s)
+                  AND sp.owner_key = cp.owner_key
+                  AND sp.page_key = cp.page_key
+                RETURNING cp.page_key
+                """,
+                (owner, source_cat["id"], keys),
+            )
+            removed_from_source = len(cur.fetchall() or [])
+            cur.execute(
+                f"UPDATE page_list_categories c SET updated_at = NOW() WHERE c.id = %s"
+                f" RETURNING ({_PAGE_LIST_COUNT_SQL}) AS page_count",
+                (source_cat["id"],),
+            )
+            src_count_row = cur.fetchone() or {}
+            source_page_count = int(src_count_row.get("page_count") or 0)
+
         cur.execute(
             f"UPDATE page_list_categories c SET updated_at = NOW() WHERE c.id = %s"
             f" RETURNING ({_PAGE_LIST_COUNT_SQL}) AS page_count",
@@ -2364,15 +2404,28 @@ def save_pages_to_list(item: PageListSaveInput):
     added = int(stats.get("added") or 0)
     existing = found - added
     not_found = len(keys) - found
-    parts = [f"Đã lưu {added} page vào danh mục «{cat['name']}»"]
-    if existing:
-        parts.append(f"bỏ qua {existing} page đã có" if item.deduplicate else f"cập nhật {existing} page đã có")
-    if not_found:
-        parts.append(f"{not_found} page chưa có trong kho")
+    if source_cat is not None:
+        moved = removed_from_source if removed_from_source > 0 else added
+        parts = [f"Đã chuyển {moved} page từ «{source_cat['name']}» sang «{cat['name']}»"]
+        if existing and moved > 0:
+            parts.append(f"{existing} page đã có sẵn ở «{cat['name']}»")
+        if not_found:
+            parts.append(f"{not_found} page chưa có trong kho")
+    else:
+        moved = 0
+        parts = [f"Đã lưu {added} page vào danh mục «{cat['name']}»"]
+        if existing:
+            parts.append(f"bỏ qua {existing} page đã có" if item.deduplicate else f"cập nhật {existing} page đã có")
+        if not_found:
+            parts.append(f"{not_found} page chưa có trong kho")
     return {
         "category": {**cat, "page_count": int(count_row.get("page_count") or 0)},
+        "source_category": (
+            {**source_cat, "page_count": source_page_count} if source_cat is not None else None
+        ),
         "created": created,
         "added": added,
+        "moved": moved,
         "skipped_existing": existing,
         "not_found": not_found,
         "message": " · ".join(parts) + ".",

@@ -14,13 +14,25 @@ import { useActionLock } from "./useActionLock";
 import { CATEGORY_COLORS } from "@/modules/module_10_group_scan/member-list/_components/CreateCategoryModal";
 import { pageListColor } from "./pageListColor";
 
-export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSaved }) {
+export default function SavePageListModal({
+  isOpen,
+  onClose,
+  pageKeys = [],
+  sourceCategoryId = null,
+  sourceCategoryName = "",
+  onSaved,
+}) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
     setMounted(true);
   }, []);
 
+  const isMove = sourceCategoryId != null;
   const { lists: categories, loading: loadingCats } = usePageLists({ enabled: isOpen });
+  const selectableCategories = useMemo(
+    () => (isMove ? categories.filter((c) => c.id !== sourceCategoryId) : categories),
+    [categories, isMove, sourceCategoryId],
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedId, setSelectedId] = useState(null);
   const [newCatName, setNewCatName] = useState("");
@@ -37,11 +49,18 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
     setShowNew(false);
   }, [isOpen]);
 
-  // Mặc định chọn danh mục đầu tiên (mới dùng gần nhất)
+  // Mặc định chọn danh mục đích đầu tiên (mới dùng gần nhất); nếu đang chuyển mà chưa có danh mục khác thì mở sẵn ô tạo mới
   useEffect(() => {
-    if (!isOpen || !categories.length) return;
-    setSelectedId((cur) => (cur != null && categories.some((c) => c.id === cur) ? cur : categories[0].id));
-  }, [isOpen, categories]);
+    if (!isOpen) return;
+    if (!selectableCategories.length) {
+      setSelectedId(null);
+      if (!loadingCats && isMove) setShowNew(true);
+      return;
+    }
+    setSelectedId((cur) =>
+      cur != null && selectableCategories.some((c) => c.id === cur) ? cur : selectableCategories[0].id,
+    );
+  }, [isOpen, selectableCategories, loadingCats, isMove]);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -54,9 +73,9 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
 
   const filteredCategories = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
-    if (!q) return categories;
-    return categories.filter((c) => (c.name || "").toLowerCase().includes(q));
-  }, [categories, searchQuery]);
+    if (!q) return selectableCategories;
+    return selectableCategories.filter((c) => (c.name || "").toLowerCase().includes(q));
+  }, [selectableCategories, searchQuery]);
 
   const newInputVisible = showNew; // chỉ hiện khi người dùng bấm "HOẶC TẠO DANH MỤC MỚI"
   const typedName = newCatName.trim();
@@ -64,7 +83,9 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
 
   const handleConfirmSave = () => {
     if (!pageKeys.length) {
-      toast.warning("Không có page nào để lưu vào danh mục!", { key: "m11-save-list" });
+      toast.warning(isMove ? "Không có page nào để chuyển danh mục!" : "Không có page nào để lưu vào danh mục!", {
+        key: "m11-save-list",
+      });
       return;
     }
     if (!typedName && selectedId == null) {
@@ -75,15 +96,21 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
       try {
         const res = await savePagesToList(
           typedName
-            ? { categoryName: typedName, pageKeys, color: newColor }
-            : { categoryId: selectedId, pageKeys },
+            ? { categoryName: typedName, sourceCategoryId, pageKeys, color: newColor }
+            : { categoryId: selectedId, sourceCategoryId, pageKeys },
         );
-        toast.success(res?.message || "Đã lưu page vào danh mục.", { key: "m11-save-list" });
+        toast.success(
+          res?.message || (isMove ? "Đã chuyển page sang danh mục mới." : "Đã lưu page vào danh mục."),
+          { key: "m11-save-list" },
+        );
         onSaved?.(res);
         onClose();
       } catch (err) {
         console.error(err);
-        toast.error(err?.message || "Lỗi khi lưu danh sách page!", { key: "m11-save-list" });
+        toast.error(
+          err?.message || (isMove ? "Lỗi khi chuyển danh mục page!" : "Lỗi khi lưu danh sách page!"),
+          { key: "m11-save-list" },
+        );
       }
     })();
   };
@@ -105,9 +132,26 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
               <Folder className="size-5 fill-slate-700" />
             </div>
             <div className="flex flex-col">
-              <h3 className="text-base font-bold text-[#0F172A]">Lưu vào danh sách page chung</h3>
+              <h3 className="text-base font-bold text-[#0F172A]">
+                {isMove ? "Chuyển danh mục Page" : "Lưu vào danh sách page chung"}
+              </h3>
               <span className="text-[11px] text-slate-500">
-                Sẽ lưu <b className="font-semibold text-slate-800">{pageKeys.length.toLocaleString("vi-VN")}</b> page
+                {isMove ? (
+                  <>
+                    Chuyển <b className="font-semibold text-slate-800">{pageKeys.length.toLocaleString("vi-VN")}</b> page
+                    {sourceCategoryName ? (
+                      <>
+                        {" "}
+                        từ <b className="font-semibold text-slate-800">«{sourceCategoryName}»</b>
+                      </>
+                    ) : null}{" "}
+                    sang danh mục khác
+                  </>
+                ) : (
+                  <>
+                    Sẽ lưu <b className="font-semibold text-slate-800">{pageKeys.length.toLocaleString("vi-VN")}</b> page
+                  </>
+                )}
               </span>
             </div>
           </div>
@@ -150,7 +194,11 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
               </div>
             ) : filteredCategories.length === 0 ? (
               <div className="col-span-2 py-6 text-center text-xs text-slate-400">
-                {categories.length ? "Không tìm thấy danh mục nào phù hợp" : "Chưa có danh mục — tạo danh mục mới bên dưới"}
+                {selectableCategories.length
+                  ? "Không tìm thấy danh mục nào phù hợp"
+                  : isMove
+                    ? "Chưa có danh mục đích khác — tạo danh mục mới bên dưới"
+                    : "Chưa có danh mục — tạo danh mục mới bên dưới"}
               </div>
             ) : (
               filteredCategories.map((cat) => {
@@ -264,7 +312,7 @@ export default function SavePageListModal({ isOpen, onClose, pageKeys = [], onSa
             className="h-10 px-5 rounded-xl bg-[#2563EB] hover:bg-blue-700 text-xs font-bold text-white shadow-sm flex items-center gap-2 transition-colors disabled:opacity-50"
           >
             {savingApi ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-            <span>Xác nhận lưu</span>
+            <span>{isMove ? "Chuyển danh mục" : "Xác nhận lưu"}</span>
           </button>
         </div>
       </div>

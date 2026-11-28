@@ -267,13 +267,22 @@ export async function deletePageList(id) {
 }
 
 /**
- * Lưu page (theo page_key) vào danh mục có sẵn (categoryId) hoặc theo tên (chưa có thì tạo).
- * → { category: { id, name, page_count }, created, added, skipped_existing, not_found, message }
+ * Lưu hoặc chuyển page (theo page_key) vào danh mục có sẵn (categoryId) hoặc theo tên (chưa có thì tạo).
+ * Truyền sourceCategoryId để chuyển thật (gỡ khỏi danh mục nguồn sau khi lưu vào danh mục đích).
+ * → { category: { id, name, page_count }, source_category, created, added, moved, skipped_existing, not_found, message }
  */
-export async function savePagesToList({ categoryId, categoryName, pageKeys, deduplicate = true, color }) {
+export async function savePagesToList({
+  categoryId,
+  categoryName,
+  sourceCategoryId = null,
+  pageKeys,
+  deduplicate = true,
+  color,
+}) {
   const res = await api.post("/api/page-scanner/page-lists/save", {
     category_id: categoryId ?? null,
     category_name: categoryName || null,
+    source_category_id: sourceCategoryId ?? null,
     page_keys: pageKeys,
     deduplicate,
     color: categoryName && color ? color : undefined,

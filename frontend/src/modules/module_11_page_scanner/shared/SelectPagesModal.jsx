@@ -1077,13 +1077,19 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm,
   const handleMoved = (res) => {
     reloadSavedLists();
     loadUnlistedKeys();
-    const id = res?.category?.id;
-    if (id != null) {
+    const destId = res?.category?.id;
+    const srcId = res?.source_category?.id ?? activeListId;
+    if (destId != null || srcId != null) {
       setListKeysMap((prev) => {
         const next = { ...prev };
-        delete next[id];
+        if (destId != null) delete next[destId];
+        if (srcId != null) delete next[srcId];
         return next;
       });
+    }
+    if (res?.source_category?.id != null && moveKeys?.length) {
+      const movedSet = new Set(moveKeys);
+      setDraftKeys((prev) => prev.filter((k) => !movedSet.has(k)));
     }
   };
 
@@ -1682,11 +1688,13 @@ export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm,
         </div>
       )}
 
-      {/* Chuyển danh mục: dùng chung modal "Lưu vào danh sách page chung" */}
+      {/* Chuyển danh mục: dùng chung modal "Lưu vào danh sách page chung" (truyền sourceCategoryId khi đang ở danh mục A) */}
       <SavePageListModal
         isOpen={moveKeys !== null}
         onClose={() => setMoveKeys(null)}
         pageKeys={moveKeys || []}
+        sourceCategoryId={activeListId}
+        sourceCategoryName={activeListId != null ? savedLists.find((l) => l.id === activeListId)?.name || "" : ""}
         onSaved={handleMoved}
       />
     </div>

@@ -7,7 +7,7 @@ const Avatar = React.forwardRef(({ className, ...props }, ref) => (
   <div
     ref={ref}
     className={cn(
-      "relative flex h-8 w-8 shrink-0 overflow-hidden rounded-full border border-border bg-slate-100",
+      "relative isolate flex h-8 w-8 shrink-0 overflow-hidden rounded-full border border-border bg-slate-100",
       className
     )}
     {...props}
@@ -57,7 +57,7 @@ const AvatarImage = React.forwardRef(
           onError?.(e);
         }}
         className={cn(
-          "absolute inset-0 z-10 aspect-square h-full w-full object-cover transition-opacity duration-150",
+          "absolute inset-0 z-[1] aspect-square h-full w-full object-cover transition-opacity duration-150",
           isLoaded ? "opacity-100" : "opacity-0",
           className
         )}

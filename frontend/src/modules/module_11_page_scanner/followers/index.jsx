@@ -1246,7 +1246,7 @@ export default function PageScannerFollowers() {
 
               <div className="h-[clamp(280px,calc(100vh-360px),480px)] overflow-auto overscroll-contain">
                 <table className="w-full text-left text-xs">
-                  <thead className="sticky top-0 z-10 bg-[#F8FAFC] text-xs uppercase tracking-[0.3px] text-[#64748B] [&_th]:py-3 [&_th]:font-semibold">
+                  <thead className="sticky top-0 z-20 bg-[#F8FAFC] text-xs uppercase tracking-[0.3px] text-[#64748B] [&_th]:py-3 [&_th]:font-semibold">
                     <tr className="border-b border-[#E2E8F0]">
                       <th className="w-8 px-3 py-2.5">
                         <Checkbox
@@ -1299,14 +1299,8 @@ export default function PageScannerFollowers() {
                             <td className="px-2 py-3 font-mono text-[#64748B]">{padStt(stt)}</td>
                             <td className="px-3 py-3">
                               <div className="flex items-center gap-2.5">
-                                <Avatar className="relative size-7">
-                                  <AvatarImage
-                                    src={u.avatar_url}
-                                    className="absolute inset-0 z-10"
-                                    onError={(e) => {
-                                      e.currentTarget.style.display = "none";
-                                    }}
-                                  />
+                                <Avatar className="size-7">
+                                  <AvatarImage src={u.avatar_url} />
                                   <AvatarFallback
                                     className={AVATAR_COLORS[idx % AVATAR_COLORS.length]}
                                   >

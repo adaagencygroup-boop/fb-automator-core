@@ -667,5 +667,133 @@ class TestVietnameseSessionLogs(unittest.TestCase):
             self.assertNotIn("_", _format_post_stop_reason_vi(sr))
 
 
+class TestPageListMove(unittest.TestCase):
+    def _make_fake_db(self, *, categories, memberships, scanned_keys):
+        from contextlib import contextmanager
+
+        state = {
+            "categories": {cid: dict(info) for cid, info in categories.items()},
+            "memberships": {cid: set(keys) for cid, keys in memberships.items()},
+            "scanned": set(scanned_keys),
+            "deleted_queries": [],
+        }
+
+        class FakeCursor:
+            def __init__(self):
+                self._one = None
+                self._all = []
+
+            def execute(self, sql, params=()):
+                s = " ".join(sql.split())
+                if s.startswith("SELECT id, name FROM page_list_categories WHERE owner_key = %s AND id = %s"):
+                    _, cid = params
+                    cat = state["categories"].get(cid)
+                    self._one = dict(cat) if cat else None
+                elif "INSERT INTO page_list_category_pages" in s:
+                    _, keys, dest_id, _ = params
+                    found = [k for k in keys if k in state["scanned"]]
+                    dest_set = state["memberships"].setdefault(dest_id, set())
+                    added = 0
+                    for k in found:
+                        if k not in dest_set:
+                            dest_set.add(k)
+                            added += 1
+                    self._one = {"found": len(found), "added": added}
+                elif s.startswith("DELETE FROM page_list_category_pages"):
+                    _, src_id, keys = params
+                    state["deleted_queries"].append((src_id, list(keys)))
+                    src_set = state["memberships"].setdefault(src_id, set())
+                    removed = [k for k in keys if k in state["scanned"] and k in src_set]
+                    for k in removed:
+                        src_set.remove(k)
+                    self._all = [{"page_key": k} for k in removed]
+                elif s.startswith("UPDATE page_list_categories"):
+                    (cid,) = params
+                    cnt = len([k for k in state["memberships"].get(cid, set()) if k in state["scanned"]])
+                    self._one = {"page_count": cnt}
+                else:
+                    raise AssertionError(f"Unexpected SQL: {s}")
+
+            def fetchone(self):
+                return self._one
+
+            def fetchall(self):
+                return self._all
+
+        class FakeDB:
+            @contextmanager
+            def session(self_inner):
+                yield FakeCursor()
+
+        return FakeDB(), state
+
+    def test_move_removes_only_from_source_category_and_keeps_other_categories(self):
+        import importlib
+        router_mod = importlib.import_module("modules.module_11_page_scanner.api.router")
+
+        fake_db, state = self._make_fake_db(
+            categories={1: {"id": 1, "name": "A"}, 2: {"id": 2, "name": "B"}, 3: {"id": 3, "name": "C"}},
+            memberships={1: {"p1", "p2"}, 2: set(), 3: {"p1"}},
+            scanned_keys={"p1", "p2"},
+        )
+        with patch.object(router_mod, "db", fake_db), patch.object(router_mod, "_get_owner", return_value="u1"):
+            res = router_mod.save_pages_to_list(
+                router_mod.PageListSaveInput(category_id=2, source_category_id=1, page_keys=["p1"])
+            )
+
+        self.assertEqual(state["memberships"][1], {"p2"})
+        self.assertEqual(state["memberships"][2], {"p1"})
+        self.assertEqual(state["memberships"][3], {"p1"})  # giữ nguyên danh mục C
+        self.assertEqual(res["moved"], 1)
+        self.assertEqual(res["added"], 1)
+        self.assertEqual(res["source_category"]["page_count"], 1)
+        self.assertEqual(res["category"]["page_count"], 1)
+        self.assertIn("Đã chuyển 1 page từ «A» sang «B»", res["message"])
+
+    def test_move_when_page_already_in_destination_still_removes_from_source(self):
+        import importlib
+        router_mod = importlib.import_module("modules.module_11_page_scanner.api.router")
+
+        fake_db, state = self._make_fake_db(
+            categories={1: {"id": 1, "name": "A"}, 2: {"id": 2, "name": "B"}},
+            memberships={1: {"p1"}, 2: {"p1"}},
+            scanned_keys={"p1"},
+        )
+        with patch.object(router_mod, "db", fake_db), patch.object(router_mod, "_get_owner", return_value="u1"):
+            res = router_mod.save_pages_to_list(
+                router_mod.PageListSaveInput(category_id=2, source_category_id=1, page_keys=["p1"])
+            )
+
+        self.assertEqual(state["memberships"][1], set())
+        self.assertEqual(state["memberships"][2], {"p1"})
+        self.assertEqual(res["moved"], 1)
+        self.assertIn("Đã chuyển 1 page từ «A» sang «B»", res["message"])
+        self.assertIn("1 page đã có sẵn ở «B»", res["message"])
+
+    def test_move_to_same_category_raises_422_and_save_without_source_does_not_delete(self):
+        import importlib
+        from fastapi import HTTPException
+        router_mod = importlib.import_module("modules.module_11_page_scanner.api.router")
+
+        fake_db, state = self._make_fake_db(
+            categories={1: {"id": 1, "name": "A"}, 2: {"id": 2, "name": "B"}},
+            memberships={1: {"p1"}, 2: set()},
+            scanned_keys={"p1"},
+        )
+        with patch.object(router_mod, "db", fake_db), patch.object(router_mod, "_get_owner", return_value="u1"):
+            with self.assertRaises(HTTPException) as ctx:
+                router_mod.save_pages_to_list(
+                    router_mod.PageListSaveInput(category_id=1, source_category_id=1, page_keys=["p1"])
+                )
+            self.assertEqual(ctx.exception.status_code, 422)
+
+            res = router_mod.save_pages_to_list(router_mod.PageListSaveInput(category_id=2, page_keys=["p1"]))
+            self.assertEqual(state["deleted_queries"], [])
+            self.assertEqual(state["memberships"][1], {"p1"})
+            self.assertEqual(state["memberships"][2], {"p1"})
+            self.assertIsNone(res["source_category"])
+            self.assertEqual(res["moved"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

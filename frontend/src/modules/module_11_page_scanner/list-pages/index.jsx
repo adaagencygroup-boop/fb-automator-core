@@ -483,7 +483,8 @@ export default function PageScannerListPages() {
 
   const handleMoved = (res) => {
     setSelectedKeys([]);
-    if ((activeList && res?.category?.id === activeList.id) || activeId === NO_LIST_ID) reload(page);
+    refreshUnlisted();
+    if (activeList || activeId === NO_LIST_ID) reload(page);
   };
 
   const handleRefresh = async () => {
@@ -1036,6 +1037,8 @@ export default function PageScannerListPages() {
         isOpen={moveKeys !== null}
         onClose={() => setMoveKeys(null)}
         pageKeys={moveKeys || []}
+        sourceCategoryId={activeList?.id ?? null}
+        sourceCategoryName={activeList?.name || ""}
         onSaved={handleMoved}
       />
     </div>
