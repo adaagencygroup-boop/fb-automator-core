@@ -1693,7 +1693,7 @@ export default function PageScannerSearch() {
                 disabled={isInputLocked}
                 rows={5}
                 placeholder={
-                  "https://www.facebook.com/groups/109283749218\nhttps://facebook.com/groups/congdongmarketingvn"
+                  "https://www.facebook.com/tenfanpage\nhttps://www.facebook.com/profile.php?id=100083749218"
                 }
                 className="w-full rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] p-3 font-mono text-xs leading-relaxed text-[#0F172A] outline-none transition focus:border-[#1877F2] focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
               />
@@ -2097,7 +2097,7 @@ export default function PageScannerSearch() {
 
             {sourceMode !== "keyword" && (
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#0F172A]">
-                <span>Số nhóm mục tiêu bạn muốn quét</span>
+                <span>Số page mục tiêu bạn muốn quét</span>
                 <div className="flex items-center gap-2">
                   <NumCtrl
                     value={targetPagesCount}
