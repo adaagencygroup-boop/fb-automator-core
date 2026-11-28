@@ -166,6 +166,7 @@ export default function AccountSelectModal({
   }, [isOpen, isRunning, onClose]);
 
   const loadData = async () => {
+    const startedAt = Date.now();
     setLoading(true);
     try {
       const [accsRes, catsRes] = await Promise.all([
@@ -177,6 +178,12 @@ export default function AccountSelectModal({
     } catch (err) {
       console.error("Lỗi nạp danh sách tài khoản:", err);
     } finally {
+      // Giữ trạng thái xoay tối thiểu để người dùng nhận biết nút đã được bấm,
+      // kể cả khi dữ liệu được trả về rất nhanh.
+      const remainingMs = 500 - (Date.now() - startedAt);
+      if (remainingMs > 0) {
+        await new Promise((resolve) => window.setTimeout(resolve, remainingMs));
+      }
       setLoading(false);
     }
   };
