@@ -13,7 +13,6 @@ import {
   MessageCircle,
   Share2,
   Monitor,
-  FolderInput,
   Trash2,
   RotateCcw,
   ChevronLeft,
@@ -139,10 +138,9 @@ function FilterSelect({ label, value, onChange, options }) {
 }
 
 export default function PageScannerListPosts() {
-  // Khoá nút xuất file / sao chép / chuyển danh mục trong lúc xử lý (bấm liên tục chỉ chạy / báo 1 lần)
+  // Khoá nút xuất file / sao chép trong lúc xử lý (bấm liên tục chỉ chạy / báo 1 lần)
   const [isExporting, guardExport] = useActionLock();
   const [isCopying, guardCopy] = useActionLock();
-  const [isMovingCategory, guardMoveCategory] = useActionLock();
   const [pages, setPages] = useState([]);
   const [totalPostsAllPages, setTotalPostsAllPages] = useState(0);
   const [sideSearch, setSideSearch] = useState("");
@@ -512,22 +510,6 @@ export default function PageScannerListPosts() {
                 {selectedIds.length} bài viết đang được chọn
               </span>
               <div className="ml-auto flex flex-wrap items-center gap-1.5">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-7 gap-1 border-blue-200 bg-white text-[11px]"
-                  onClick={() =>
-                    guardMoveCategory(() =>
-                      toast.info(`Đã chuyển ${selectedIds.length} bài viết vào danh mục lưu.`, {
-                        key: "m11-list-posts-move",
-                      }),
-                    )
-                  }
-                  disabled={isMovingCategory}
-                >
-                  <FolderInput className="size-3.5" /> Chuyển danh mục
-                </Button>
                 <Button
                   type="button"
                   size="sm"

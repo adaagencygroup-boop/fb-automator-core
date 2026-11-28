@@ -9,7 +9,6 @@ import {
   Plus,
   ListChecks,
   SlidersHorizontal,
-  FolderInput,
   Eye,
 } from "lucide-react";
 import Link from "next/link";
@@ -183,7 +182,6 @@ export default function PageScannerFollowers() {
   const [isExportingAll, guardExportAll] = useActionLock();
   const [isExportingPage, guardExportPage] = useActionLock();
   const [isExportingSelected, guardExportSelected] = useActionLock();
-  const [isMovingCategory, guardMoveCategory] = useActionLock();
   const [isDeleting, guardDelete] = useActionLock();
   const restoreSeqRef = useRef(0); // tăng khi bắt đầu / quét mới / rời trang → bỏ kết quả khôi phục về muộn
 
@@ -1177,19 +1175,6 @@ export default function PageScannerFollowers() {
                   Đã chọn: {selectedRowIds.length} UID
                 </div>
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      guardMoveCategory(() =>
-                        toast.info("Đã mở hộp thoại chuyển danh mục", { key: "m11-followers-move" }),
-                      )
-                    }
-                    disabled={isMovingCategory}
-                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-[#E2E8F0] bg-white px-3 py-1.5 text-xs font-semibold text-[#334155] hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <FolderInput className="size-3.5" />
-                    Chuyển danh mục
-                  </button>
                   <button
                     type="button"
                     onClick={() =>

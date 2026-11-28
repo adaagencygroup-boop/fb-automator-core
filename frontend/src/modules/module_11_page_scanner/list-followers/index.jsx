@@ -42,10 +42,9 @@ import {
 const ALL_ID = "__all__";
 
 export default function PageScannerListFollowers() {
-  // Khoá nút xuất file / sao chép / chuyển danh mục trong lúc xử lý (bấm liên tục chỉ chạy / báo 1 lần)
+  // Khoá nút xuất file / sao chép trong lúc xử lý (bấm liên tục chỉ chạy / báo 1 lần)
   const [isExporting, guardExport] = useActionLock();
   const [isCopyingUid, guardCopyUid] = useActionLock();
-  const [isMovingCategory, guardMoveCategory] = useActionLock();
   const [pages, setPages] = useState([]);
   const [sideSearch, setSideSearch] = useState("");
   const [activePageKey, setActivePageKey] = useState(ALL_ID);
@@ -434,15 +433,6 @@ export default function PageScannerListFollowers() {
               count={selectedIds.length}
               onExport={() => guardExport(handleExport)}
               exportDisabled={isExporting}
-              onMoveCategory={() =>
-                guardMoveCategory(() =>
-                  toast.info(
-                    `Đã chuyển ${selectedIds.length} followers sang danh mục mới.`,
-                    { key: "m11-list-followers-move" },
-                  ),
-                )
-              }
-              moveDisabled={isMovingCategory}
               onDelete={handleDeleteSelected}
             />
           </div>
