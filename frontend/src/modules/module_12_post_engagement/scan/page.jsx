@@ -769,7 +769,7 @@ export default function PostEngagementScanPage() {
           </h2>
           <div className="mt-5 flex flex-wrap items-start justify-between gap-3">
             <span className="pt-1.5 text-[13px] font-medium text-[#334155]">Khoảng cách giữa các lần quét:</span>
-            <DelayRangeInput min={Number(delayMin) || 3} max={Number(delayMax) || 3} onChange={(lo, hi) => {
+            <DelayRangeInput disabled={locked} min={Number(delayMin) || 3} max={Number(delayMax) || 3} onChange={(lo, hi) => {
               setDelayMin(lo);
               setDelayMax(hi);
             }} />
