@@ -13,6 +13,7 @@ import re
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from datetime import UTC, datetime, timedelta, timezone
+from threading import Lock
 from typing import Any
 
 from fastapi import (
@@ -1628,6 +1629,46 @@ def _close_scoped_seeding_drivers():
         logger.warning(f"[Seeding] Lỗi đóng scoped drivers: {e}")
 
 
+class _BatchBrowserPool:
+    """Giữ Chrome của tài khoản giữa các bài trong cùng lô, trong giới hạn số luồng."""
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self._lock = Lock()
+        self._idle = {}
+        self._active = 0
+
+    def cached_uids(self, owner: str | None) -> set[str]:
+        with self._lock:
+            return {uid for session_owner, uid, _ in self._idle if session_owner == owner}
+
+    def take(self, key):
+        with self._lock:
+            driver = self._idle.pop(key, None)
+            if driver is None and self._idle and len(self._idle) + self._active >= self.limit:
+                idle_key = next(iter(self._idle))
+                owner, uid, _ = idle_key
+                _safe_close_seeding_driver(self._idle.pop(idle_key), uid=uid, owner=owner)
+            self._active += 1
+            return driver
+
+    def release(self, key, driver, *, keep: bool):
+        owner, uid, _ = key
+        with self._lock:
+            if driver is not None:
+                if keep:
+                    self._idle[key] = driver
+                else:
+                    _safe_close_seeding_driver(driver, uid=uid, owner=owner)
+            self._active -= 1
+
+    def close(self):
+        with self._lock:
+            for (owner, uid, _), driver in self._idle.items():
+                _safe_close_seeding_driver(driver, uid=uid, owner=owner)
+            self._idle.clear()
+
+
 # Thứ tự thực thi luôn đúng: 1. Like (REACT) -> 2. Comment (COMMENT) -> 3. Share (SHARE)
 _ACTION_PRIORITY = {
     "REACT": 1,
@@ -1796,12 +1837,15 @@ def _process_account_tasks(
     delay_min: int,
     delay_max: int,
     owner: str | None = None,
+    browser_pool: _BatchBrowserPool | None = None,
 ):
     """Xử lý toàn bộ tác vụ của một tài khoản trên trình duyệt Chrome riêng biệt."""
     # Thời gian nghỉ lưu từ trước có thể bị ngược / âm: random.randint(20, 10) sẽ lỗi và làm sập luồng của nick
     delay_min, delay_max = sorted((max(0, delay_min or 0), max(0, delay_max or 0)))
     token = owner_context.set(owner) if owner else None
     driver = None
+    session_key = None
+    keep_driver = False
     account_counted = False   # đã cộng lượt thành công / thất bại của nick này vào chiến dịch chưa
     try:
         # Tạm dừng: nick đang xếp hàng chưa mở Chrome cho tới khi Tiếp tục
@@ -1830,11 +1874,25 @@ def _process_account_tasks(
         task_info_by_id = plan["task_info_by_id"]
         targets_by_id = plan["targets_by_id"]
 
-        broadcast("info", f"[{uid}] 🚀 Khởi động trình duyệt Chrome Profile...")
-        driver = create_driver(uid=uid, headless=False, proxy=proxy, scope="seeding")
+        bot = None
+        if browser_pool is not None:
+            session_key = (owner, uid, proxy)
+            driver = browser_pool.take(session_key)
+            if driver is not None:
+                candidate = FacebookSeedingBot(driver)
+                if not candidate.is_browser_alive():
+                    _safe_close_seeding_driver(driver, uid=uid, owner=owner)
+                    driver = None
+                elif candidate.is_facebook_session_alive():
+                    bot = candidate
+                    broadcast("info", f"[{uid}] ✓ Tiếp tục dùng phiên Facebook của bài trước.", owner=owner)
 
-        # 1. Kiểm tra phiên đăng nhập Facebook
-        bot = _logged_in_bot(driver, uid, account_record)
+        if driver is None:
+            broadcast("info", f"[{uid}] 🚀 Khởi động trình duyệt Chrome Profile...")
+            driver = create_driver(uid=uid, headless=False, proxy=proxy, scope="seeding")
+
+        if bot is None:
+            bot = _logged_in_bot(driver, uid, account_record)
         if bot is None:
             failed_any = False
             with _scoped_db() as s:
@@ -1908,13 +1966,14 @@ def _process_account_tasks(
                 )
                 _sleep_interruptible(campaign_id, delay_s)
             else:
-                # Đã hoàn thành toàn bộ tác vụ của nick, nghỉ 1.5s rồi đóng trình duyệt an toàn
+                # Đợi thao tác cuối ổn định trước khi bàn giao hoặc đóng Chrome.
                 time.sleep(1.5)
 
         # Cập nhật kết quả số tài khoản thành công / thất bại cho chiến dịch (mỗi nick = 1 lượt)
         with _scoped_db() as s:
             _count_account_result(s, campaign_id, success=not account_has_failure)
             account_counted = True
+        keep_driver = not _active_seeding_campaigns.get(campaign_id, {}).get("stop_requested")
 
     except Exception as e:
         logger.error(f"Error in _process_account_tasks for {uid}: {e}")
@@ -1949,7 +2008,9 @@ def _process_account_tasks(
         except Exception as cleanup_error:
             logger.error(f"Không ghi được kết quả lỗi luồng của {uid}: {cleanup_error}")
     finally:
-        if driver:
+        if browser_pool is not None and session_key is not None:
+            browser_pool.release(session_key, driver, keep=keep_driver)
+        elif driver:
             try:
                 _safe_close_seeding_driver(driver, uid=uid, owner=owner)
             except Exception:
@@ -2004,7 +2065,7 @@ def _finalize_campaign(campaign_id: int, stop_requested: bool) -> None:
         db_end.close()
 
 
-def _run_single_campaign(campaign_id: int):
+def _run_single_campaign(campaign_id: int, browser_pool: _BatchBrowserPool | None = None):
     """Hàm chạy nền điều phối đa luồng (ThreadPoolExecutor) cho một chiến dịch seeding."""
     db = SessionLocal()
     tasks_by_uid: dict[str, list[int]] = {}
@@ -2022,6 +2083,8 @@ def _run_single_campaign(campaign_id: int):
         camp_owner = (
             str(campaign.created_by) if campaign.created_by is not None else None
         )
+        if campaign.campaign_type != "POST":
+            browser_pool = None
         if (
             _active_seeding_campaigns.get(campaign_id, {}).get("stop_requested")
             or campaign.status == "STOPPED"
@@ -2121,6 +2184,11 @@ def _run_single_campaign(campaign_id: int):
 
     # Số luồng Chrome chạy đồng thời (người dùng chọn khi tạo lô, mặc định 2)
     max_workers = _campaign_threads.get(campaign_id, DEFAULT_CHROME_THREADS)
+    account_tasks = list(tasks_by_uid.items())
+    if browser_pool is not None:
+        max_workers = min(max_workers, browser_pool.limit)
+        cached = browser_pool.cached_uids(camp_owner)
+        account_tasks.sort(key=lambda entry: entry[0] not in cached)
     broadcast(
         "info",
         f"⚙️ Điều phối tự động với {max_workers} luồng Chrome song song trên {len(tasks_by_uid)} tài khoản.",
@@ -2131,7 +2199,7 @@ def _run_single_campaign(campaign_id: int):
         # Khởi chạy đa luồng thật mà không giữ connection của DB ở luồng điều phối
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
-            for uid, t_ids in tasks_by_uid.items():
+            for uid, t_ids in account_tasks:
                 if _active_seeding_campaigns.get(campaign_id, {}).get("stop_requested"):
                     break
                 f = executor.submit(
@@ -2142,6 +2210,7 @@ def _run_single_campaign(campaign_id: int):
                     delay_min=delay_min,
                     delay_max=delay_max,
                     owner=camp_owner,
+                    browser_pool=browser_pool,
                 )
                 futures.append(f)
 
@@ -2176,7 +2245,7 @@ def _campaign_status(campaign_id: int) -> str | None:
 
 def _rest_before_next_post(chain: list[int], next_cid: int) -> bool:
     """Nghỉ delay_seconds_min..max giây (cấu hình của chiến dịch) trước khi sang bài viết tiếp theo trong lô
-    (mỗi bài là 1 chiến dịch, các nick mở Chrome lại cho bài sau).
+    Mỗi bài vẫn là một chiến dịch riêng.
     Kiểm tra yêu cầu dừng trong lúc nghỉ. Trả về False nếu lô bị dừng."""
     db = SessionLocal()
     try:
@@ -2558,6 +2627,7 @@ def _execute_campaign_runner(initial_campaign_id: int):
     batch = _batch_id(initial_campaign_id)
     # Đánh dấu lô đang chạy: khoá không cho bắt đầu lô seeding khác cùng lúc (xem _find_running_campaign)
     _running_batches[initial_campaign_id] = chain
+    browser_pool = None
     try:
         # Lô hẹn giờ: chờ tới giờ hẹn (bị Dừng trong lúc chờ thì không chạy bài nào)
         chain_to_run = chain
@@ -2576,6 +2646,8 @@ def _execute_campaign_runner(initial_campaign_id: int):
         if chain_to_run and _batch_rotation.get(initial_campaign_id):
             _run_rotation_batch(chain_to_run, _campaign_threads.get(initial_campaign_id, DEFAULT_CHROME_THREADS))
             chain_to_run = []
+        if len(chain_to_run) > 1:
+            browser_pool = _BatchBrowserPool(_campaign_threads.get(initial_campaign_id, DEFAULT_CHROME_THREADS))
         for idx, cid in enumerate(chain_to_run):
             if idx > 0 and not _rest_before_next_post(chain, cid):
                 break
@@ -2595,7 +2667,7 @@ def _execute_campaign_runner(initial_campaign_id: int):
             # phải dựa vào trạng thái STOPPED mà API dừng đã ghi vào DB.
             if idx > 0 and _campaign_status(cid) == "STOPPED":
                 break
-            _run_single_campaign(cid)
+            _run_single_campaign(cid, browser_pool=browser_pool)
 
         # Nếu chuỗi bị dừng dở chừng, đảm bảo mọi chiến dịch còn lại trong chuỗi được hoàn tất trạng thái FAILED/STOPPED
         stop_req = any(
@@ -2616,6 +2688,8 @@ def _execute_campaign_runner(initial_campaign_id: int):
                 db_cleanup.close()
 
     finally:
+        if browser_pool is not None:
+            browser_pool.close()
         _running_batches.pop(initial_campaign_id, None)
         _paused_batches.discard(batch)
         _batch_start_at.pop(batch, None)

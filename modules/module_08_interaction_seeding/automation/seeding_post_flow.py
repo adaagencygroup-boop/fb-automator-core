@@ -10,7 +10,6 @@ import time
 import random
 import json
 import logging
-import re
 from typing import Optional, Callable
 
 from selenium.webdriver.common.by import By
@@ -21,6 +20,35 @@ from modules.module_08_interaction_seeding.automation.base import BaseFacebookBo
 from modules.module_08_interaction_seeding.automation.locators import PostLocators
 
 logger = logging.getLogger(__name__)
+
+_ACTION_WARNINGS_JS = r"""
+    const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+    const error = /something went wrong|try again later|(?:temporarily|action) blocked|we limit how often|(?:could not|can(?:not|'t)|unable to|failed to) (?:post|share|comment|send)|(?:comment|post|reel|share).*?(?:wasn't|was not|could not be) (?:posted|shared|sent)|confirm your identity|đã xảy ra lỗi|có lỗi xảy ra|thử lại sau|tạm thời bị chặn|(?:không thể|không đăng được) (?:đăng|gửi|chia sẻ|bình luận)|xác nhận danh tính|xác minh danh tính/i;
+    const selector = '[role="alertdialog"], [role="dialog"], dialog[open], ' +
+        '[role="alert"], [role="status"], [aria-live="assertive"], [aria-live="polite"]';
+    const warnings = new Set();
+    const identityMessage = normalize(document.body?.innerText)
+        .match(/open facebook on your mobile device to confirm your identity/i);
+    if (identityMessage) warnings.add(identityMessage[0]);
+    for (const el of document.querySelectorAll(selector)) {
+        const rect = el.getBoundingClientRect();
+        if (!rect.width || !rect.height || getComputedStyle(el).visibility === 'hidden') continue;
+        const body = normalize(el.innerText || el.textContent);
+        const isDialog = el.matches('[role="dialog"], dialog[open]');
+        const title = normalize(el.getAttribute('aria-label') ||
+            document.getElementById(el.getAttribute('aria-labelledby') || '')?.innerText ||
+            el.querySelector('h1, h2, h3, [role="heading"]')?.innerText);
+        // Nội dung bài viết có thể chứa từ khóa lỗi; với dialog thường chỉ dùng tiêu đề hoặc phần đầu.
+        const bodyError = body.match(error);
+        const warningTitle = error.test(title) || /^(?:error|warning|lỗi|cảnh báo)$/i.test(title);
+        if (el.matches('[role="alertdialog"]') ||
+            (isDialog ? warningTitle || (bodyError && bodyError.index === 0) : bodyError)) {
+            const warning = body || title;
+            if (warning) warnings.add(warning);
+        }
+    }
+    return Array.from(warnings);
+"""
 
 
 class PostSeedingFlow:
@@ -473,11 +501,6 @@ class PostSeedingFlow:
             if not comment_box:
                 return False, "Không tìm thấy khung nhập bình luận trên bài viết này"
 
-            baseline_comment_count = self.driver.execute_script("""
-                const text = document.body?.innerText || '';
-                return text.split(arguments[0]).length - 1;
-            """, content)
-
             try:
                 self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", comment_box)
             except Exception:
@@ -575,6 +598,7 @@ class PostSeedingFlow:
                 except Exception:
                     pass
 
+            previous_warnings = set(self.driver.execute_script(_ACTION_WARNINGS_JS))
             submitted = False
             if submit_btn:
                 try:
@@ -595,34 +619,9 @@ class PostSeedingFlow:
             if not submitted:
                 return False, "Could not find or activate the comment submit button"
 
-            comment_posted = False
-            for _ in range(12):
-                try:
-                    state = self.driver.execute_script("""
-                        const text = document.body?.innerText || '';
-                        const editorHasText = Array.from(document.querySelectorAll(
-                            'div[contenteditable="true"][role="textbox"]'
-                        )).some((editor) => {
-                            const r = editor.getBoundingClientRect();
-                            return r.width > 0 && r.height > 0 &&
-                                (editor.innerText || editor.textContent || '').includes(arguments[0]);
-                        });
-                        return {
-                            occurrences: text.split(arguments[0]).length - 1,
-                            editorHasText,
-                        };
-                    """, content)
-                    if state and state.get("occurrences", 0) > baseline_comment_count and not state.get("editorHasText"):
-                        comment_posted = True
-                        break
-                except Exception:
-                    pass
-                time.sleep(0.75)
-
-            if not comment_posted:
-                return False, "Facebook did not confirm that the comment was posted"
-
-            self.bot.random_sleep(0.8, 1.4)
+            warning = self._wait_for_action_warning(previous_warnings)
+            if warning:
+                return False, f"Facebook báo lỗi khi bình luận: {warning}"
             if callback:
                 callback(f"✓ Đã gửi bình luận: \"{content[:30]}...\"")
             return True, "Thành công"
@@ -640,15 +639,16 @@ class PostSeedingFlow:
             ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
             time.sleep(0.8)
 
-    def _identity_confirmation_required(self) -> bool:
-        """Detect Facebook's identity confirmation gate after a share attempt."""
-        try:
-            return bool(self.driver.execute_script("""
-                const text = (document.body?.innerText || '').replace(/\\s+/g, ' ').toLowerCase();
-                return text.includes('open facebook on your mobile device to confirm your identity');
-            """))
-        except Exception:
-            return False
+    def _wait_for_action_warning(self, previous_warnings: set[str]) -> Optional[str]:
+        """Đợi cảnh báo mới sau khi đã bấm gửi. Thiếu thông báo xác nhận không phải là lỗi."""
+        deadline = time.monotonic() + 5
+        while True:
+            for warning in self.driver.execute_script(_ACTION_WARNINGS_JS):
+                if warning not in previous_warnings:
+                    return warning[:200]
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.25)
 
     def _click_until(self, find_js: str, ok_js: str,
                      methods=("chuột thật", "JS click", "click mạnh")) -> tuple[bool, str]:
@@ -682,7 +682,6 @@ class PostSeedingFlow:
     ) -> tuple[bool, str]:
         """Thực hiện chia sẻ bài viết lên Bảng tin cá nhân ở chế độ Công khai (Public)."""
         try:
-            is_reel_target = bool(re.search(r"/(?:reels?|videos?)/\d+(?:/|$)", target_url or "", re.IGNORECASE))
             if callback:
                 callback("🔄 Chuẩn bị chia sẻ bài viết...")
 
@@ -698,15 +697,6 @@ class PostSeedingFlow:
                 callback("🔍 Đang tìm nút Chia sẻ (Share) của bài viết...")
 
             share_btn = self.driver.execute_script(PostLocators.JS_FIND_SHARE_BUTTON)
-            share_count_before = self.driver.execute_script(
-                """
-                    const button = (() => {""" + PostLocators.JS_FIND_SHARE_BUTTON + """})();
-                    const label = (button?.getAttribute('aria-label') || '').trim();
-                    const match = label.match(/^share,\\s*(\\d+)\\s+shares?$/i) ||
-                                  label.match(/^chia sẻ,\\s*(\\d+)\\s+lượt chia sẻ$/i);
-                    return match ? Number(match[1]) : null;
-                """
-            )
             if not share_btn:
                 for xp in PostLocators.SHARE_BUTTON_XPATHS:
                     btn = self.bot.safe_find_element(By.XPATH, xp, timeout=2)
@@ -921,71 +911,18 @@ class PostSeedingFlow:
             if not share_now_elem:
                 return False, "Không tìm thấy nút Share now để hoàn tất chia sẻ"
 
+            previous_warnings = set(self.driver.execute_script(_ACTION_WARNINGS_JS))
             try:
                 ActionChains(self.driver).move_to_element(share_now_elem).click().perform()
             except Exception:
                 share_now_elem.click()
 
-            # 5. Xác minh tiến trình hoàn tất
+            # 5. Chờ Facebook báo nếu lượt chia sẻ bị chặn hoặc không được đăng.
             if callback:
-                callback("⏳ Đang đợi tiến trình chia sẻ hoàn tất và đóng hộp thoại...")
-
-            share_completed = False
-            for w in range(10):
-                time.sleep(1.0)
-                if self._identity_confirmation_required():
-                    return False, "Facebook yêu cầu mở ứng dụng trên điện thoại để xác nhận danh tính; lượt chia sẻ thất bại"
-                is_open = self.driver.execute_script("""
-                    const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
-                    const shareDialog = dialogs.find(d => {
-                        const text = (d.textContent || '').toLowerCase();
-                        return text.includes('share now') || text.includes('chia sẻ ngay') || text.includes('say something');
-                    });
-                    if (!shareDialog) return false;
-                    const r = shareDialog.getBoundingClientRect();
-                    return r.width > 50 && r.height > 50;
-                """)
-
-                if not is_open:
-                    share_completed = True
-                    break
-
-            if not share_completed:
-                return False, "Không thể hoàn tất chia sẻ (hộp thoại Share now không đóng sau khi bấm)"
-
-            self.bot.random_sleep(2.5, 4.0)
-            if self._identity_confirmation_required():
-                return False, "Facebook yêu cầu mở ứng dụng trên điện thoại để xác nhận danh tính; lượt chia sẻ thất bại"
-            share_confirmation_js = """
-                const button = (() => {""" + PostLocators.JS_FIND_SHARE_BUTTON + """})();
-                const label = (button?.getAttribute('aria-label') || '').trim();
-                const match = label.match(/^share,\\s*(\\d+)\\s+shares?$/i) ||
-                              label.match(/^chia sẻ,\\s*(\\d+)\\s+lượt chia sẻ$/i);
-                const notices = Array.from(document.querySelectorAll('[role="alert"], [aria-live]'))
-                    .map((el) => (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase());
-                return {
-                    shareCount: match ? Number(match[1]) : null,
-                    successNotice: notices.some((text) => /shared successfully|your post (?:was|has been) shared|post has been shared|đã chia sẻ|chia sẻ thành công|bài viết.*được chia sẻ/.test(text)),
-                };
-            """
-            share_confirmed = False
-            for _ in range(8):
-                share_state = self.driver.execute_script(share_confirmation_js)
-                count_increased = (
-                    share_count_before is not None
-                    and share_state
-                    and share_state.get("shareCount") is not None
-                    and share_state["shareCount"] > share_count_before
-                )
-                if count_increased or (share_state and share_state.get("successNotice")):
-                    share_confirmed = True
-                    break
-                time.sleep(0.75)
-
-            if not share_confirmed:
-                if is_reel_target:
-                    return False, "Facebook đã đóng hộp thoại chia sẻ nhưng không xác nhận Reel đã được chia sẻ"
-                return False, "Facebook đã đóng hộp thoại chia sẻ nhưng không xác nhận bài viết đã được chia sẻ"
+                callback("⏳ Đang chờ cảnh báo từ Facebook sau khi chia sẻ...")
+            warning = self._wait_for_action_warning(previous_warnings)
+            if warning:
+                return False, f"Facebook báo lỗi khi chia sẻ: {warning}"
 
             if callback:
                 callback("✓ Đã chia sẻ bài viết ở chế độ Công khai (Public) thành công!")
