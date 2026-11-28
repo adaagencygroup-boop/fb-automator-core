@@ -415,7 +415,16 @@ export default function PageScannerPosts() {
         setRunPhase(isDone ? "done" : top.status === "PAUSED" ? "paused" : "running");
         syncSessionLogs(top);
         saveScanState("posts", { sessionIds: [top.id] });
-        pushLog(`Khôi phục phiên POST_SCAN #${top.id} · ${top.status}`, "warn");
+        const statusVi =
+          {
+            RUNNING: "đang chạy",
+            PAUSED: "đang tạm dừng",
+            COMPLETED: "hoàn tất",
+            PARTIAL: "một phần",
+            STOPPED: "đã dừng",
+            FAILED: "lỗi",
+          }[String(top.status || "").toUpperCase()] || "đang chạy";
+        pushLog(`Đã khôi phục phiên quét bài viết #${top.id} (${statusVi}).`, "info");
         refreshPosts(top.id);
         if (!isDone) startPoll(top.id);
       } catch {
@@ -484,7 +493,7 @@ export default function PageScannerPosts() {
         setPostTablePage(1);
         setSelectedPostIds(new Set());
         pushLog(
-          `Tạo phiên POST_SCAN · ${pageKeys.length} Page · max/page=${maxPostsPerPage} · delay ${delayMin}-${delayMax}s`,
+          `Đang khởi tạo phiên quét bài viết cho ${pageKeys.length} Page (tối đa ${maxPostsPerPage.toLocaleString("vi-VN")} bài/Page · nghỉ ${delayMin}–${delayMax} giây)…`,
           "info",
         );
 
@@ -509,16 +518,17 @@ export default function PageScannerPosts() {
 
         saveScanState("posts", { sessionIds: [res.session_id] });
         setSessionId(res.session_id);
-        pushLog(`Session #${res.session_id} · ${res.status || "RUNNING"} · ${res.message || "OK"}`, "success");
+        pushLog(`Đã bắt đầu phiên quét #${res.session_id}.`, "success");
         if (accountUids.length > 1) {
           pushLog(
-            `Xoay vòng ${accountUids.length} tài khoản · đổi sau ${postsPerAccountSwitch} bài/nick` +
-              (autoRotateOnCheckpoint ? " · tự đảo khi checkpoint" : ""),
+            `Xoay vòng ${accountUids.length} tài khoản · đổi sau ${postsPerAccountSwitch} bài/tài khoản` +
+              (autoRotateOnCheckpoint ? " · tự đổi khi gặp checkpoint" : "") +
+              ".",
             "info",
           );
         }
         if (skipPinnedPosts) pushLog("Bỏ qua bài viết ghim của Quản trị viên.", "info");
-        toast.success(`Đã khởi động POST_SCAN #${res.session_id}`, { key: "m11-posts-start" });
+        toast.success(`Đã bắt đầu quét bài viết (phiên #${res.session_id}).`, { key: "m11-posts-start" });
         startPoll(res.session_id);
       } catch (err) {
         setRunPhase("idle");

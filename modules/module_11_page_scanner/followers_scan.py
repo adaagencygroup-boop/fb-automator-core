@@ -50,6 +50,32 @@ REASON_LIST_EXHAUSTED = "list_exhausted"
 REASON_PROFILE_PHP = "profile_php_no_followers_url"
 REASON_OK = "ok"
 
+
+def _format_follow_reason_vi(reason: Optional[str]) -> str:
+    raw = str(reason or "").strip().lower()
+    return {
+        REASON_LIST_PRIVATE: "trang ẩn danh sách người theo dõi",
+        REASON_DIALOG_NOT_FOUND: "không tìm thấy danh sách người theo dõi",
+        REASON_PROFILE_PHP: "trang không hỗ trợ mở danh sách người theo dõi",
+        REASON_CHECKPOINT: "tài khoản gặp yêu cầu xác minh (checkpoint) hoặc bị đăng xuất",
+        "extract_empty": "không đọc được thêm người theo dõi mới",
+        "scroll_stuck": "danh sách không thể cuộn thêm",
+        "all_duplicates": "các người theo dõi hiển thị đều đã có trong kho",
+        REASON_LIST_EXHAUSTED: "đã quét hết danh sách hiển thị",
+    }.get(raw, "không đọc được danh sách người theo dõi")
+
+
+def _format_follow_stop_reason_vi(stop_reason: Optional[str]) -> str:
+    return {
+        "TARGET_REACHED": "đạt đủ mục tiêu",
+        "COMPLETED": "hoàn tất",
+        "NO_NEW_RESULTS": "đã quét hết danh sách hiện có",
+        "USER_STOPPED": "đã dừng theo yêu cầu",
+        "CHECKPOINT": "dừng do mất đăng nhập / checkpoint",
+        "TIMEOUT": "đạt giới hạn quét trong ngày",
+        "ERROR": "gặp lỗi hệ thống",
+    }.get(str(stop_reason or "").upper(), "hoàn tất")
+
 # Ưu tiên click TAB Followers (không cần số). Không click nút Follow/Theo dõi header.
 _OPEN_FOLLOWERS_TAB_JS = r"""
 const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
@@ -1085,11 +1111,12 @@ def run_follower_scan_flow(
         append_session_log(
             session_id,
             (
-                f"FOLLOW · pages={len(page_keys)} · target={target_followers} · max/page={max_per_page}"
-                f" · acc={rotation.uid} ({len(rotation.accounts)} acc)"
-                f"{f' · đổi acc sau {rotate_every} page' if rotate_every and rotation.can_rotate else ''}"
+                f"Bắt đầu quét người theo dõi của {len(page_keys)} Page"
+                f" (tối đa {max_per_page:,} người/Page) · tài khoản {rotation.uid}"
+                f"{f' ({len(rotation.accounts)} tài khoản)' if len(rotation.accounts) > 1 else ''}"
+                f"{f' · đổi tài khoản sau {rotate_every} Page' if rotate_every and rotation.can_rotate else ''}"
             ),
-            "warn",
+            "info",
         )
 
         pages_quota_left = _quota_left()
@@ -1103,12 +1130,12 @@ def run_follower_scan_flow(
                 break
 
             if pages_quota_left <= 0:
-                if rotation.rotate("hết quota FOLLOW hôm nay"):
+                if rotation.rotate("đạt giới hạn quét hôm nay"):
                     pages_quota_left = _quota_left()
                 if pages_quota_left <= 0:
                     append_session_log(
                         session_id,
-                        f"Quota FOLLOW đạt {max_pages_per_acc} Page/acc hôm nay — dừng",
+                        f"Tài khoản đã đạt giới hạn {max_pages_per_acc} Page hôm nay — dừng phiên.",
                         "warn",
                     )
                     stop_reason = "TIMEOUT"
@@ -1120,9 +1147,10 @@ def run_follower_scan_flow(
                 break
 
             page_url, page_name = resolve_page_url(owner_key, page_key)
+            page_label = page_name or page_key
             append_session_log(
                 session_id,
-                f"[{idx + 1}/{len(page_keys)}] Mở Page {page_name or page_key} · acc {rotation.uid}",
+                f"[{idx + 1}/{len(page_keys)}] Đang mở Page «{page_label}» (tài khoản {rotation.uid}).",
                 "info",
             )
 
@@ -1131,8 +1159,12 @@ def run_follower_scan_flow(
                 opened = open_followers_list(driver, page_url, page_key)
                 if opened.get("reason") != REASON_CHECKPOINT or not rotate_on_checkpoint:
                     break
-                append_session_log(session_id, f"{page_key}: checkpoint/login — thử đổi tài khoản", "warn")
-                if not rotation.rotate("checkpoint/login", mark_dead=True):
+                append_session_log(
+                    session_id,
+                    f"«{page_label}»: tài khoản gặp xác minh/đăng xuất — đang thử đổi tài khoản.",
+                    "warn",
+                )
+                if not rotation.rotate("gặp xác minh/đăng xuất", mark_dead=True):
                     break
                 driver = rotation.driver
                 pages_quota_left = _quota_left()
@@ -1148,20 +1180,21 @@ def run_follower_scan_flow(
                     )
                     for a in attempts
                 ) or "—"
+                logger.debug(
+                    f"[FOLLOW] #{session_id} Soft-fail {page_key}: {reason}"
+                    f" · method={opened.get('method') or '—'}"
+                    f" · probe_raw={opened.get('probe_raw', '—')}"
+                    f" · meta={opened.get('probe_meta') or {}}"
+                    f" · attempts[{attempt_summary}]"
+                )
                 append_session_log(
                     session_id,
-                    (
-                        f"Soft-fail {page_key}: {reason}"
-                        f" · method={opened.get('method') or '—'}"
-                        f" · probe_raw={opened.get('probe_raw', '—')}"
-                        f" · meta={opened.get('probe_meta') or {}}"
-                        f" · attempts[{attempt_summary}]"
-                    ),
+                    f"Không mở được danh sách người theo dõi của «{page_label}»: {_format_follow_reason_vi(reason)}.",
                     "warn" if reason != REASON_CHECKPOINT else "error",
                 )
                 if reason == REASON_CHECKPOINT:
                     stop_reason = "CHECKPOINT"
-                    error_message = "Checkpoint/login khi mở followers"
+                    error_message = "Tài khoản gặp yêu cầu xác minh hoặc bị đăng xuất khi mở danh sách người theo dõi"
                     break
                 bump_account_usage(rotation.uid, "FOLLOW", 1)
                 pages_quota_left -= 1
@@ -1176,16 +1209,20 @@ def run_follower_scan_flow(
             known = existing_follower_keys(owner_key, page_key)
             known_n = len(known)
             view = opened.get("view") or {}
+            logger.debug(
+                f"[FOLLOW] #{session_id} {page_key}: opened method={opened.get('method')}"
+                f" · how={opened.get('click_how') or '—'}"
+                f" · probe_raw={opened.get('probe_raw', 0)}"
+                f" · root={((opened.get('probe_meta') or {}).get('root_kind')) or '—'}"
+                f" · view_ready={view.get('ready')} tab={view.get('selected_followers_tab') or '—'}"
+                f" · url_fl={view.get('on_followers_url')}"
+                f" · skip_existing={skip_existing} · known_in_db={known_n}"
+            )
             append_session_log(
                 session_id,
                 (
-                    f"{page_key}: opened method={opened.get('method')}"
-                    f" · how={opened.get('click_how') or '—'}"
-                    f" · probe_raw={opened.get('probe_raw', 0)}"
-                    f" · root={((opened.get('probe_meta') or {}).get('root_kind')) or '—'}"
-                    f" · view_ready={view.get('ready')} tab={view.get('selected_followers_tab') or '—'}"
-                    f" · url_fl={view.get('on_followers_url')}"
-                    f" · skip_existing={skip_existing} · known_in_db={known_n}"
+                    f"Đã mở danh sách người theo dõi của «{page_label}»"
+                    f"{f' (đã có {known_n:,} người trong kho)' if known_n else ''}."
                 ),
                 "info",
             )
@@ -1279,13 +1316,13 @@ def run_follower_scan_flow(
                     dup_streak = 0
                     scroll_stuck_streak = 0
                     update_session_progress(session_id, total_seen, total_unique, batches)
+                    logger.debug(
+                        f"[FOLLOW] #{session_id} {page_key}: +{len(new_items)} (ins={ins}/upd={upd})"
+                        f" · raw={raw_count} dup={dup_this} · page={page_got} · tổng={total_unique}"
+                    )
                     append_session_log(
                         session_id,
-                        (
-                            f"{page_key}: +{len(new_items)} (ins={ins}/upd={upd})"
-                            f" · raw={raw_count} dup={dup_this}"
-                            f" · page={page_got} · tổng={total_unique}"
-                        ),
+                        f"«{page_label}»: lưu thêm +{len(new_items):,} người theo dõi mới (Page: {page_got:,} · tổng phiên: {total_unique:,}).",
                         "success",
                     )
                 elif fresh_known:
@@ -1301,7 +1338,7 @@ def run_follower_scan_flow(
                         known_logged = known_passed
                         append_session_log(
                             session_id,
-                            f"{page_key}: đã đi qua {known_passed} UID có sẵn trong kho — tiếp tục tìm UID mới",
+                            f"«{page_label}»: đã lướt qua {known_passed:,} người theo dõi có sẵn trong kho — tiếp tục tìm người mới…",
                             "info",
                         )
                 else:
@@ -1312,23 +1349,19 @@ def run_follower_scan_flow(
                     else:
                         empty_streak = 0
                         dup_streak += 1
-                    # Log chẩn đoán mỗi lần stagnant (tối đa vài dòng đầu + mỗi 2 lần)
+                    # Log chẩn đoán kỹ thuật ghi vào logger.debug thay vì đổ lên UI
                     if stagnant <= 2 or stagnant % 2 == 0:
                         cause = (
                             "extract_empty"
                             if raw_count == 0
                             else "all_duplicates"
                         )
-                        append_session_log(
-                            session_id,
-                            (
-                                f"{page_key}: stagnant={stagnant}/{8} · {cause}"
-                                f" · raw={raw_count} new=0 dup={dup_this}"
-                                f" · root={meta.get('root_kind') or '—'}"
-                                f" · href_nodes={meta.get('href_nodes', '—')}"
-                                f" · dialogs={meta.get('dialog_count', '—')}"
-                            ),
-                            "warn",
+                        logger.debug(
+                            f"[FOLLOW] #{session_id} {page_key}: stagnant={stagnant}/8 · {cause}"
+                            f" · raw={raw_count} new=0 dup={dup_this}"
+                            f" · root={meta.get('root_kind') or '—'}"
+                            f" · href_nodes={meta.get('href_nodes', '—')}"
+                            f" · dialogs={meta.get('dialog_count', '—')}"
                         )
 
                 if time.time() - last_new_at >= idle_timeout_s:
@@ -1341,9 +1374,12 @@ def run_follower_scan_flow(
                             else REASON_LIST_EXHAUSTED
                         )
                     )
+                    logger.debug(
+                        f"[FOLLOW] #{session_id} {page_key}: idle {idle_timeout_s}s — {page_stop} · got={page_got}"
+                    )
                     append_session_log(
                         session_id,
-                        f"{page_key}: idle {idle_timeout_s}s — {page_stop} · got={page_got}",
+                        f"Xong «{page_label}»: thu được {page_got:,} người theo dõi mới ({_format_follow_reason_vi(page_stop)}).",
                         "info",
                     )
                     break
@@ -1356,16 +1392,17 @@ def run_follower_scan_flow(
                         page_stop = "all_duplicates"
                     else:
                         page_stop = REASON_LIST_EXHAUSTED
+                    logger.debug(
+                        f"[FOLLOW] #{session_id} {page_key}: stop={page_stop}"
+                        f" · empty_streak={empty_streak} dup_streak={dup_streak}"
+                        f" · scroll_stuck={scroll_stuck_streak} · got={page_got}"
+                        f" · target={scroll_meta.get('target') or '—'}"
+                        f" · top={(scroll_meta.get('after') or {}).get('top', '?')}"
+                        f" · h={(scroll_meta.get('after') or {}).get('height', '?')}"
+                    )
                     append_session_log(
                         session_id,
-                        (
-                            f"{page_key}: stop={page_stop}"
-                            f" · empty_streak={empty_streak} dup_streak={dup_streak}"
-                            f" · scroll_stuck={scroll_stuck_streak} · got={page_got}"
-                            f" · target={scroll_meta.get('target') or '—'}"
-                            f" · top={(scroll_meta.get('after') or {}).get('top', '?')}"
-                            f" · h={(scroll_meta.get('after') or {}).get('height', '?')}"
-                        ),
+                        f"Xong «{page_label}»: thu được {page_got:,} người theo dõi mới ({_format_follow_reason_vi(page_stop)}).",
                         "warn" if page_got == 0 else "info",
                     )
                     break
@@ -1378,17 +1415,13 @@ def run_follower_scan_flow(
                 before = scroll_meta.get("before") or {}
                 after = scroll_meta.get("after") or {}
                 switched = scroll_meta.get("switched_to")
-                append_session_log(
-                    session_id,
-                    (
-                        f"{page_key}: scroll changed={scroll_meta.get('changed')}"
-                        f" · target={scroll_meta.get('target') or '—'}"
-                        f" · top {before.get('top', '?')}→{after.get('top', '?')}"
-                        f" · h {before.get('height', '?')}→{after.get('height', '?')}"
-                        f" · tried={'>'.join(scroll_meta.get('tried') or []) or '—'}"
-                        f"{f' · kẹt 2 lần, lần sau thử {switched} trước' if switched else ''}"
-                    ),
-                    "info",
+                logger.debug(
+                    f"[FOLLOW] #{session_id} {page_key}: scroll changed={scroll_meta.get('changed')}"
+                    f" · target={scroll_meta.get('target') or '—'}"
+                    f" · top {before.get('top', '?')}→{after.get('top', '?')}"
+                    f" · h {before.get('height', '?')}→{after.get('height', '?')}"
+                    f" · tried={'>'.join(scroll_meta.get('tried') or []) or '—'}"
+                    f"{f' · kẹt 2 lần, lần sau thử {switched} trước' if switched else ''}"
                 )
                 time.sleep(max(0.3, float(scroll_delay_s)))
                 try:
@@ -1400,7 +1433,7 @@ def run_follower_scan_flow(
                 cross_skipped += page_cross
                 append_session_log(
                     session_id,
-                    f"{page_key}: bỏ qua {page_cross} follower trùng với Page khác trong phiên",
+                    f"«{page_label}»: bỏ qua {page_cross:,} người theo dõi trùng với Page khác trong phiên.",
                     "info",
                 )
 
@@ -1479,8 +1512,9 @@ def run_follower_scan_flow(
         append_session_log(
             session_id,
             (
-                f"Kết thúc FOLLOW · {final_status}/{stop_reason} · unique={total_unique}"
-                f"{f' · bỏ {cross_skipped} follower trùng Page khác' if cross_skipped else ''}"
+                f"Kết thúc phiên quét người theo dõi ({_format_follow_stop_reason_vi(stop_reason)})"
+                f" · tổng {total_unique:,} người theo dõi mới"
+                f"{f' · bỏ qua {cross_skipped:,} người trùng giữa các Page' if cross_skipped else ''}."
             ),
             "success" if final_status == "COMPLETED" else "warn",
         )

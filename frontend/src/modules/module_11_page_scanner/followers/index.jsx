@@ -458,7 +458,16 @@ export default function PageScannerFollowers() {
         setRunPhase(isDone ? "done" : top.status === "PAUSED" ? "paused" : "running");
         syncSessionLogs(top);
         saveScanState("followers", { sessionIds: [top.id] });
-        pushLog(`Khôi phục phiên FOLLOW #${top.id} · ${top.status}`, "warn");
+        const statusVi =
+          {
+            RUNNING: "đang chạy",
+            PAUSED: "đang tạm dừng",
+            COMPLETED: "hoàn tất",
+            PARTIAL: "một phần",
+            STOPPED: "đã dừng",
+            FAILED: "lỗi",
+          }[String(top.status || "").toUpperCase()] || "đang chạy";
+        pushLog(`Đã khôi phục phiên quét người theo dõi #${top.id} (${statusVi}).`, "info");
         if (isDone) refreshResults(top.id, pageKeys, "done");
         else startPoll(top.id);
       } catch {
@@ -525,7 +534,7 @@ export default function PageScannerFollowers() {
         );
         setActivePageKey(pageKeys[0] || "");
         pushLog(
-          `Tạo phiên FOLLOW · ${pageKeys.length} Page · max/page=${maxPerPage} · delay ${delayMin}-${delayMax}s`,
+          `Đang khởi tạo phiên quét người theo dõi cho ${pageKeys.length} Page (tối đa ${maxPerPage.toLocaleString("vi-VN")} người/Page · nghỉ ${delayMin}–${delayMax} giây)…`,
           "info",
         );
 
@@ -548,14 +557,14 @@ export default function PageScannerFollowers() {
 
         saveScanState("followers", { sessionIds: [res.session_id] });
         setSessionId(res.session_id);
-        pushLog(`Session #${res.session_id} · ${res.status || "RUNNING"} · ${res.message || "OK"}`, "success");
+        pushLog(`Đã bắt đầu phiên quét #${res.session_id}.`, "success");
         if (prioritizeRecent) {
           pushLog("Ưu tiên người theo dõi gần đây: Facebook liệt kê người theo dõi mới nhất trước.", "info");
         }
         if (accountUids.length > 1) {
-          pushLog(`Xoay vòng ${accountUids.length} tài khoản · đổi sau ${rotateEvery} page / tài khoản`, "info");
+          pushLog(`Xoay vòng ${accountUids.length} tài khoản · đổi sau ${rotateEvery} Page / tài khoản.`, "info");
         }
-        toast.success(`Đã khởi động FOLLOW #${res.session_id}`, { key: "m11-followers-start" });
+        toast.success(`Đã bắt đầu quét người theo dõi (phiên #${res.session_id}).`, { key: "m11-followers-start" });
         startPoll(res.session_id);
       } catch (err) {
         setRunPhase("idle");

@@ -779,9 +779,10 @@ def fill_missing_captions(
     result["todo"] = len(todo)
     if not todo:
         return result
+    page_label = (exclude_names[0] if exclude_names else "") or page_key
     append_session_log(
         session_id,
-        f"{page_key}: {len(todo)} reel/video thiếu caption — mở từng bài để lấy caption đầy đủ",
+        f"«{page_label}»: có {len(todo)} video/reel thiếu nội dung — đang mở từng bài để đọc đầy đủ…",
         "info",
     )
     for i, row in enumerate(todo):
@@ -805,21 +806,36 @@ def fill_missing_captions(
             result["updated"] += 1
             append_session_log(
                 session_id,
-                f"[{i + 1}/{len(todo)}] {row['post_key']}: lấy được caption {len(caption)} ký tự",
+                f"«{page_label}» [{i + 1}/{len(todo)}]: đã cập nhật nội dung đầy đủ ({len(caption)} ký tự).",
                 "success",
             )
         else:
             path = dump_caption_debug(row["post_key"], raw, caption)
+            logger.debug(
+                f"[POST_SCAN] #{session_id} [{i + 1}/{len(todo)}] {row['post_key']}: không đọc được caption"
+                f"{f' — text thô: {path}' if path else ''}"
+            )
             append_session_log(
                 session_id,
-                f"[{i + 1}/{len(todo)}] {row['post_key']}: không đọc được caption đầy đủ"
-                f"{f' — text thô: {path}' if path else ''}",
+                f"«{page_label}» [{i + 1}/{len(todo)}]: không đọc thêm được nội dung bài viết.",
                 "warn",
             )
         if i < len(todo) - 1 and sleep_page_delay(random.uniform(1.5, 3.0), stop_event):
             result["stopped"] = True
             break
     return result
+
+
+def _format_post_stop_reason_vi(stop_reason: Optional[str]) -> str:
+    return {
+        "TARGET_REACHED": "đạt đủ mục tiêu",
+        "COMPLETED": "hoàn tất",
+        "NO_NEW_RESULTS": "không có bài viết mới",
+        "USER_STOPPED": "đã dừng theo yêu cầu",
+        "CHECKPOINT": "dừng do mất đăng nhập / checkpoint",
+        "TIMEOUT": "đạt giới hạn quét trong ngày",
+        "ERROR": "gặp lỗi hệ thống",
+    }.get(str(stop_reason or "").upper(), "hoàn tất")
 
 
 def run_post_scan_flow(
@@ -923,13 +939,13 @@ def run_post_scan_flow(
         append_session_log(
             session_id,
             (
-                f"POST_SCAN · pages={len(page_keys)} · max/page={max_posts_per_page} · types={allowed_types}"
-                f" · acc={len(rotation.accounts)}"
-                f"{f' · đổi acc sau {rotate_every} bài' if rotate_every and rotation.can_rotate else ''}"
-                f"{' · đảo acc khi checkpoint' if rotate_on_checkpoint and rotation.can_rotate else ''}"
-                f"{' · bỏ bài ghim' if skip_pinned_posts else ''}"
+                f"Bắt đầu quét bài viết của {len(page_keys)} Page"
+                f" (tối đa {max_posts_per_page:,} bài/Page) · {len(rotation.accounts)} tài khoản"
+                f"{f' · đổi tài khoản sau {rotate_every} bài' if rotate_every and rotation.can_rotate else ''}"
+                f"{' · tự đổi tài khoản khi gặp checkpoint' if rotate_on_checkpoint and rotation.can_rotate else ''}"
+                f"{' · bỏ qua bài ghim' if skip_pinned_posts else ''}"
             ),
-            "warn",
+            "info",
         )
 
         pages_quota_left = _quota_left()
@@ -943,19 +959,24 @@ def run_post_scan_flow(
                 stop_reason = "USER_STOPPED"
                 break
             if pages_quota_left <= 0:
-                if rotation.rotate("hết quota POST_SCAN hôm nay"):
+                if rotation.rotate("đạt giới hạn quét bài viết hôm nay"):
                     driver = rotation.driver
                     pages_quota_left = _quota_left()
                 if pages_quota_left <= 0:
-                    append_session_log(session_id, "Quota POST_SCAN Page/acc hôm nay đã hết", "warn")
+                    append_session_log(
+                        session_id,
+                        f"Tài khoản đã đạt giới hạn {max_pages_per_acc} Page hôm nay — dừng phiên.",
+                        "warn",
+                    )
                     stop_reason = "TIMEOUT"
                     break
                 driver = rotation.driver
 
             page_url, page_name = resolve_page_url(owner_key, page_key)
+            page_label = page_name or page_key
             append_session_log(
                 session_id,
-                f"[{idx + 1}/{len(page_keys)}] Feed Page {page_name or page_key} · acc {rotation.uid}",
+                f"[{idx + 1}/{len(page_keys)}] Đang mở Page «{page_label}» (tài khoản {rotation.uid}).",
                 "info",
             )
 
@@ -966,17 +987,22 @@ def run_post_scan_flow(
                     driver.get(page_url)
                     time.sleep(2.0)
                 except Exception as exc:
-                    append_session_log(session_id, f"Soft-fail open {page_key}: {exc}", "warn")
+                    logger.debug(f"[POST_SCAN] #{session_id} Soft-fail open {page_key}: {exc}")
+                    append_session_log(
+                        session_id,
+                        f"Không mở được «{page_label}»: lỗi kết nối hoặc không tải được trang.",
+                        "warn",
+                    )
                     soft_failed = True
                     break
                 if not _is_checkpoint_url(driver):
                     break
-                if rotate_on_checkpoint and rotation.rotate("checkpoint/login", mark_dead=True):
+                if rotate_on_checkpoint and rotation.rotate("gặp xác minh/đăng xuất", mark_dead=True):
                     driver = rotation.driver
                     pages_quota_left = _quota_left()
                     continue
                 stop_reason = "CHECKPOINT"
-                error_message = "Checkpoint/login"
+                error_message = "Tài khoản gặp yêu cầu xác minh (checkpoint) hoặc bị đăng xuất"
                 break
             if stop_reason == "CHECKPOINT":
                 break
@@ -1019,9 +1045,7 @@ def run_post_scan_flow(
                         total_dup += 1
                         if cross_page and first_seen_on_page:
                             cross_skipped += 1
-                            append_session_log(
-                                session_id, f"{page_key}: bỏ qua bài trùng với Page khác {pk}", "info"
-                            )
+                            logger.debug(f"[POST_SCAN] #{session_id} {page_key}: bỏ qua bài trùng với Page khác {pk}")
                         in_range = not item.get("published_at") or date_in_range(
                             item["published_at"], date_from, date_to
                         )
@@ -1032,7 +1056,7 @@ def run_post_scan_flow(
                         if pk not in pinned_seen:
                             pinned_seen.add(pk)
                             pinned_skipped += 1
-                            append_session_log(session_id, f"{page_key}: bỏ bài ghim {pk}", "info")
+                            logger.debug(f"[POST_SCAN] #{session_id} {page_key}: bỏ bài ghim {pk}")
                         continue
                     if not post_type_matches(item.get("post_type"), allowed_types):
                         continue
@@ -1042,10 +1066,8 @@ def run_post_scan_flow(
                     ):
                         continue
                     if item.get("date_unparsed"):
-                        append_session_log(
-                            session_id,
-                            f"date_unparsed · {pk} · raw={item.get('published_text')}",
-                            "info",
+                        logger.debug(
+                            f"[POST_SCAN] #{session_id} date_unparsed · {pk} · raw={item.get('published_text')}"
                         )
                     new_items.append(item)
                     known.add(pk)
@@ -1062,9 +1084,12 @@ def run_post_scan_flow(
                     last_new_at = time.time()
                     stagnant = 0
                     update_session_progress(session_id, total_seen, total_unique, batches)
+                    logger.debug(
+                        f"[POST_SCAN] #{session_id} {page_key}: +{len(new_items)} posts (ins={ins}/upd={upd}) · page={page_got}"
+                    )
                     append_session_log(
                         session_id,
-                        f"{page_key}: +{len(new_items)} posts (ins={ins}/upd={upd}) · page={page_got}",
+                        f"«{page_label}»: lưu thêm +{len(new_items):,} bài viết mới (tổng Page: {page_got:,}).",
                         "success",
                     )
                 elif fresh_known:
@@ -1078,17 +1103,25 @@ def run_post_scan_flow(
                         known_logged = known_passed
                         append_session_log(
                             session_id,
-                            f"{page_key}: đã đi qua {known_passed} bài có sẵn trong kho — tiếp tục tìm bài mới",
+                            f"«{page_label}»: đã lướt qua {known_passed:,} bài có sẵn trong kho — tiếp tục tìm bài mới…",
                             "info",
                         )
                 else:
                     stagnant += 1
 
                 if time.time() - last_new_at >= idle_timeout_s:
-                    append_session_log(session_id, f"{page_key}: idle — hết bài mới", "info")
+                    append_session_log(
+                        session_id,
+                        f"Xong «{page_label}»: thu được {page_got:,} bài viết mới (không còn bài mới).",
+                        "info",
+                    )
                     break
                 if stagnant >= 8:
-                    append_session_log(session_id, f"{page_key}: list_exhausted", "info")
+                    append_session_log(
+                        session_id,
+                        f"Xong «{page_label}»: thu được {page_got:,} bài viết mới (đã quét hết danh sách hiển thị).",
+                        "info",
+                    )
                     break
 
                 try:
@@ -1116,19 +1149,23 @@ def run_post_scan_flow(
                 if cap["todo"]:
                     append_session_log(
                         session_id,
-                        f"{page_key}: caption reel/video — cập nhật {cap['updated']}/{cap['todo']}",
+                        f"«{page_label}»: đã bổ sung nội dung video/reel cho {cap['updated']}/{cap['todo']} bài.",
                         "success" if cap["updated"] else "warn",
                     )
                 if cap["stopped"]:
                     stop_reason = "USER_STOPPED"
                 elif cap["checkpoint"]:
-                    append_session_log(session_id, f"{page_key}: checkpoint/login khi mở reel", "error")
-                    if rotate_on_checkpoint and rotation.rotate("checkpoint/login", mark_dead=True):
+                    append_session_log(
+                        session_id,
+                        f"«{page_label}»: tài khoản gặp yêu cầu xác minh hoặc bị đăng xuất khi mở video/reel.",
+                        "error",
+                    )
+                    if rotate_on_checkpoint and rotation.rotate("gặp xác minh/đăng xuất", mark_dead=True):
                         driver = rotation.driver
                         pages_quota_left = _quota_left()
                     else:
                         stop_reason = "CHECKPOINT"
-                        error_message = "Checkpoint/login khi mở reel"
+                        error_message = "Tài khoản gặp yêu cầu xác minh hoặc bị đăng xuất khi mở video/reel"
 
             bump_account_usage(rotation.uid, "POST_SCAN", 1)
             pages_quota_left -= 1
@@ -1192,9 +1229,10 @@ def run_post_scan_flow(
         append_session_log(
             session_id,
             (
-                f"Kết thúc POST_SCAN · {final_status}/{stop_reason} · posts={total_unique}"
-                f"{f' · bỏ {pinned_skipped} bài ghim' if pinned_skipped else ''}"
-                f"{f' · bỏ {cross_skipped} bài trùng Page khác' if cross_skipped else ''}"
+                f"Kết thúc phiên quét bài viết ({_format_post_stop_reason_vi(stop_reason)})"
+                f" · tổng {total_unique:,} bài viết mới"
+                f"{f' · bỏ qua {pinned_skipped:,} bài ghim' if pinned_skipped else ''}"
+                f"{f' · bỏ qua {cross_skipped:,} bài trùng giữa các Page' if cross_skipped else ''}."
             ),
             "success" if final_status == "COMPLETED" else "warn",
         )

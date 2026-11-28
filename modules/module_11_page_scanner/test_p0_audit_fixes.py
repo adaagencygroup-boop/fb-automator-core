@@ -573,5 +573,37 @@ class TestListPagesFilterSql(unittest.TestCase):
         self.assertIn("sp.email", conds[1])
 
 
+class TestVietnameseSessionLogs(unittest.TestCase):
+    def test_follow_and_post_reason_formatters_have_no_raw_jargon(self):
+        from modules.module_11_page_scanner.followers_scan import (
+            REASON_CHECKPOINT,
+            REASON_DIALOG_NOT_FOUND,
+            REASON_LIST_EXHAUSTED,
+            REASON_LIST_PRIVATE,
+            REASON_PROFILE_PHP,
+            _format_follow_reason_vi,
+            _format_follow_stop_reason_vi,
+        )
+        from modules.module_11_page_scanner.posts_scan import _format_post_stop_reason_vi
+
+        for r in (
+            REASON_LIST_PRIVATE,
+            REASON_DIALOG_NOT_FOUND,
+            REASON_PROFILE_PHP,
+            REASON_CHECKPOINT,
+            "extract_empty",
+            "scroll_stuck",
+            "all_duplicates",
+            REASON_LIST_EXHAUSTED,
+        ):
+            msg = _format_follow_reason_vi(r)
+            self.assertTrue(msg)
+            self.assertNotIn("_", msg)
+
+        for sr in ("TARGET_REACHED", "COMPLETED", "NO_NEW_RESULTS", "USER_STOPPED", "CHECKPOINT", "TIMEOUT", "ERROR"):
+            self.assertNotIn("_", _format_follow_stop_reason_vi(sr))
+            self.assertNotIn("_", _format_post_stop_reason_vi(sr))
+
+
 if __name__ == "__main__":
     unittest.main()
