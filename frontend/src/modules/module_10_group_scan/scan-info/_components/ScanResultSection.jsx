@@ -235,9 +235,10 @@ export default function ScanResultSection({
           chọn cả khoảng.
         </p>
       )}
-      <div ref={setTableBox} className="overflow-x-auto">
+      {/* Nhiều nhóm thì cuộn trong khung (cao tối đa 560px), tiêu đề cột dính trên cùng — không kéo dài trang */}
+      <div ref={setTableBox} className="max-h-[560px] overflow-auto overscroll-contain">
         <table className="w-full min-w-[960px] text-left text-xs">
-          <thead className="bg-[#F8FAFC] text-xs font-semibold uppercase tracking-[0.3px] [&_th]:font-semibold text-[#64748B]">
+          <thead className="sticky top-0 z-10 bg-[#F8FAFC] shadow-[0_1px_0_0_#E2E8F0] text-xs font-semibold uppercase tracking-[0.3px] [&_th]:font-semibold text-[#64748B]">
             <tr>
               <th className="w-10 px-4 py-2.5">
                 <Checkbox checked={allVisibleSelected} onCheckedChange={(value) => onToggleAllRows(Boolean(value))} />

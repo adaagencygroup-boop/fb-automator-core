@@ -17,8 +17,9 @@ export default function CategorySidebar({
   onToggleMenu,
 }) {
   return (
-    <div className="w-full lg:w-[320px] shrink-0 bg-white border border-[#E2E8F0] shadow-sm rounded-xl p-4 flex flex-col justify-between min-h-[640px]">
-      <div className="flex flex-col">
+    // Giống Danh sách page (Module 11): màn rộng thì cột danh mục DÍNH khi cuộn trang, cao cố định, danh sách cuộn bên trong
+    <div className="w-full lg:w-[320px] shrink-0 bg-white border border-[#E2E8F0] shadow-sm rounded-xl p-4 flex flex-col lg:sticky lg:top-0 lg:z-10 lg:h-[640px] lg:max-h-[calc(100vh-180px)] lg:min-h-[360px]">
+      <div className="flex min-h-0 flex-1 flex-col">
         {/* Header of Category Box */}
         <div className="flex items-center justify-between pb-3 border-b border-[#F1F5F9]">
           <div className="flex items-center gap-2">
@@ -65,7 +66,7 @@ export default function CategorySidebar({
         </div>
 
         {/* Folder Item List */}
-        <div className="flex flex-col gap-2 max-h-[460px] overflow-y-auto pr-0.5">
+        <div className="flex min-h-0 flex-1 flex-col gap-2 max-h-[460px] overflow-y-auto overscroll-contain pr-0.5 lg:max-h-none">
           {categories.map((cat) => {
             const isActive = cat.id === activeCategoryId;
             const catGroupCount =
