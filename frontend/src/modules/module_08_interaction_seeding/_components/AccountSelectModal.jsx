@@ -7,8 +7,6 @@ import {
   Search,
   Users,
   Check,
-  CheckSquare,
-  Square,
   RefreshCw,
   Loader2,
   Folder,
@@ -21,6 +19,7 @@ import {
   Filter,
 } from "lucide-react";
 import { seedingApi } from "../service";
+import { Checkbox } from "@/components/ui/checkbox";
 
 const emptySubscribe = () => () => {};
 const useIsMounted = () => useSyncExternalStore(emptySubscribe, () => true, () => false);
@@ -328,11 +327,6 @@ export default function AccountSelectModal({
     return readyAccountsInFilter.every((acc) => draftSelected.has(acc.uid));
   }, [readyAccountsInFilter, draftSelected]);
 
-  const isSomeFilterSelected = useMemo(() => {
-    if (isAllFilterSelected) return false;
-    return readyAccountsInFilter.some((acc) => draftSelected.has(acc.uid));
-  }, [readyAccountsInFilter, draftSelected, isAllFilterSelected]);
-
   // Bật/tắt chọn 1 tài khoản
   const handleToggleAccount = (uid, ready) => {
     if (!ready || isRunning) return;
@@ -560,13 +554,14 @@ export default function AccountSelectModal({
                 }`}
               >
                 <div className="flex items-center gap-2 min-w-0">
-                  <div className="shrink-0 text-blue-600">
-                    {selectedCategories.has("all") ? (
-                      <CheckSquare className="w-4 h-4 text-blue-600" />
-                    ) : (
-                      <Square className="w-4 h-4 text-slate-300" />
-                    )}
-                  </div>
+                  <span onClick={(event) => event.stopPropagation()} className="inline-flex">
+                    <Checkbox
+                      checked={selectedCategories.has("all")}
+                      onCheckedChange={() => handleToggleCategory("all")}
+                      aria-label="Lọc tất cả tài khoản"
+                      className={`rounded border-slate-300 ${selectedCategories.has("all") ? "bg-[#2563EB] border-[#2563EB] text-white" : ""}`}
+                    />
+                  </span>
                   <Folder className="w-4 h-4 text-slate-500 shrink-0" />
                   <span className="truncate font-medium">Tất cả tài khoản</span>
                 </div>
@@ -599,13 +594,14 @@ export default function AccountSelectModal({
                       }`}
                     >
                       <div className="flex items-center gap-2 min-w-0">
-                        <div className="shrink-0">
-                          {isChecked ? (
-                            <CheckSquare className="w-4 h-4 text-blue-600" />
-                          ) : (
-                            <Square className="w-4 h-4 text-slate-300" />
-                          )}
-                        </div>
+                        <span onClick={(event) => event.stopPropagation()} className="inline-flex">
+                          <Checkbox
+                            checked={isChecked}
+                            onCheckedChange={() => handleToggleCategory("uncategorized")}
+                            aria-label="Lọc danh mục chưa phân loại"
+                            className={`rounded border-slate-300 ${isChecked ? "bg-[#2563EB] border-[#2563EB] text-white" : ""}`}
+                          />
+                        </span>
                         <Tag className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                         <span className="truncate">Chưa phân loại</span>
                       </div>
@@ -646,13 +642,14 @@ export default function AccountSelectModal({
                     }`}
                   >
                     <div className="flex items-center gap-2 min-w-0">
-                      <div className="shrink-0">
-                        {isChecked ? (
-                          <CheckSquare className="w-4 h-4 text-blue-600" />
-                        ) : (
-                          <Square className="w-4 h-4 text-slate-300" />
-                        )}
-                      </div>
+                      <span onClick={(event) => event.stopPropagation()} className="inline-flex">
+                        <Checkbox
+                          checked={isChecked}
+                          onCheckedChange={() => handleToggleCategory(cat.id)}
+                          aria-label={`Lọc danh mục ${cat.name}`}
+                          className={`rounded border-slate-300 ${isChecked ? "bg-[#2563EB] border-[#2563EB] text-white" : ""}`}
+                        />
+                      </span>
                       <span
                         className="w-2.5 h-2.5 rounded-full shrink-0 shadow-2xs"
                         style={{ backgroundColor: cat.color || "#3B82F6" }}
@@ -766,23 +763,13 @@ export default function AccountSelectModal({
                   <thead className="sticky top-0 bg-white z-10 text-[11px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-100 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
                     <tr>
                       <th className="w-10 py-2.5 px-2">
-                        <button
-                          type="button"
-                          onClick={handleToggleSelectAllInView}
+                        <Checkbox
+                          checked={isAllFilterSelected}
+                          onCheckedChange={handleToggleSelectAllInView}
                           disabled={readyAccountsInFilter.length === 0}
-                          className="p-1 rounded hover:bg-slate-100 text-slate-600 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                          title={isAllFilterSelected ? "Bỏ chọn tất cả nick đang xem" : "Chọn tất cả nick đang xem"}
-                        >
-                          {isAllFilterSelected ? (
-                            <CheckSquare className="w-4 h-4 text-blue-600" />
-                          ) : isSomeFilterSelected ? (
-                            <div className="w-4 h-4 rounded border-2 border-blue-600 bg-blue-50 flex items-center justify-center">
-                              <div className="w-2 h-0.5 bg-blue-600" />
-                            </div>
-                          ) : (
-                            <Square className="w-4 h-4 text-slate-400" />
-                          )}
-                        </button>
+                          aria-label={isAllFilterSelected ? "Bỏ chọn tất cả nick đang xem" : "Chọn tất cả nick đang xem"}
+                          className={`rounded border-slate-300 ${isAllFilterSelected ? "bg-[#2563EB] border-[#2563EB] text-white" : ""}`}
+                        />
                       </th>
                       <th className="py-2.5 px-3">Tài khoản Facebook</th>
                       <th className="py-2.5 px-3 w-36">Danh mục</th>
@@ -814,18 +801,13 @@ export default function AccountSelectModal({
                         >
                           {/* Checkbox */}
                           <td className="py-2.5 px-2 text-center" onClick={(e) => e.stopPropagation()}>
-                            <button
-                              type="button"
-                              onClick={() => handleToggleAccount(acc.uid, ready)}
-                              disabled={!ready}
-                              className="p-1 rounded hover:bg-slate-100 transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              {isChecked ? (
-                                <CheckSquare className="w-4 h-4 text-blue-600" />
-                              ) : (
-                                <Square className="w-4 h-4 text-slate-300" />
-                              )}
-                            </button>
+                            <Checkbox
+                              checked={isChecked}
+                              onCheckedChange={() => handleToggleAccount(acc.uid, ready)}
+                              disabled={!ready || isRunning}
+                              aria-label={`${isChecked ? "Bỏ chọn" : "Chọn"} tài khoản ${acc.profile_name || acc.uid}`}
+                              className={`rounded border-slate-300 ${isChecked ? "bg-[#2563EB] border-[#2563EB] text-white" : ""}`}
+                            />
                           </td>
 
                           {/* Account info: Avatar, Name, UID */}
