@@ -69,9 +69,9 @@ export default function PostFetchModal({ open, running = false, canStop = false,
       }}
       className="fixed inset-0 m-0 hidden h-[100dvh] max-h-none w-full max-w-none overflow-hidden border-0 bg-transparent p-0 text-gray-800 open:block backdrop:bg-slate-900/45 backdrop:backdrop-blur-sm"
     >
-      <div className="fixed left-1/2 top-[50dvh] max-h-[92dvh] w-[97vw] max-w-7xl -translate-x-1/2 -translate-y-1/2 overflow-hidden overscroll-contain rounded-2xl border border-slate-200 bg-white shadow-2xl">
-        <header className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-slate-100 bg-white px-5 py-3 sm:px-6">
-          <h2 id={titleId} className="text-base font-bold text-gray-900">
+      <div className="fixed left-1/2 top-[50dvh] flex max-h-[92dvh] w-[97vw] max-w-7xl -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden overscroll-contain rounded-2xl border border-slate-200 bg-white shadow-2xl">
+        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-slate-100 bg-white px-5 py-3 sm:px-6">
+          <h2 id={titleId} className="text-xl font-bold text-gray-900">
             {title}
           </h2>
           <button

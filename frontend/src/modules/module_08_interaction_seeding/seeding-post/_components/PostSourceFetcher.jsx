@@ -590,10 +590,10 @@ export default function PostSourceFetcher({
 
   return (
     <>
-      <div className="grid grid-cols-1 gap-5 p-5 sm:p-6 lg:grid-cols-[minmax(280px,0.78fr)_minmax(0,1.5fr)]">
-        <section className="min-w-0 space-y-4">
-        <form onSubmit={handleStart} className="space-y-3">
-          <label className="block space-y-1.5 text-xs text-gray-600">
+      <div className="flex min-h-0 flex-col">
+        <section className="min-w-0 shrink-0 space-y-3 px-5 py-4 sm:px-6">
+        <form onSubmit={handleStart} className="flex flex-col gap-2.5 sm:flex-row sm:items-end">
+          <label className="block min-w-0 flex-1 space-y-1.5 text-xs text-gray-600">
             <span>Link Page hoặc trang cá nhân Facebook</span>
             <input
               type="text"
@@ -611,7 +611,7 @@ export default function PostSourceFetcher({
               type="button"
               onClick={handleStop}
               disabled={stopping || job?.status === "STOPPING"}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-rose-600 px-4 py-2.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-rose-600 px-4 py-2.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-60 sm:w-auto sm:min-w-52 sm:shrink-0"
             >
               {stopping || job?.status === "STOPPING" ? (
                 <Loader2 className="size-4 animate-spin" aria-hidden="true" />
@@ -621,13 +621,14 @@ export default function PostSourceFetcher({
               Dừng lấy bài
             </button>
           ) : (
-            <button type="submit" disabled={lockInputs || !accountUid} className={`${PRIMARY} w-full`}>
+            <button type="submit" disabled={lockInputs || !accountUid} className={`${PRIMARY} w-full sm:w-auto sm:min-w-52 sm:shrink-0`}>
               {starting || restoringSource ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Search className="size-4" aria-hidden="true" />}
               {restoringSource ? "Đang tải lại dữ liệu quét trước đó…" : starting ? "Đang bắt đầu…" : "Lấy danh sách bài viết"}
             </button>
           )}
         </form>
 
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         {accountUid ? (
           <p className="text-xs text-gray-500">
             Tài khoản quét lượt này: <b className="font-semibold text-gray-700">{accountLabel}</b> (luân phiên theo các tài khoản đã tích chọn)
@@ -639,14 +640,8 @@ export default function PostSourceFetcher({
           </p>
         )}
 
-        {sourceKey && !running && !list.available && (
-          <p role="alert" className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
-            Danh sách bài tạm đã hết hạn — bấm &quot;Lấy danh sách bài viết&quot; để lấy lại.
-          </p>
-        )}
-
         {line && (
-          <p role="status" className={`flex items-center gap-2 text-xs ${TONE[line.tone]}`}>
+          <p role="status" className={`flex items-center gap-2 text-xs sm:ml-auto ${TONE[line.tone]}`}>
             {line.tone === "run" ? (
               <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />
             ) : line.tone === "ok" ? (
@@ -657,13 +652,19 @@ export default function PostSourceFetcher({
             <span className="min-w-0">{line.text}</span>
           </p>
         )}
+        </div>
 
+        {sourceKey && !running && !list.available && (
+          <p role="alert" className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+            Danh sách bài tạm đã hết hạn — bấm &quot;Lấy danh sách bài viết&quot; để lấy lại.
+          </p>
+        )}
         </section>
 
-        <section className="min-w-0 space-y-3 border-t border-slate-100 pt-4 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
-            <div className="space-y-3">
+        <section className="flex min-h-0 min-w-0 flex-col gap-3 border-t border-slate-100 px-5 py-4 sm:px-6">
+            <div className="shrink-0 space-y-3">
               <div className="flex items-center justify-between gap-2">
-                <h3 className="text-xs font-bold text-gray-900">Danh sách bài viết</h3>
+                <h3 className="text-sm font-bold text-gray-900">Danh sách bài viết</h3>
                 <div className="flex items-center gap-2">
                   {list.items.length > 0 && (
                     <button
@@ -744,7 +745,7 @@ export default function PostSourceFetcher({
               </div>
             </div>
 
-            <div ref={postListScrollRef} className="max-h-[min(30vh,calc(92vh_-_600px))] space-y-2 overflow-y-auto overscroll-contain pr-1 lg:max-h-[min(58vh,calc(92vh_-_320px))]">
+            <div ref={postListScrollRef} className="min-h-0 max-h-[44dvh] space-y-2 overflow-y-auto overscroll-contain pr-1">
               {loadingList && !visibleItems.length ? (
                 <p className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 p-4 text-xs text-gray-500">
                   <Loader2 className="size-4 animate-spin text-blue-600" aria-hidden="true" /> Đang tải bài viết...
@@ -820,7 +821,7 @@ export default function PostSourceFetcher({
           </section>
       </div>
 
-      <footer className="sticky bottom-0 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 bg-white px-5 py-3 sm:px-6">
+      <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-slate-100 bg-white px-5 py-3 sm:px-6">
         <div aria-live="polite">
           <p className="text-xs font-bold text-gray-900">{fmt(chosen)} bài đã chọn</p>
           <p className="text-xs text-gray-500">
